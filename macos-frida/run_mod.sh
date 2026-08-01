@@ -1,23 +1,31 @@
 #!/bin/bash
 # ManosabaMod macOS Frida 启动脚本 (macOS 移植)
 # 用法: ./run_mod.sh [mod根目录]
-# 游戏路径: 自动向上查找包含 manosaba_game_mac 的工作区目录; 也可用环境变量 GAME=... 覆盖
+# 游戏路径: 自动查找 (工作区副本 manosaba_game_mac → Steam 默认位置), 也可用环境变量 GAME=... 覆盖
 cd "$(dirname "$0")"
 
-WORKSPACE=""
+# 定位游戏目录: ① 向上找 manosaba_game_mac (工作区副本) ② Steam 默认位置 ③ GAME 环境变量
+GAME_DIR=""
 D="$PWD"
 while [ "$D" != "/" ]; do
-    if [ -d "$D/manosaba_game_mac" ]; then WORKSPACE="$D"; break; fi
+    if [ -d "$D/manosaba_game_mac/manosaba.app" ]; then GAME_DIR="$D/manosaba_game_mac"; break; fi
     D="$(dirname "$D")"
 done
-if [ -z "$WORKSPACE" ]; then
-    echo "错误: 找不到 manosaba_game_mac (游戏目录), 请用 GAME=... 指定游戏二进制"
+if [ -z "$GAME_DIR" ] && [ -d "$HOME/Library/Application Support/Steam/steamapps/common/manosaba_game/manosaba.app" ]; then
+    GAME_DIR="$HOME/Library/Application Support/Steam/steamapps/common/manosaba_game"
+fi
+# GAME 环境变量显式指定时, 从二进制路径推导游戏目录 (供 mod 根定位)
+if [ -z "$GAME_DIR" ] && [ -n "$GAME" ]; then
+    GAME_DIR="$(dirname "$(dirname "$(dirname "$(dirname "$GAME")")")")"
+fi
+if [ -z "$GAME" ] && [ -z "$GAME_DIR" ]; then
+    echo "错误: 找不到游戏目录 (manosaba.app), 请用 GAME=... 指定游戏二进制"
     exit 1
 fi
 
-GAME="${GAME:-$WORKSPACE/manosaba_game_mac/manosaba.app/Contents/MacOS/manosaba}"
+GAME="${GAME:-$GAME_DIR/manosaba.app/Contents/MacOS/manosaba}"
 SCRIPT="$PWD/manosabamod_v3.js"
-MOD_ROOT="${1:-$WORKSPACE/manosaba_game_mac/ManosabaMod}"
+MOD_ROOT="${1:-$GAME_DIR/ManosabaMod}"
 
 if [ ! -f "$GAME" ]; then echo "错误: 找不到游戏 $GAME"; exit 1; fi
 if [ ! -f "$SCRIPT" ]; then echo "错误: 找不到脚本 $SCRIPT"; exit 1; fi

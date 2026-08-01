@@ -16,19 +16,25 @@ ManosabaMod-macOS/                    ← 本仓库 (IrisuM/ManosabaMod 的 fork
     └── run_mod.sh                    ← 启动脚本 (自动找游戏 + 注入)
 ```
 
+## 游戏安装位置 (本机 Steam 为例)
+
+```
+/Users/richie/Library/Application Support/Steam/steamapps/common/manosaba_game/
+├── LICENSE.md                        ← Steam 安装的游戏文件
+├── manosaba.app/                     ← 游戏本体 (Frida 注入目标)
+└── ManosabaMod/                      ← mod 目录 (首次运行 run_mod.sh 自动创建)
+    ├── 1919180/                      ← 你的 mod (含 info.json + Scripts/...)
+    └── TaffyModLoader/Scripts/       ← 启动时自动生成 (菜单剧本)
+```
+
 ## 使用方法
 
 ### 前置条件
 - macOS **Apple Silicon** (arm64)
 - `python3` + `frida`(`pip install frida-tools`)
-- 游戏放在工作区:`<工作区>/manosaba_game_mac/manosaba.app`
-- mod 放在:`<工作区>/manosaba_game_mac/ManosabaMod/<ModName>/`(含 `info.json`)
+- 游戏装在 Steam 默认位置(见上),或任意位置
 
-### 以本机为例
-
-假设游戏在 `/Users/richie/manosaba decompile/manosaba_game_mac/`,
-你的 mod(如 Gapless quantum spin liquid)在
-`/Users/richie/manosaba decompile/manosaba_game_mac/ManosabaMod/1919180/`:
+### 启动
 
 ```bash
 cd /Users/richie/manosaba decompile/ManosabaMod-macOS/macos-frida
@@ -36,9 +42,11 @@ cd /Users/richie/manosaba decompile/ManosabaMod-macOS/macos-frida
 ```
 
 `run_mod.sh` 自动完成:
-1. 从 `macos-frida/` **向上查找**包含 `manosaba_game_mac` 的目录 → 定位工作区
-   (所以仓库放哪都行,不必和游戏同目录)
-2. 扫描 `ManosabaMod/*/info.json` → 生成 mod 选择菜单
+1. **定位游戏目录**,依次检查:
+   ① 向上查找 `manosaba_game_mac`(工作区副本)
+   ② Steam 默认位置 `~/Library/Application Support/Steam/steamapps/common/manosaba_game`
+   ③ 环境变量 `GAME`(手动指定)
+2. 在游戏目录下扫描 `ManosabaMod/*/info.json` → 生成 mod 选择菜单
 3. 启动游戏并注入 `manosabamod_v3.js`(Steam 绕过 + 菜单 + provider 管线)
 
 游戏内操作:
@@ -49,7 +57,7 @@ cd /Users/richie/manosaba decompile/ManosabaMod-macOS/macos-frida
 ### 其他用法
 ```bash
 ./run_mod.sh /path/to/Mods          # 指定 mod 根目录
-GAME=/path/to/manosaba ./run_mod.sh # 找不到游戏时手动指定二进制
+GAME=/path/to/manosaba ./run_mod.sh # 自动查找失败时手动指定游戏二进制
 ```
 
 ## 状态
