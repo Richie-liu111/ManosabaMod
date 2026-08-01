@@ -38,7 +38,7 @@ ManosabaMod/
 # 1. 克隆仓库 (任何位置)
 git clone https://github.com/Richie-liu111/ManosabaMod.git
 
-# 2. 部署脚本到游戏目录 (一次即可; 更新时重新 cp 一遍)
+# 2. 部署脚本到游戏目录 
 cp ManosabaMod/macos-frida/run_mod.sh \
    ManosabaMod/macos-frida/manosabamod_v3.js \
    "$HOME/Library/Application Support/Steam/steamapps/common/manosaba_game/"
@@ -54,12 +54,7 @@ cd "$HOME/Library/Application Support/Steam/steamapps/common/manosaba_game"
 `run_mod.sh` 自动完成:
 1. 定位游戏目录(见下方顺序)
 2. 扫描 `ManosabaMod/*/info.json` → 生成 mod 选择菜单
-3. 启动游戏并注入 `manosabamod_v3.js`(Steam 绕过 + 菜单 + provider 管线)
-
-游戏内操作:
-1. 标题画面 → 点「开始」
-2. 出现 mod 选择菜单(原版剧情 + 每个 mod 一项)
-3. 点你的 mod → 剧本播放(voice 正常)
+3. 启动游戏并注入 `manosabamod_v3.js`
 
 ### 游戏目录定位顺序
 
@@ -67,13 +62,6 @@ cd "$HOME/Library/Application Support/Steam/steamapps/common/manosaba_game"
 2. Steam 默认位置:`~/Library/Application Support/Steam/steamapps/common/manosaba_game`
 3. 仓库在工作区副本 `manosaba_game_mac` 旁(仅本地开发场景)
 4. 环境变量 `GAME`(手动指定)
-
-### 从 Steam 启动 (可选)
-
-脚本与游戏同目录后,把 `run_mod.sh` 添加为 **Steam 非 Steam 游戏快捷方式**,
-就能从 Steam 库直接启动带加载器的游戏:
-`Steam → 添加游戏 → 添加非 Steam 游戏 → 浏览选择 run_mod.sh`。
-(若 Steam 文件选择器不接受 `.sh`,直接在终端 `./run_mod.sh` 即可。)
 
 ### 其他用法
 
