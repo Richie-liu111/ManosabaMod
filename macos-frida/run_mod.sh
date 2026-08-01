@@ -4,8 +4,15 @@
 # 游戏路径: 自动查找 (工作区副本 manosaba_game_mac → Steam 默认位置), 也可用环境变量 GAME=... 覆盖
 cd "$(dirname "$0")"
 
-# 定位游戏目录: ① Steam 默认位置 (标准) ② 向上找 manosaba_game_mac (工作区副本) ③ GAME 环境变量
+# 定位游戏目录:
+#   ① 部署在游戏目录 (本脚本在 manosaba.app 旁) — 推荐用法
+#   ② Steam 默认位置
+#   ③ 向上找 manosaba_game_mac (工作区副本)
+#   ④ GAME 环境变量
 GAME_DIR=""
+if [ -d "$PWD/manosaba.app" ]; then
+    GAME_DIR="$PWD"
+fi
 if [ -z "$GAME_DIR" ] && [ -d "$HOME/Library/Application Support/Steam/steamapps/common/manosaba_game/manosaba.app" ]; then
     GAME_DIR="$HOME/Library/Application Support/Steam/steamapps/common/manosaba_game"
 fi
