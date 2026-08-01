@@ -50,9 +50,9 @@ manosaba.app (GameAssembly.dylib, IL2CPP)
   → converters 字典[typeof(Script)] = NaniToScriptAssetConverter → Script → 播放
 ```
 
-## 三、核心原理 (硬核部分)
+## 三、核心原理
 
-### 1. il2cpp_thread_attach 是万能钥匙
+### 1. il2cpp_thread_attach 
 `il2cpp_runtime_invoke` 必须在 attach 到 IL2CPP domain 的线程上调用。
 在未 attach 的 Frida 线程上,invoker stub 解引用 `Thread::Current() == NULL` 崩溃。
 attach 之后几乎所有方法都能经 runtime_invoke 调用。
@@ -77,7 +77,7 @@ IL2CPP 对引用类型泛型方法使用 fully-shared-generic (FSG) 共享代码
 3. `il2cpp_type_get_object(typeof(Script))` 拿托管 Type 作 key
 4. inflated `Dictionary.Add(key, list)`
 
-### 4. 不要裸调 ScriptLoader.Load
+### 4. ScriptLoader.Load
 直接 `runtime_invoke` 一个 async 方法 (`ScriptLoader.Load`) 会 SIGSEGV
 (缺游戏侧执行上下文,续体无法正确投递)。必须让游戏自己的
 `@goto → GotoModified → ScriptLoader.Load` 驱动。
@@ -90,10 +90,10 @@ IL2CPP 对引用类型泛型方法使用 fully-shared-generic (FSG) 共享代码
 | Hook 方法 | C# Harmony attribute (patch IL) | `Interceptor.attach` methodPointer |
 | 调用托管代码 | 直接 C# | `il2cpp_runtime_invoke` (+ thread_attach) |
 | 注册 converter | `AddConverter<T>()` (C# 泛型调用) | 直接填充 converters 字典 (inflated 方法) |
-| 异步加载 | 游戏线程自然执行 | 必须让游戏 @goto 驱动 (裸调崩溃) |
+| 异步加载 | 游戏线程自然执行 | 必须让游戏 @goto 驱动 |
 | 平台 | Windows x64 | macOS Apple Silicon (arm64) |
 
-## 五、mod 格式兼容性 — 为什么你的 mod 直接能用
+## 五、mod 格式兼容性 — 为什么 mod 直接能用
 
 **mod 格式由游戏引擎定义,不是加载器定义。** 两版加载器做的同一件事:
 把 mod 文件夹暴露给游戏**同一套资源系统**。
@@ -109,9 +109,7 @@ ManosabaMod/<ModName>/
 └── Movie/  WitchBook/     ← 视频 / 线索
 ```
 
-因此你的 "Gapless quantum spin liquid in a honeycomb Γ magnet" mod
-(`info.json` + `Scripts/1919180_01/Main_02.nani` + `Text/` + `Voice/`)
-在 macOS 上**直接加载播放**——游戏引擎读的是同样的文件,加载器只是把
+因此 mod 在 macOS 上**直接加载播放**——游戏引擎读的是同样的文件,加载器只是把
 `ManosabaMod/` 目录接进了游戏。
 
 ## 六、已支持 / 未支持
