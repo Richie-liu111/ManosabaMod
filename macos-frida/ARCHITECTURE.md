@@ -37,6 +37,7 @@ manosaba.app (GameAssembly.dylib, IL2CPP)
         │                          + converters 字典 (FSG 绕过)
         │                          + ProvisionSource 插进
         │                            ScriptLoader / TextManager / voiceLoader / audioLoader
+        ├─ Movie 支持             → URL 流式 (get_UrlStreaming/BuildStreamUrl/Play/HoldResources)
         └─ Interceptor.attach      → 钩 TitleUi.Activate 决定注入时机
                                      + GotoModified/脚本加载诊断链
 ```
@@ -82,6 +83,29 @@ IL2CPP 对引用类型泛型方法使用 fully-shared-generic (FSG) 共享代码
 (缺游戏侧执行上下文,续体无法正确投递)。必须让游戏自己的
 `@goto → GotoModified → ScriptLoader.Load` 驱动。
 
+### 5. Movie — URL 流式 (不走 VideoClip provider)
+`@movie` 命令实现 `IPreloadable`,**剧本加载时**就会被预取:
+```
+ScriptPlaylist.LoadResources
+  → PlayMovie.PreloadResources()
+    → MoviePlayer.HoldResources(name) → get_UrlStreaming = false(默认)
+      → 走 videoLoader 加载 VideoClip → mod 视频无 provider → 失败
+      → LoadOrErr 抛错 → 整个 @goto 中止 → 黑屏回标题
+```
+这就是"跳转后剧本一行都没执行就黑屏"的根因——**不是执行到 @movie 才失败,
+而是剧本加载时预取就炸了**。
+
+修法与 Windows 版 (ModMovieLoader) 一致,用 **URL 流式播放**绕开 VideoClip:
+- `run_mod.sh` 扫描 `<modKey>/Movie/*.mp4|webm|ogv` → 注入 `movieMap = {名字: 绝对路径}`
+- 钩 `MoviePlayer.HoldResources` 入口 → 预加载阶段记录 mod 视频名 (pending)
+- 钩 `MoviePlayer.get_UrlStreaming` → mod 视频强制返回 true (预加载跳过 VideoClip, 播放走 URL)
+- 钩 `MoviePlayer.Play` 入口 → 播放阶段记录 mod 视频名
+- 钩 `MoviePlayer.BuildStreamUrl` → 返回 mod 视频本地绝对路径 (VideoPlayer 认绝对路径)
+
+`get_UrlStreaming` / `BuildStreamUrl` 都是同步方法,可安全 hook;异步方法
+(`Play`/`HoldResources`/`LoadMovieClip`)不能直接 runtime_invoke,但**入口/返回值
+用 Interceptor 拦**没问题。
+
 ## 四、与 Windows 版的区别
 
 | 维度 | Windows (BepInEx) | macOS (Frida) |
@@ -122,4 +146,4 @@ ManosabaMod/<ModName>/
 | voice / audio (.wav) | ✅ |
 | WitchBook 线索 | ⏳ (Addressables 系统, 需 AddClue 注册) |
 | 背景 / 立绘 | ⏳ |
-| Movie | ⏳ |
+| Movie (.mp4/.webm/.ogv) | ✅ (URL 流式) |

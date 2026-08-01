@@ -72,12 +72,29 @@ if os.path.isdir(MOD_ROOT):
             except Exception as e:
                 print(f'  跳过 {ip}: {e}')
 
+# 扫描 Movie 目录: <MOD_ROOT>/<modKey>/Movie/*.mp4|webm|ogv → {视频名: 绝对路径}
+movie_map = {}
+if os.path.isdir(MOD_ROOT):
+    for d in sorted(os.listdir(MOD_ROOT)):
+        mvdir = os.path.join(MOD_ROOT, d, 'Movie')
+        if os.path.isdir(mvdir):
+            for fn in sorted(os.listdir(mvdir)):
+                ext = os.path.splitext(fn)[1].lower()
+                if ext in ('.mp4', '.webm', '.ogv'):
+                    name = os.path.splitext(fn)[0]
+                    full = os.path.join(mvdir, fn)
+                    if name in movie_map:
+                        print(f'  警告: 重复视频名 {name} ({movie_map[name]} vs {full})')
+                    else:
+                        movie_map[name] = full
+
 # 构建 JS modList 变量
 parts = []
 for m in mods:
     name_json = json.dumps(m['Name'], ensure_ascii=False)
     parts.append('{Name:' + name_json + ',key:"' + m['key'] + '",Enter:"' + m['Enter'] + '"}')
 mods_str = '[' + ','.join(parts) + ']'
+movie_map_json = json.dumps(movie_map, ensure_ascii=False)
 
 # 生成并写入菜单剧本文件 (菜单实际由 v3.js 的 Script.FromText 构造, 此文件仅作参考)
 def setline(var, val):
@@ -108,11 +125,17 @@ with open(menu_path, 'w', encoding='utf-8') as f:
     f.write(build_menu_text(mods))
 print(f'>>> 已写入菜单文件: {menu_path}')
 
-FULL_JS = f'var modList={mods_str};var MOD_ROOT="{MOD_ROOT}";"use strict";\n' + JS_BASE
+FULL_JS = f'var modList={mods_str};var MOD_ROOT="{MOD_ROOT}";var movieMap={movie_map_json};"use strict";\n' + JS_BASE
 
 print(f'>>> 发现 {len(mods)} 个 Mod')
 for m in mods:
     print(f'    {m["key"]}: {m["Name"][:50]} -> {m["Enter"]}')
+if movie_map:
+    print(f'>>> 发现 {len(movie_map)} 个 mod 视频')
+    for k, v in movie_map.items():
+        print(f'    {k}: {v}')
+else:
+    print('>>> 无 mod 视频')
 
 # 启动
 device = frida.get_local_device()
