@@ -109,32 +109,36 @@ ScriptPlaylist.LoadResources
 (`Play`/`HoldResources`/`LoadMovieClip`)不能直接 runtime_invoke,但**入口/返回值
 用 Interceptor 拦**没问题。
 
-### 6. WitchBook 自定义线索 — 数据注入 + 会话隔离 (镜像 Windows ModClueLoader + ModWitchBookPatch)
+### 6. WitchBook 全 4 分类 — 数据注入 + 会话隔离 (镜像 Windows ModClueLoader + ModProfileLoader + ModRuleNoteLoader)
 
 `@update` 链路: `UpdateWitchBook.Execute` → `WitchBookUi.UpdateVersion` → `WitchBookScreen.UpdateVersion`
-→ `CluePage.UpdateVersion` → `_state.SetVersion`。原版对 `_itemIds` 之外的 id 不处理,
+→ `XxxPage.UpdateVersion` → `_state.SetVersion`。原版对 `_itemIds` 之外的 id 不处理,
 `_localizedTextData` 也没有 mod 条目 → 图鉴不显示,点击还会 KeyNotFoundException。
 
-修法 (与 Windows 一致):
+支持 4 分类 (Clue/Profile/Rule/Note) + 新角色 (Characters):
 - **数据来源**: 运行时用 libc (`open/read/lseek`, Frida 无 File API) 读
-  `<MOD_ROOT>/<key>/info.json` 的 `Clues` 字段 + 扫 `WitchBook/Clues/*.png`。
+  `<MOD_ROOT>/<key>/info.json` 的 `Clues`/`Profiles`/`Rules`/`Notes`/`Characters` +
+  扫 `WitchBook/{Clues,Profiles}/*.png`。
 - **@update 拦截**: 钩 `WitchBookUi.UpdateVersion` + `WitchBookScreen.UpdateVersion`
-  (同步方法) → 记录状态 + 触发注入。
-- **数据注入**: 向 `CluePage._loadedDataItemMap` 注入 `VersionedItem<ClueDataItem>`
-  (object_new + 写字段, 绕开泛型 ctor); 向 `_itemIds` 追加 ID; 向 `_localizedTextData`
-  预填 `Dictionary<LocaleKind, LocalizedTexts>`(键用与 `_idVersionPair` 同一
-  IdVersionPair 实例 → 原版 RefreshPageContent 直接命中); `_state.SetVersion` 设状态。
+  (同步方法) → 按 `WitchBookCategory` 路由 (Clue=0 Profile=1 Map=2 Rule=3 Note=4)。
+- **数据注入**: 向各 `XxxPage._loadedDataItemMap` 注入 `VersionedItem<TItem>`
+  (object_new + 直写字段, 绕开泛型 ctor); 向 `_itemIds` 追加 ID; 向 `_localizedTextData`
+  预填 `Dictionary<LocaleKind, ...>`(键用与 `_idVersionPair` 同一 IdVersionPair 实例 →
+  原版 RefreshPageContent 直接命中); `_state.SetVersion` 设状态。
+  - Clue: `LocalizedTexts(Name, Desc)`; Profile: `string(Desc)`; Rule: `LocalizedTexts(Subtitle, Desc)` + `_numberings`; Note: `LocalizedTexts(Title, Desc)`。
+- **人物姓名**: 新角色经 CharacterData + AuthorData 注入 + `ProfilePage.RefreshPageContent`
+  onLeave 覆写 `_authorLabel`(BuildFullName 同款富文本: 姓首字大号带色)。
 - **纹理**: 读 PNG → `Texture2D` + `ImageConversion.LoadImage` → 注册进
-  `AddressablesManager._loadedAssets`(经 CluePage._addressableAssetLoader 取单例),
-  `@spawn "Clue"` 弹窗和缩略图共用。
+  `AddressablesManager._loadedAssets`,`@spawn "Clue"` 弹窗和缩略图共用。
 - **当前 mod 识别**: 钩 `ScriptLoader.Load` 匹配 `modList` 的 `Enter` 路径
   (Windows 读 `modKey` 自定义变量, 思路一致)。
-- **会话隔离** (防止跨剧本/跨会话继承):
-  - 只注入当前 mod 的线索。
-  - mod 切换/回标题时: 清各页面 `_state` (Clue 保留当前 mod, Profile/Rule/Note/Map 清空)
-    + 移除已注入目录数据 + 调 vanilla `WitchBookUi.ClearState` (镜像 `@clearBook`)。
-  - **面板不置空**: 页面首次出现时捕获原版默认文本/占位图 (`_defaultTexture`),
-    清空时恢复 → 空图鉴显示原版默认态而非纯白 (Windows 同样不直接改 UI)。
+- **会话隔离 — 整页重建** (防止跨剧本/跨会话继承):
+  - **只注入当前 mod** 的条目。
+  - **override** (mod id == 原版 id, 如 `Hiro`): 注入时移除原版同 id 条目 + 注入 mod 版。
+  - **整页重建**: 页面首次出现时捕获原版 `_loadedDataItemMap` 快照 (按页面实例);
+    mod 切换/回标题时 **清空 map → 从快照重添全部原版条目** → 重建 `_itemIds` →
+    补缺失 dict 项 → 注入当前 mod。每次会话从原版基座开始, override 完全可逆 (含 v1)。
+  - 面板恢复捕获的原版默认文本/占位图 (`_defaultTexture`),空态非纯白。
 
 ## 四、与 Windows 版的区别
 
@@ -174,7 +178,7 @@ ManosabaMod/<ModName>/
 | mod 剧本 (.nani) | ✅ |
 | 本地化文档 (.txt) | ✅ |
 | voice / audio (.wav) | ✅ |
-| WitchBook 自定义线索 (Clues) | ✅ (数据注入 + 状态 + 纹理) |
-| WitchBook 自定义人物/规定/记录 | ✅ |
+| WitchBook 全 4 分类 (Clue/Profile/Rule/Note) + 新角色 | ✅ (数据注入 + 状态 + 纹理 + 姓名) |
+| WitchBook 会话隔离 (整页重建 + override 可逆) | ✅ |
 | 背景 / 立绘 | ⏳ |
 | Movie (.mp4/.webm/.ogv) | ✅ (URL 流式) |

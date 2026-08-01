@@ -331,17 +331,48 @@ function setupMovieHooks() {
 //   3. 显示: Interceptor.replace CluePage.RefreshPageContent / SetupItemButton —— mod 线索直接设
 //      _subjectLabel/_descriptionLabel/_thumbnail (绕开 _localizedTextData 的 KeyNotFoundException)。
 // 数据来源: 运行时读 <MOD_ROOT>/<modKey>/info.json 的 Clues 字段 + 扫 WitchBook/Clues/*.png。
-var wbData = { clues: {}, states: {}, addressToId: {}, pendingStates: {}, texCache: {}, texPaths: {} };
+// ============ WitchBook 全 4 分类支持 (镜像 Windows ModClueLoader + ModProfileLoader + ModRuleNoteLoader) ============
+var wbData = {
+  clue: {},       // id -> {key, versions:{ver:{name,desc}}, path}
+  profile: {},    // id -> {key, versions:{ver:{desc}}, path}
+  rule: {},       // id -> {key, versions:{ver:{numbering,subtitle,desc}}}
+  note: {},       // id -> {key, versions:{ver:{title,desc}}}
+  characters: {}, // 角色Id -> {key, name:{}, familyName:{}, color, age, height, weight}
+  states: {},     // catName -> {id: ver}
+  pendingStates: {}, // catName -> {id: ver}
+  texCache: {},   // id -> Texture2D
+  texPaths: {}    // id -> path (clue/profile)
+};
+var wbCats = {
+  clue:    { name:"clue",    idx:0, field:"Clues",     page:"CluePage",    data:"ClueData",    item:"ClueDataItem",    texDir:"Clues",    locOff:0xD0, locKind:"lts",
+             addr: function(id){ return buildClueTextureAddress(id); },
+             parseItem: function(it){ return { name: it.Name||{}, desc: it.Description||{} }; } },
+  profile: { name:"profile", idx:1, field:"Profiles",  page:"ProfilePage", data:"ProfileData", item:"ProfileDataItem", texDir:"Profiles", locOff:0xE8, locKind:"str",
+             addr: function(id){ return buildProfileTextureAddress(id); },
+             parseItem: function(it){ return { desc: it.Description||{} }; } },
+  rule:    { name:"rule",    idx:3, field:"Rules",     page:"RulePage",    data:"RuleData",    item:"RuleDataItem",    texDir:null,       locOff:0xE8, locKind:"lts",
+             addr: null,
+             parseItem: function(it){ return { numbering: (it.Numbering||""), subtitle: it.Subtitle||{}, desc: it.Description||{} }; } },
+  note:    { name:"note",    idx:4, field:"Notes",     page:"NotePage",    data:"NoteData",    item:"NoteDataItem",    texDir:null,       locOff:0xC8, locKind:"lts",
+             addr: null,
+             parseItem: function(it){ return { title: it.Title||{}, desc: it.Description||{} }; } }
+};
 var wbCurrentMod = null;   // 当前激活的 mod key (经 ScriptLoader.Load 匹配 Enter 得到; null=未知, __vanilla__=原版)
 var wbPrevMod = null;      // 上次注入时的 mod key (用于切换检测)
-// 当前 mod 的线索 id 列表 (无 mod 时不注入)
-function currentModClueIds() {
+function wbCatByIdx(idx) {
+    var names = Object.keys(wbCats);
+    for (var i = 0; i < names.length; i++) if (wbCats[names[i]].idx === idx) return wbCats[names[i]];
+    return null;
+}
+function wbCatByName(nm) { return wbCats[nm]; }
+// 当前 mod 某分类的 id 列表 (无 mod 时不注入)
+function currentModIds(cat) {
     if (!wbCurrentMod || wbCurrentMod === "__vanilla__") return [];
-    var out = [], keys = Object.keys(wbData.clues);
-    for (var i = 0; i < keys.length; i++) if (wbData.clues[keys[i]].key === wbCurrentMod) out.push(keys[i]);
+    var out = [], keys = Object.keys(wbData[cat.name]);
+    for (var i = 0; i < keys.length; i++) if (wbData[cat.name][keys[i]].key === wbCurrentMod) out.push(keys[i]);
     return out;
 }
-function isCurrentModClue(id) { return !!wbCurrentMod && wbData.clues[id] && wbData.clues[id].key === wbCurrentMod; }
+function isCurrentModItem(cat, id) { return !!wbCurrentMod && wbData[cat.name][id] && wbData[cat.name][id].key === wbCurrentMod; }
 // 从 ScriptLoader.Load 的路径识别当前 mod (匹配 modList 的 Enter; 原版默认路径 → __vanilla__)
 // mod 变化时立即清理上一 mod 的残留 (页面若存在) 并注入当前 mod 目录
 function detectCurrentMod(path) {
@@ -356,36 +387,24 @@ function detectCurrentMod(path) {
     if (next === null || next === wbCurrentMod) return;
     wbCurrentMod = next;
     wblog("当前 mod: '" + wbCurrentMod + "' (Enter=" + path + ")");
-    try { if (wbCls && wbCls.cluePage && !wbCls.cluePage.isNull()) tryInjectWitchBook(); } catch (e) {}
+    try { if (wbCls && wbCls.pages) tryInjectWitchBook(); } catch (e) {}
 }
 function resetWitchBookSession() {
     wbCurrentMod = null; wbPrevMod = null;
     wbData.states = {}; wbData.pendingStates = {}; wbData.texCache = {};
-    wbInjectedClueData = {}; wbInjectedPages = {};
-    // 若页面仍存活, 直接清掉其中已注入的 mod 线索 (防止残留继承)
+    initCatStateMaps();
+    // 整页重建 (回原版基座) + 重置状态/面板 (防止残留继承)
     try {
-        if (wbCls && wbCls.cluePage && !wbCls.cluePage.isNull()) {
-            var allIds = Object.keys(wbData.clues);
-            if (allIds.length) {
-                var idSet = {};
-                allIds.forEach(function (id) { idSet[id] = 1; });
-                var pages = findAllObjectOfType(wbCls.cluePage);
-                if (pages.length) {
-                    clearBookViaVanilla();
-                    clearModCluesFromPage(pages[0], idSet);
-                    clearAllWitchBookPages();
-                }
-            }
+        if (wbCls && wbCls.pages) {
+            rebuildAllPages();
+            clearBookViaVanilla();
+            clearAllWitchBookPages();
         }
     } catch (e) {}
     wblog("会话重置 (回标题)");
 }
 var wbCls = null;          // 解析好的类表
 var wbReady = false;
-var wbInjectedClueData = {};  // ClueData 实例 ptr -> true (幂等)
-var wbInjectedPages = {};     // CluePage 实例 ptr -> true
-var wbRpc = null;             // 原版 RefreshPageContent 函数指针 (replace 前保存)
-var wbSib = null;             // 原版 SetupItemButton 函数指针
 
 function wblog(msg) { console.log("[v3][WitchBook] " + msg); }
 // ===== 原生文件 I/O (Frida 运行时无 File/readFileSync, 用 libc open/read/lseek) =====
@@ -453,37 +472,56 @@ function readJSONFile(path) {
         return JSON.parse(s);
     } catch (e) { wblog("readJSONFile 解析失败 '" + path + "': " + e); return null; }
 }
-// 加载所有 mod 的 Clues 数据 (info.json) + 纹理路径
+// 加载所有 mod 的 Clues/Profiles/Rules/Notes + Characters 数据 (info.json) + 纹理路径
 function loadWitchBookData() {
     if (wbReady || typeof modList === "undefined" || !modList) return;
     var root = (typeof MOD_ROOT !== "undefined") ? MOD_ROOT : "";
     wblog("MOD_ROOT=" + root + ", modList=" + modList.length + " 个");
     for (var mi = 0; mi < modList.length; mi++) {
         var key = modList[mi].key;
-        var ip = root + "/" + key + "/info.json";
-        var info = readJSONFile(ip);
+        var info = readJSONFile(root + "/" + key + "/info.json");
         if (!info) { wblog("  " + key + ": info.json 读取/解析失败"); continue; }
-        if (!info.Clues) { wblog("  " + key + ": 无 Clues 字段"); continue; }
-        var clueDir = root + "/" + key + "/WitchBook/Clues";
-        for (var c = 0; c < info.Clues.length; c++) {
-            var grp = info.Clues[c];
-            if (!grp.Id || !grp.Items || !grp.Items.length) continue;
-            if (wbData.clues[grp.Id]) { wblog("重复线索 ID '" + grp.Id + "' 跳过 (首个 mod 优先)"); continue; }
-            var rec = { key: key, versions: {}, path: null };
-            for (var v = 0; v < grp.Items.length; v++) {
-                var it = grp.Items[v];
-                rec.versions[String(it.Version)] = { name: it.Name || {}, desc: it.Description || {} };
+        // 角色数据 (Profile 关联, 供新角色名显示)
+        if (info.Characters) {
+            for (var ch = 0; ch < info.Characters.length; ch++) {
+                var cc = info.Characters[ch];
+                if (!cc.Id || wbData.characters[cc.Id]) continue;
+                wbData.characters[cc.Id] = { key: key, name: cc.Name||{}, familyName: cc.FamilyName||{}, color: cc.Color||"", age: cc.Age||"", height: cc.Height||"", weight: cc.Weight||"" };
             }
-            var tp = clueDir + "/" + grp.Id + ".png";
-            try { if (fileExists(tp)) rec.path = tp; } catch (e) {}
-            if (!rec.path) { try { var tp2 = clueDir + "/" + grp.Id + ".jpg"; if (fileExists(tp2)) rec.path = tp2; } catch (e) {} }
-            wbData.clues[grp.Id] = rec;
-            if (rec.path) wbData.texPaths[grp.Id] = rec.path;
-            wbData.addressToId[buildClueTextureAddress(grp.Id)] = grp.Id;
+        }
+        // 各分类
+        var catNames = Object.keys(wbCats);
+        for (var cn = 0; cn < catNames.length; cn++) {
+            var cat = wbCats[catNames[cn]];
+            if (!cat || !cat.name) { wblog("  cat 配置异常: key=" + catNames[cn]); continue; }
+            if (!wbData[cat.name]) { wblog("  wbData 缺分类 '" + cat.name + "', wbData 键=" + Object.keys(wbData).join(",")); return; }
+            var groups = info[cat.field];
+            if (!groups) continue;
+            var texDir = cat.texDir ? (root + "/" + key + "/WitchBook/" + cat.texDir) : null;
+            for (var g = 0; g < groups.length; g++) {
+                var grp = groups[g];
+                if (!grp.Id || !grp.Items || !grp.Items.length) continue;
+                if (wbData[cat.name][grp.Id]) { wblog("重复 " + cat.name + " ID '" + grp.Id + "' 跳过 (首个 mod 优先)"); continue; }
+                var rec = { key: key, versions: {}, path: null };
+                for (var v = 0; v < grp.Items.length; v++) {
+                    var it = grp.Items[v];
+                    rec.versions[String(it.Version)] = cat.parseItem(it);
+                }
+                if (texDir) {
+                    var tp = texDir + "/" + grp.Id + ".png";
+                    try { if (fileExists(tp)) rec.path = tp; } catch (e) {}
+                    if (!rec.path) { try { var tp2 = texDir + "/" + grp.Id + ".jpg"; if (fileExists(tp2)) rec.path = tp2; } catch (e) {} }
+                    if (rec.path) wbData.texPaths[grp.Id] = rec.path;
+                }
+                wbData[cat.name][grp.Id] = rec;
+            }
         }
     }
     wbReady = true;
-    wblog("数据加载: " + Object.keys(wbData.clues).length + " 条线索, " + Object.keys(wbData.texPaths).length + " 张图片");
+    var summary = [];
+    var cn2 = Object.keys(wbCats);
+    for (var i = 0; i < cn2.length; i++) summary.push(wbCats[cn2[i]].name + "=" + Object.keys(wbData[wbCats[cn2[i]].name]).length);
+    wblog("数据加载: " + summary.join(", ") + ", 角色=" + Object.keys(wbData.characters).length + ", 图片=" + Object.keys(wbData.texPaths).length);
 }
 // 镜像 WitchBookDataHelper.BuildClueTextureAddress: '1-1' → General/WitchBook/Clue_..._001
 function buildClueTextureAddress(id) {
@@ -493,6 +531,10 @@ function buildClueTextureAddress(id) {
         out += "_" + p;
     }
     return out;
+}
+// 镜像 WitchBookDataHelper.BuildProfileTextureAddress: → General/WitchBook/Profile_<id 原样>
+function buildProfileTextureAddress(id) {
+    return "General/WitchBook/Profile_" + id;
 }
 function localeValue(tag) { // ja=0 en-US=1 zh-Hans=2 zh-Hant=3 ko=4 fr=5 es=6
     switch (tag) {
@@ -552,6 +594,14 @@ function findAllObjectOfType(cls) {
             var fb = Memory.alloc(4); fb.writeS32(0);
             arr = invoke(mi2, ptr(0), [typeObj, fb]);
         }
+        if (!arr || arr.isNull() || arr.add(0x18).readS32() === 0) {
+            // 纯资产 (CharacterData/AuthorData 等 ScriptableObject) 需 FindObjectsOfTypeAll (镜像 Windows Resources.FindObjectsOfTypeAll)
+            try {
+                var resCls = findClassAcrossImages("UnityEngine", "Resources");
+                var mia = A.cgm(resCls, Memory.allocUtf8String("FindObjectsOfTypeAll"), 1);
+                if (mia && !mia.isNull() && mia.readPointer() && !mia.readPointer().isNull()) arr = invoke(mia, ptr(0), [typeObj]);
+            } catch (e) {}
+        }
         if (!arr || arr.isNull()) return [];
         var len = arr.add(0x18).readS32();
         var out = [];
@@ -608,20 +658,38 @@ function unionLocaleKeys(a, b) {
     (a ? Object.keys(a) : []).concat(b ? Object.keys(b) : []).forEach(function (k) { seen[k] = 1; });
     return Object.keys(seen);
 }
-// 构建 VersionedItem<ClueDataItem> (直接 object_new + 写字段, 绕开泛型 ctor)
+// 构建 VersionedItem<TItem> — 按分类构造对应数据项 (object_new + 写字段, 绕开泛型 ctor)
 // 返回 { vi, ivp }; ivp 用于 _localizedTextData 键匹配 (get_IdVersionPair 缓存命中)
-function buildVersionedItem(vItemCls, id, ver, rec) {
+function buildVersionedItemFor(cat, vItemCls, id, ver, rec) {
     try {
         var vrec = rec.versions[String(ver)];
         if (!vrec) vrec = rec.versions[Object.keys(rec.versions)[0]];
-        var nameArr = buildLocalizedTextArray(vrec.name);
-        var descArr = buildLocalizedTextArray(vrec.desc);
-        var item = A.on(wbCls.clueDataItem);
-        var ctorMi = A.cgm(wbCls.clueDataItem, Memory.allocUtf8String(".ctor"), 2);
-        if (ctorMi && !ctorMi.isNull()) invokeOk(ctorMi, item, [nameArr, descArr]);
-        else {
-            item.add(fieldOffset(wbCls.clueDataItem, "_name", 0x10)).writePointer(nameArr);
-            item.add(fieldOffset(wbCls.clueDataItem, "_description", 0x18)).writePointer(descArr);
+        var itemCls = wbCls.items[cat.name];
+        var item = A.on(itemCls);
+        if (cat.name === "clue") {
+            var nameArr = buildLocalizedTextArray(vrec.name);
+            var descArr = buildLocalizedTextArray(vrec.desc);
+            var mi = A.cgm(itemCls, Memory.allocUtf8String(".ctor"), 2);
+            if (mi && !mi.isNull()) invokeOk(mi, item, [nameArr, descArr]);
+            else { item.add(0x10).writePointer(nameArr); item.add(0x18).writePointer(descArr); }
+        } else if (cat.name === "profile") {
+            var descArr2 = buildLocalizedTextArray(vrec.desc);
+            var mi2 = A.cgm(itemCls, Memory.allocUtf8String(".ctor"), 1);
+            if (mi2 && !mi2.isNull()) invokeOk(mi2, item, [descArr2]);
+            else item.add(0x10).writePointer(descArr2);
+        } else if (cat.name === "rule") {
+            var numS = makeS(vrec.numbering || "");
+            var subArr = buildLocalizedTextArray(vrec.subtitle);
+            var descArr3 = buildLocalizedTextArray(vrec.desc);
+            var mi3 = A.cgm(itemCls, Memory.allocUtf8String(".ctor"), 3);
+            if (mi3 && !mi3.isNull()) invokeOk(mi3, item, [numS, subArr, descArr3]);
+            else { item.add(0x10).writePointer(numS); item.add(0x18).writePointer(subArr); item.add(0x20).writePointer(descArr3); }
+        } else if (cat.name === "note") {
+            var titleArr = buildLocalizedTextArray(vrec.title);
+            var descArr4 = buildLocalizedTextArray(vrec.desc);
+            var mi4 = A.cgm(itemCls, Memory.allocUtf8String(".ctor"), 2);
+            if (mi4 && !mi4.isNull()) invokeOk(mi4, item, [titleArr, descArr4]);
+            else { item.add(0x10).writePointer(titleArr); item.add(0x18).writePointer(descArr4); }
         }
         var vi = A.on(vItemCls);
         vi.add(fieldOffset(vItemCls, "_id", 0x10)).writePointer(makeS(id));
@@ -629,14 +697,14 @@ function buildVersionedItem(vItemCls, id, ver, rec) {
         vi.add(fieldOffset(vItemCls, "_item", 0x20)).writePointer(item);
         var ivp = makeIdVersionPair(id, ver);
         vi.add(fieldOffset(vItemCls, "_idVersionPair", 0x28)).writePointer(ivp);
-        return { vi: vi, ivp: ivp, id: id, ver: ver };
-    } catch (e) { wblog("buildVersionedItem err '" + id + "': " + e); return null; }
+        return { vi: vi, ivp: ivp, id: id, ver: ver, cat: cat };
+    } catch (e) { wblog("buildVersionedItemFor err '" + id + "': " + e); return null; }
 }
-// 向 List<VersionedItem<...>> 注入某个线索的所有版本; page 给定则同时预填 _localizedTextData
-function injectClueVersions(list, addMi, vItemCls, id, rec, page) {
+// 向 List<VersionedItem<...>> 注入某分类某条目的所有版本; page 给定则预填 _localizedTextData
+function injectVersions(list, addMi, vItemCls, cat, id, rec, page) {
     var keys = Object.keys(rec.versions), added = 0;
     for (var i = 0; i < keys.length; i++) {
-        var b = buildVersionedItem(vItemCls, id, parseInt(keys[i], 10), rec);
+        var b = buildVersionedItemFor(cat, vItemCls, id, parseInt(keys[i], 10), rec);
         if (!b || !b.vi || b.vi.isNull()) continue;
         if (!invokeOk(addMi, list, [b.vi]).ok) { wblog("List.Add 失败 '" + id + " v" + keys[i] + "'"); continue; }
         added++;
@@ -644,42 +712,161 @@ function injectClueVersions(list, addMi, vItemCls, id, rec, page) {
     }
     return added;
 }
-// 1) 注入 ClueData._items (ScriptableObject, 供原版 LoadDataAsync 重建时包含 mod)
-function injectClueData() {
+// 1.5) 注入 CharacterData._items (新角色基本数据, 供 Profile 显示角色名; 镜像 Windows TryInjectCharacterData)
+function injectCharacterData() {
     try {
-        var inst = findFirstObjectOfType(wbCls.clueData);
-        if (!inst) { wblog("ClueData 实例未找到 (可能尚未加载)"); return false; }
-        var key = inst.toString();
-        if (wbInjectedClueData[key]) return true;
-        var items = inst.add(fieldOffset(wbCls.clueData, "_items", 0x18)).readPointer();
-        if (items.isNull()) { wblog("ClueData._items 为 null"); return false; }
+        if (Object.keys(wbData.characters).length === 0) return;
+        if (!wbCls.characterData || wbCls.characterData.isNull()) { wblog("CharacterData 类未解析"); return; }
+        var inst = findFirstObjectOfType(wbCls.characterData);
+        if (!inst) { wblog("CharacterData 实例未找到 (可能未加载)"); return; }
+        var items = inst.add(fieldOffset(wbCls.characterData, "_items", 0x18)).readPointer();
+        if (items.isNull()) return;
         var listCls = A.ogc(items);
-        var vItemCls = getGenericArgClass(listCls, 0);
         var addMi = A.cgm(listCls, Memory.allocUtf8String("Add"), 1);
-        if (vItemCls.isNull() || !addMi || addMi.isNull()) { wblog("VersionedItem<ClueDataItem>/Add 解析失败"); return false; }
-        var idOff = fieldOffset(vItemCls, "_id", 0x10);
-        var ids = currentModClueIds(), added = 0;
+        if (!addMi || addMi.isNull()) return;
+        var itemCls = wbCls.characterDataItem;
+        var ctorMi = A.cgm(itemCls, Memory.allocUtf8String(".ctor"), 6);
+        var ids = Object.keys(wbData.characters), added = 0;
         for (var i = 0; i < ids.length; i++) {
-            if (listContainsId(items, ids[i], idOff)) continue;
-            added += injectClueVersions(items, addMi, vItemCls, ids[i], wbData.clues[ids[i]]);
+            var cc = wbData.characters[ids[i]];
+            if (cc.key !== wbCurrentMod) continue;   // 只注入当前 mod 的角色
+            if (listContainsId(items, ids[i], 0x10)) continue;   // CharacterDataItem._id @0x10
+            var item = A.on(itemCls);
+            var nameArr = buildLocalizedTextArray(cc.name);
+            var famArr = buildLocalizedTextArray(cc.familyName);
+            if (ctorMi && !ctorMi.isNull()) {
+                var r = invokeOk(ctorMi, item, [makeS(ids[i]), nameArr, famArr, makeS(cc.age), makeS(cc.height), makeS(cc.weight)]);
+                if (!r.ok) { wblog("CharacterDataItem.ctor 失败 '" + ids[i] + "'"); continue; }
+            } else {
+                item.add(0x10).writePointer(makeS(ids[i]));
+                item.add(0x18).writePointer(nameArr);
+                item.add(0x20).writePointer(famArr);
+                item.add(0x28).writePointer(makeS(cc.age));
+                item.add(0x30).writePointer(makeS(cc.height));
+                item.add(0x38).writePointer(makeS(cc.weight));
+            }
+            if (invokeOk(addMi, items, [item]).ok) added++;
         }
-        wbInjectedClueData[key] = true;
-        wblog("ClueData 注入 " + added + " 条 (total=" + items.add(0x18).readS32() + ")");
-        return true;
-    } catch (e) { wblog("injectClueData err: " + e); return false; }
+        if (added) wblog("CharacterData 注入 " + added + " 个角色");
+    } catch (e) { wblog("injectCharacterData err: " + e); }
 }
-// 2) 注入 CluePage._loadedDataItemMap + _itemIds + _state
-function injectCluePage() {
+// 取语言对象的最佳文本 (优先 zh-Hans → ja → 任意)
+function pickLocaleText(locObj) {
+    if (!locObj) return "";
+    if (locObj["zh-Hans"]) return locObj["zh-Hans"];
+    if (locObj["ja"]) return locObj["ja"];
+    var keys = Object.keys(locObj);
+    return keys.length ? locObj[keys[0]] : "";
+}
+// ProfilePage.RefreshPageContent onLeave: 覆写 mod 新角色的姓名标签 (_authorLabel @0xB8)
+// 镜像 Windows ProfilePageRefreshContent_Patch: 原版对不在角色系统中的 id 显示 ID,
+// 我们直接设置 _authorLabel.text = 格式化富文本 (BuildFullName 同款字号/颜色)
+function hookProfileName() {
     try {
-        var pages = findAllObjectOfType(wbCls.cluePage);
+        var cls = wbCls.pages.profile;
+        if (!cls || cls.isNull()) return;
+        var mi = A.cgm(cls, Memory.allocUtf8String("RefreshPageContent"), 1);
+        if (!mi || mi.isNull()) { wblog("ProfilePage.RefreshPageContent NOT FOUND"); return; }
+        Interceptor.attach(mi.readPointer(), {
+            onEnter: function (a) {
+                try {
+                    this._self = a[0];
+                    var map = a[1];
+                    this._pid = map ? readStr(map.add(0x10).readPointer()) : null;   // VersionedItem._id
+                } catch (e) { this._pid = null; }
+            },
+            onLeave: function () {
+                try {
+                    var id = this._pid;
+                    if (!id || !wbData.characters[id]) return;
+                    var cc = wbData.characters[id];
+                    if (cc.key !== wbCurrentMod) return;
+                    var label = this._self.add(fieldOffset(wbCls.pages.profile, "_authorLabel", 0xB8)).readPointer();
+                    if (label.isNull()) return;
+                    var labCls = A.ogc(label);
+                    var setTxt = A.cgm(labCls, Memory.allocUtf8String("set_text"), 1);
+                    if (!setTxt || setTxt.isNull()) return;
+                    var tpl = buildAuthorTemplate(cc, "zh-Hans");
+                    if (!tpl) tpl = buildAuthorTemplate(cc, "ja");
+                    if (tpl) invokeOk(setTxt, label, [makeS(tpl)]);
+                } catch (e) {}
+            }
+        });
+        wblog("ProfilePage 姓名覆写 hook 就绪");
+    } catch (e) { wblog("hookProfileName err: " + e); }
+}
+// 生成 AuthorData 模板 (镜像 Windows AuthorTaggedTextGenerator.BuildFullName: 姓首字大号带色 + 名首字次大号)
+function buildAuthorTemplate(cc, localeTag) {
+    try {
+        var family = resolveLocale(cc.familyName, localeTag) || "";
+        var given = resolveLocale(cc.name, localeTag) || "";
+        var color = (cc.color || "#ffffff").replace(/^#/, "");
+        function part(text, initialSize, bodySize, withColor) {
+            if (!text) return "";
+            var initial = text.charAt(0);
+            var body = text.length > 1 ? text.slice(1) : "";
+            var s = "";
+            if (withColor && color) s += "<color=#" + color + ">";
+            s += "<size=" + initialSize + ">" + initial + "</size>";
+            if (withColor && color) s += "</color>";
+            if (body) s += "<space=4><voffset=-2><size=" + bodySize + ">" + body + "</size></voffset>";
+            return s;
+        }
+        if (family && given) return part(family, 136, 73, true) + "<space=4>" + part(given, 118, 75, false);
+        if (family) return part(family, 136, 73, true);
+        if (given) return part(given, 118, 75, true);
+        return "";
+    } catch (e) { return ""; }
+}
+// 1.6) 注入 AuthorData._items (发言人名模板, 供 Profile 显示角色名; 镜像 Windows TryInjectAuthorData)
+function injectAuthorData() {
+    try {
+        if (Object.keys(wbData.characters).length === 0) return;
+        if (!wbCls.authorData || wbCls.authorData.isNull()) { wblog("AuthorData 类未解析"); return; }
+        var inst = findFirstObjectOfType(wbCls.authorData);
+        if (!inst) { wblog("AuthorData 实例未找到 (可能未加载)"); return; }
+        var items = inst.add(fieldOffset(wbCls.authorData, "_items", 0x18)).readPointer();
+        if (items.isNull()) return;
+        var listCls = A.ogc(items);
+        var addMi = A.cgm(listCls, Memory.allocUtf8String("Add"), 1);
+        if (!addMi || addMi.isNull()) return;
+        var itemCls = wbCls.authorDataItem;
+        var ctorMi = A.cgm(itemCls, Memory.allocUtf8String(".ctor"), 2);
+        var ltsCtor = A.cgm(wbCls.localizedText, Memory.allocUtf8String(".ctor"), 2);
+        var ids = Object.keys(wbData.characters), added = 0;
+        for (var i = 0; i < ids.length; i++) {
+            var cc = wbData.characters[ids[i]];
+            if (cc.key !== wbCurrentMod) continue;
+            if (listContainsId(items, ids[i], 0x10)) continue;   // AuthorDataItem._id @0x10
+            var tags = unionLocaleKeys(cc.name, cc.familyName);
+            var arr = A.an(wbCls.localizedText, tags.length);
+            for (var t = 0; t < tags.length; t++) {
+                var lt = A.on(wbCls.localizedText);
+                var lv = Memory.alloc(4); lv.writeS32(localeValue(tags[t]));
+                if (ltsCtor && !ltsCtor.isNull()) invokeOk(ltsCtor, lt, [lv, makeS(buildAuthorTemplate(cc, tags[t]))]);
+                arr.add(0x20 + t * 8).writePointer(lt);
+            }
+            var item = A.on(itemCls);
+            if (ctorMi && !ctorMi.isNull()) {
+                if (!invokeOk(ctorMi, item, [makeS(ids[i]), arr]).ok) { wblog("AuthorDataItem.ctor 失败 '" + ids[i] + "'"); continue; }
+            } else { item.add(0x10).writePointer(makeS(ids[i])); item.add(0x18).writePointer(arr); }
+            if (invokeOk(addMi, items, [item]).ok) added++;
+        }
+        if (added) wblog("AuthorData 注入 " + added + " 个角色模板");
+    } catch (e) { wblog("injectAuthorData err: " + e); }
+}
+// 2) 注入 Page._loadedDataItemMap + _itemIds + _state
+function injectPage(cat) {
+    try {
+        var pageCls = wbCls.pages[cat.name];
+        var pages = findAllObjectOfType(pageCls);
         if (!pages.length) {
-            var st = Object.keys(wbData.states);
-            for (var i = 0; i < st.length; i++) wbData.pendingStates[st[i]] = wbData.states[st[i]];
-            wblog("CluePage 未找到, " + st.length + " 个状态暂存");
+            var st = Object.keys(wbData.states[cat.name] || {});
+            for (var i = 0; i < st.length; i++) wbData.pendingStates[cat.name][st[i]] = wbData.states[cat.name][st[i]];
             return false;
         }
-        var page = pages[0], key = page.toString();
-        var mapOff = fieldOffset(wbCls.cluePage, "_loadedDataItemMap", 0x88);
+        var page = pages[0];
+        var mapOff = fieldOffset(pageCls, "_loadedDataItemMap", 0x88);
         var mapList = page.add(mapOff).readPointer();
         if (!mapList.isNull()) {
             var listCls = A.ogc(mapList);
@@ -687,24 +874,32 @@ function injectCluePage() {
             var addMi = A.cgm(listCls, Memory.allocUtf8String("Add"), 1);
             if (!vItemCls.isNull() && addMi && !addMi.isNull()) {
                 var idOff2 = fieldOffset(vItemCls, "_id", 0x10);
-                var ids = currentModClueIds(), added = 0;
+                var ids = currentModIds(cat), added = 0;
                 for (var i = 0; i < ids.length; i++) {
-                    if (listContainsId(mapList, ids[i], idOff2)) continue;
-                    added += injectClueVersions(mapList, addMi, vItemCls, ids[i], wbData.clues[ids[i]], page);
+                    var id = ids[i];
+                    // override: mod 定义的原版同 id → 移除原版条目再注入 mod 版 (镜像 Windows)
+                    if (isVanillaId(cat, id)) {
+                        var oSet = {}; oSet[id] = 1;
+                        clearModItemsFromPage(page, pageCls, oSet);
+                        wbOverrides[cat.name][id] = true;
+                        wblog(cat.name + " override '" + id + "' → 移除原版, 注入 mod 版");
+                    }
+                    if (listContainsId(mapList, id, idOff2)) continue;
+                    added += injectVersions(mapList, addMi, vItemCls, cat, id, wbData[cat.name][id], page);
                 }
-                if (added > 0) wblog("CluePage._loadedDataItemMap 注入 " + added + " 条 (total=" + mapList.add(0x18).readS32() + ")");
+                if (added > 0) wblog(cat.name + "Page._loadedDataItemMap 注入 " + added + " 条 (total=" + mapList.add(0x18).readS32() + ")");
             }
         }
-        appendItemIds(page);
-        applyStates(page);
-        wbInjectedPages[key] = true;
+        appendItemIds(page, cat);
+        applyStates(page, cat);
         return true;
-    } catch (e) { wblog("injectCluePage err: " + e); return false; }
+    } catch (e) { wblog("injectPage err(" + cat.name + "): " + e); return false; }
 }
 // 向 _itemIds (string[]) 追加纯新 mod ID (原版 UpdateVersion 检查 Contains)
-function appendItemIds(page) {
+function appendItemIds(page, cat) {
     try {
-        var idsField = fieldOffset(wbCls.cluePage, "_itemIds", 0x98);
+        var pageCls = wbCls.pages[cat.name];
+        var idsField = fieldOffset(pageCls, "_itemIds", 0x98);
         var old = page.add(idsField).readPointer();
         var newIds = [];
         if (!old.isNull()) {
@@ -714,7 +909,7 @@ function appendItemIds(page) {
                 if (s) newIds.push(s);
             }
         }
-        var keys = currentModClueIds(), appended = 0;
+        var keys = currentModIds(cat), appended = 0;
         for (var i = 0; i < keys.length; i++) {
             if (newIds.indexOf(keys[i]) === -1) { newIds.push(keys[i]); appended++; }
         }
@@ -723,33 +918,36 @@ function appendItemIds(page) {
         var arr = A.an(strCls, newIds.length);
         for (var i = 0; i < newIds.length; i++) arr.add(0x20 + i * 8).writePointer(makeS(newIds[i]));
         page.add(idsField).writePointer(arr);
-        wblog("_itemIds: +" + appended + " 纯新 ID, 共 " + newIds.length);
+        wblog(cat.name + "Page._itemIds: +" + appended + " 纯新 ID, 共 " + newIds.length);
     } catch (e) { wblog("appendItemIds err: " + e); }
 }
-// 3) 状态: _state.SetVersion (ClueState : VersionedState, 同步方法可 runtime_invoke)
-function applyStates(page) {
+// 3) 状态: _state.SetVersion (各 State 都是 VersionedState 子类, 同步方法可 runtime_invoke)
+function applyStates(page, cat) {
     try {
-        var stateOff = fieldOffset(wbCls.cluePage, "_state", 0x48);
+        var pageCls = wbCls.pages[cat.name];
+        var stateOff = fieldOffset(pageCls, "_state", 0x48);
         var state = page.add(stateOff).readPointer();
-        if (state.isNull()) { wblog("CluePage._state 为 null"); return; }
+        if (state.isNull()) return;
         var setMi = A.cgm(wbCls.versionedState, Memory.allocUtf8String("SetVersion"), 2);
-        if (!setMi || setMi.isNull()) { wblog("VersionedState.SetVersion NOT FOUND"); return; }
-        var ids = Object.keys(wbData.states), applied = 0;
+        if (!setMi || setMi.isNull()) return;
+        var stMap = wbData.states[cat.name] || {};
+        var ids = Object.keys(stMap), applied = 0;
         for (var i = 0; i < ids.length; i++) {
-            var vbuf = Memory.alloc(4); vbuf.writeS32(wbData.states[ids[i]]);
+            var vbuf = Memory.alloc(4); vbuf.writeS32(stMap[ids[i]]);
             if (invokeOk(setMi, state, [makeS(ids[i]), vbuf]).ok) applied++;
         }
-        var pend = Object.keys(wbData.pendingStates);
-        for (var i = 0; i < pend.length; i++) {
-            var vbuf2 = Memory.alloc(4); vbuf2.writeS32(wbData.pendingStates[pend[i]]);
-            if (invokeOk(setMi, state, [makeS(pend[i]), vbuf2]).ok) { applied++; wbData.states[pend[i]] = wbData.pendingStates[pend[i]]; }
+        var pend = wbData.pendingStates[cat.name] || {};
+        var pkeys = Object.keys(pend);
+        for (var i = 0; i < pkeys.length; i++) {
+            var vbuf2 = Memory.alloc(4); vbuf2.writeS32(pend[pkeys[i]]);
+            if (invokeOk(setMi, state, [makeS(pkeys[i]), vbuf2]).ok) { applied++; stMap[pkeys[i]] = pend[pkeys[i]]; }
         }
-        wbData.pendingStates = {};
-        wblog("状态应用 " + applied + " 条");
+        wbData.pendingStates[cat.name] = {};
+        wblog(cat.name + "Page 状态应用 " + applied + " 条");
     } catch (e) { wblog("applyStates err: " + e); }
 }
 // 4) 纹理: 读 PNG → Texture2D → 注册进 AddressablesManager._loadedAssets (缩略图 + @spawn 共用)
-function loadClueTexture(id) {
+function loadModTexture(id) {
     if (wbData.texCache[id]) return wbData.texCache[id];
     var path = wbData.texPaths[id];
     if (!path) return null;
@@ -772,16 +970,21 @@ function loadClueTexture(id) {
         wbData.texCache[id] = tex;
         wblog("纹理加载 '" + id + "' -> " + tex);
         return tex;
-    } catch (e) { wblog("loadClueTexture err '" + id + "': " + e); return null; }
+    } catch (e) { wblog("loadModTexture err '" + id + "': " + e); return null; }
 }
 function findAddressablesManager() {
-    // 1) CluePage._addressableAssetLoader (已验证可靠, 是同一个 AddressablesManager 单例)
+    // 1) 各页面 _addressableAssetLoader (同一 AddressablesManager 单例)
     try {
-        if (wbCls && wbCls.cluePage && !wbCls.cluePage.isNull()) {
-            var pages = findAllObjectOfType(wbCls.cluePage);
-            if (pages.length) {
-                var m = pages[0].add(fieldOffset(wbCls.cluePage, "_addressableAssetLoader", 0x50)).readPointer();
-                if (m && !m.isNull()) return m;
+        if (wbCls && wbCls.pages) {
+            var pn = Object.keys(wbCls.pages);
+            for (var pi = 0; pi < pn.length; pi++) {
+                var pageCls = wbCls.pages[pn[pi]];
+                if (!pageCls || pageCls.isNull()) continue;
+                var pages = findAllObjectOfType(pageCls);
+                if (pages.length) {
+                    var m = pages[0].add(fieldOffset(pageCls, "_addressableAssetLoader", 0x50)).readPointer();
+                    if (m && !m.isNull()) return m;
+                }
             }
         }
     } catch (e) {}
@@ -810,11 +1013,24 @@ function registerTexturesInto(managerPtr) {
         var dictCls = A.ogc(dict);
         var addMi = A.cgm(dictCls, Memory.allocUtf8String("Add"), 2);
         if (!addMi || addMi.isNull()) { wblog("Dict.Add NOT FOUND"); return; }
-        var ids = currentModClueIds().filter(function (id) { return !!wbData.texPaths[id]; }), count = 0;
-        for (var i = 0; i < ids.length; i++) {
-            var tex = loadClueTexture(ids[i]);
+        // 收集当前 mod 所有带纹理的条目 (clue/profile)
+        var texIds = [], catNames = Object.keys(wbCats);
+        for (var ci = 0; ci < catNames.length; ci++) {
+            var cat = wbCats[catNames[ci]];
+            if (!cat.texDir || !cat.addr) continue;
+            currentModIds(cat).forEach(function (id) { if (wbData.texPaths[id]) texIds.push(id); });
+        }
+        var count = 0;
+        for (var i = 0; i < texIds.length; i++) {
+            var tex = loadModTexture(texIds[i]);
             if (!tex) continue;
-            var addr = buildClueTextureAddress(ids[i]);
+            var cat2 = null, id2 = texIds[i];
+            for (var ci2 = 0; ci2 < catNames.length; ci2++) {
+                var c2 = wbCats[catNames[ci2]];
+                if (wbData[c2.name][id2]) { cat2 = c2; break; }
+            }
+            if (!cat2 || !cat2.addr) continue;
+            var addr = cat2.addr(id2);
             if (dictContainsKey(dict, addr)) continue;
             if (invokeOk(addMi, dict, [makeS(addr), tex]).ok) count++;
         }
@@ -837,12 +1053,184 @@ function dictContainsKey(dict, key) {
     } catch (e) {}
     return false;
 }
-// 从 CluePage 结构中移除指定 id 的线索 (mod 切换时清理旧 mod 数据)
-function clearModCluesFromPage(page, idSet) {
+// ===== Override 处理: mod 定义的原版同 id 条目应覆盖原版显示 (镜像 Windows modXxxOverrideIds) =====
+var wbOverrides = { clue: {}, profile: {}, rule: {}, note: {} };  // 当前 mod 覆写的原版 id
+var wbVanillaMap = {};   // catName -> {page: 页面指针, items: [原版 VersionedItem 指针]} (整页重建基座快照)
+// 检测 id 是否为原版 (存在于 Data._items, 而非仅 mod 注入)
+function isVanillaId(cat, id) {
+    try {
+        var dataCls = wbCls.datas[cat.name];
+        if (!dataCls || dataCls.isNull()) return false;
+        var inst = findFirstObjectOfType(dataCls);
+        if (!inst) return false;
+        var items = inst.add(fieldOffset(dataCls, "_items", 0x18)).readPointer();
+        if (items.isNull()) return false;
+        var listCls = A.ogc(items);
+        var vItemCls = getGenericArgClass(listCls, 0);
+        var idOff = fieldOffset(vItemCls, "_id", 0x10);
+        return listContainsId(items, id, idOff);
+    } catch (e) { return false; }
+}
+// 把 vanilla Data 里 id∈ids 的条目恢复到页面 (map + _localizedTextData + _itemIds)
+// 重建 _itemIds (string[]) — 从当前 map 内容提取全部 id
+function rebuildItemIdsFromMap(page, pageCls, mapList, vItemCls, idOff) {
+    try {
+        var ids = [];
+        var cnt = mapList.add(0x18).readS32(), arr = mapList.add(0x10).readPointer();
+        for (var i = 0; i < cnt; i++) {
+            var e = arr.add(0x20 + i * 8).readPointer();
+            if (e.isNull()) continue;
+            var id = readStr(e.add(idOff).readPointer());
+            if (id && ids.indexOf(id) === -1) ids.push(id);
+        }
+        var strCls = getSystemClass("String");
+        var narr = A.an(strCls, ids.length);
+        for (var i = 0; i < ids.length; i++) narr.add(0x20 + i * 8).writePointer(makeS(ids[i]));
+        page.add(fieldOffset(pageCls, "_itemIds", 0x98)).writePointer(narr);
+    } catch (e) {}
+}
+// 字典是否已有 (id, version) 条目 (IdVersionPair: Id@0x10, Version@0x18)
+function dictHasIdVer(dict, id, ver) {
+    try {
+        var ents = dict.add(0x18).readPointer();
+        if (ents.isNull()) return false;
+        var cnt = ents.add(0x18).readS32();
+        for (var i = 0; i < cnt; i++) {
+            try {
+                var en = ents.add(0x20 + i * 24);
+                var k = en.add(8).readPointer();
+                if (k.isNull()) continue;
+                if (readStr(k.add(0x10).readPointer()) === id && k.add(0x18).readS32() === ver) return true;
+            } catch (e2) {}
+        }
+    } catch (e) {}
+    return false;
+}
+// 整页重建: 清空页面 _loadedDataItemMap, 从捕获的原版快照重添全部条目,
+// 重建 _itemIds, 并为缺 dict 项的条目补建。mod 切换/回标题时调用 → 每次会话从原版基座开始。
+function restorePageFromData(page, pageCls, cat) {
+    try {
+        var snap = wbVanillaMap[cat.name];
+        var ptrs = snap ? snap.items : null;
+        if (!ptrs || !ptrs.length) { wblog(cat.name + " 整页重建跳过 (快照未捕获)"); return; }
+        var mapList = page.add(fieldOffset(pageCls, "_loadedDataItemMap", 0x88)).readPointer();
+        if (mapList.isNull()) return;
+        var mapListCls = A.ogc(mapList);
+        var clMi = A.cgm(mapListCls, Memory.allocUtf8String("Clear"), 0);
+        if (clMi && !clMi.isNull()) invokeOk(clMi, mapList, []);
+        var addMi = A.cgm(mapListCls, Memory.allocUtf8String("Add"), 1);
+        var added = 0;
+        for (var i = 0; i < ptrs.length; i++) {
+            if (addMi && !addMi.isNull()) { if (invokeOk(addMi, mapList, [ptrs[i]]).ok) added++; }
+        }
+        // 从 map 的 vItemCls 取字段偏移
+        var vItemCls = getGenericArgClass(A.ogc(mapList), 0);
+        var idOff = fieldOffset(vItemCls, "_id", 0x10);
+        var verOff = fieldOffset(vItemCls, "_version", 0x18);
+        rebuildItemIdsFromMap(page, pageCls, mapList, vItemCls, idOff);
+        // 补 dict: 检查每个 map 条目是否有 dict 项 (override 移除过的 id 需重建)
+        try {
+            var outer = page.add(fieldOffset(pageCls, "_localizedTextData", cat.locOff)).readPointer();
+            if (!outer.isNull()) {
+                var mc = mapList.add(0x18).readS32(), marr = mapList.add(0x10).readPointer();
+                for (var j = 0; j < mc; j++) {
+                    var mvi = marr.add(0x20 + j * 8).readPointer();
+                    if (mvi.isNull()) continue;
+                    var mid = readStr(mvi.add(idOff).readPointer());
+                    if (!mid) continue;
+                    if (!dictHasIdVer(outer, mid, mvi.add(verOff).readS32())) restoreVanillaDict(page, pageCls, cat, mvi, vItemCls);
+                }
+            }
+        } catch (e2) {}
+        wblog(cat.name + " 整页重建: " + added + " 条 (原版基座)");
+    } catch (e) { wblog("restorePageFromData err: " + e); }
+}
+// 对所有分类页面做整页重建 (mod 切换/回标题时调用)
+function rebuildAllPages() {
+    try {
+        var pages = findAllPages();
+        if (!pages.length) return;
+        var cats = Object.keys(wbCats);
+        for (var ci = 0; ci < cats.length; ci++) {
+            var cat = wbCats[cats[ci]];
+            for (var pi = 0; pi < pages.length; pi++) {
+                try {
+                    var pc = A.ogc(pages[pi]);
+                    if (A.cgn(pc).readCString() !== cat.page) continue;
+                    restorePageFromData(pages[pi], pc, cat);
+                } catch (e) {}
+            }
+        }
+    } catch (e) { wblog("rebuildAllPages err: " + e); }
+}
+// 为恢复的原版条目构建 _localizedTextData 字典项
+function restoreVanillaDict(page, pageCls, cat, vi, vItemCls) {
+    try {
+        var id = readStr(vi.add(fieldOffset(vItemCls, "_id", 0x10)).readPointer());
+        var ver = vi.add(fieldOffset(vItemCls, "_version", 0x18)).readS32();
+        var item = vi.add(fieldOffset(vItemCls, "_item", 0x20)).readPointer();
+        var ivp = vi.add(fieldOffset(vItemCls, "_idVersionPair", 0x28)).readPointer();
+        if (ivp.isNull()) ivp = makeIdVersionPair(id, ver);
+        var outer = page.add(fieldOffset(pageCls, "_localizedTextData", cat.locOff)).readPointer();
+        if (outer.isNull()) return;
+        var outerCls = A.ogc(outer);
+        var sample = getFirstDictValue(outer);
+        if (!sample) return;
+        var innerCls = A.ogc(sample);
+        var addInner = A.cgm(innerCls, Memory.allocUtf8String("Add"), 2);
+        var inner = A.on(innerCls);
+        if (!invokeOk(A.cgm(innerCls, Memory.allocUtf8String(".ctor"), 0), inner, []).ok) return;
+        // 读 DataItem 的 LocalizedText[] 字段
+        var lts = readLocalizedArray(item, cat.name === "clue" ? 0x10 : cat.name === "profile" ? 0x10 : cat.name === "rule" ? 0x18 : 0x10);
+        if (cat.name === "profile") {
+            // Dictionary<LocaleKind, string>
+            var keys = Object.keys(lts);
+            for (var i = 0; i < keys.length; i++) {
+                var lv = Memory.alloc(4); lv.writeS32(localeValue(keys[i]));
+                invokeOk(addInner, inner, [lv, makeS(lts[keys[i]])]);
+            }
+        } else {
+            var lts2 = readLocalizedArray(item, cat.name === "rule" ? 0x20 : 0x18);
+            var ltsCls = wbCls.lts[cat.name];
+            var ltsCtor = (ltsCls && !ltsCls.isNull()) ? A.cgm(ltsCls, Memory.allocUtf8String(".ctor"), 2) : null;
+            var keys2 = unionLocaleKeys(lts, lts2);
+            for (var i = 0; i < keys2.length; i++) {
+                var lt = A.on(ltsCls);
+                var lv2 = Memory.alloc(4); lv2.writeS32(localeValue(keys2[i]));
+                if (ltsCtor && !ltsCtor.isNull()) invokeOk(ltsCtor, lt, [makeS(lts[keys2[i]] || ""), makeS(lts2[keys2[i]] || "")]);
+                invokeOk(addInner, inner, [lv2, lt]);
+            }
+        }
+        var addOuter = A.cgm(outerCls, Memory.allocUtf8String("Add"), 2);
+        if (addOuter && !addOuter.isNull()) invokeOk(addOuter, outer, [ivp, inner]);
+    } catch (e) { wblog("restoreVanillaDict err: " + e); }
+}
+// 读 LocalizedText[] (LocalizedText: _locale@0x10 int, _text@0x18 string) → {localeTag: text}
+function readLocalizedArray(arrPtr, off) {
+    var out = {};
+    try {
+        if (!arrPtr || arrPtr.isNull()) return out;
+        var arr = arrPtr.add(off).readPointer();
+        if (arr.isNull()) return out;
+        var len = arr.add(0x18).readS32();
+        for (var i = 0; i < len; i++) {
+            var lt = arr.add(0x20 + i * 8).readPointer();
+            if (lt.isNull()) continue;
+            var loc = lt.add(0x10).readS32();
+            var text = readStr(lt.add(0x18).readPointer()) || "";
+            var tag = "zh-Hans";
+            switch (loc) { case 0: tag = "ja"; break; case 1: tag = "en-US"; break; case 2: tag = "zh-Hans"; break; case 3: tag = "zh-Hant"; break; case 4: tag = "ko"; break; case 5: tag = "fr"; break; case 6: tag = "es"; break; }
+            out[tag] = text;
+        }
+    } catch (e) {}
+    return out;
+}
+// 从页面结构中移除指定 id 的条目 (mod 切换时清理旧 mod 数据; pageCls 区分各分类页面)
+function clearModItemsFromPage(page, pageCls, idSet) {
     try {
         var removed = 0;
         // 1) _loadedDataItemMap (List): 收集要移除的索引, 倒序 RemoveAt
-        var mapOff = fieldOffset(wbCls.cluePage, "_loadedDataItemMap", 0x88);
+        var mapOff = fieldOffset(pageCls, "_loadedDataItemMap", 0x88);
         var mapList = page.add(mapOff).readPointer();
         if (!mapList.isNull()) {
             var listCls = A.ogc(mapList);
@@ -866,7 +1254,7 @@ function clearModCluesFromPage(page, idSet) {
             }
         }
         // 2) _localizedTextData (Dict): 遍历删除 key.Id ∈ idSet
-        var dictField = fieldOffset(wbCls.cluePage, "_localizedTextData", 0xD0);
+        var dictField = fieldOffset(pageCls, "_localizedTextData", 0xD0);
         var outer = page.add(dictField).readPointer();
         if (!outer.isNull()) {
             var outerCls = A.ogc(outer);
@@ -889,7 +1277,7 @@ function clearModCluesFromPage(page, idSet) {
             }
         }
         // 3) _itemIds (string[]): 重建
-        var idsField = fieldOffset(wbCls.cluePage, "_itemIds", 0x98);
+        var idsField = fieldOffset(pageCls, "_itemIds", 0x98);
         var old = page.add(idsField).readPointer();
         if (!old.isNull()) {
             var keep = [];
@@ -904,19 +1292,19 @@ function clearModCluesFromPage(page, idSet) {
             page.add(idsField).writePointer(narr);
         }
         // 4) _state._list (List<IdVersionPair>): 移除 Id ∈ idSet
-        removeStateEntries(page, idSet);
-        // 5) 清当前选中项 (_currentItemId) → 上方面板不再残留上一剧本的线索
+        removeStateEntries(page, pageCls, idSet);
+        // 5) 清当前选中项 (_currentItemId) → 上方面板不再残留
         try {
-            var curOff = fieldOffset(wbCls.cluePage, "_currentItemId", 0xA0);
+            var curOff = fieldOffset(pageCls, "_currentItemId", 0xA0);
             page.add(curOff).writePointer(makeS(""));
         } catch (e) {}
-        if (removed > 0) wblog("清除旧 mod 线索 " + removed + " 条");
-    } catch (e) { wblog("clearModCluesFromPage err: " + e); }
+        if (removed > 0) wblog("清除旧 mod 条目 " + removed + " 条");
+    } catch (e) { wblog("clearModItemsFromPage err: " + e); }
 }
 // 从 _state._list 移除指定 id 的状态 (IdVersionPair.Id @+0x10)
-function removeStateEntries(page, idSet) {
+function removeStateEntries(page, pageCls, idSet) {
     try {
-        var stOff = fieldOffset(wbCls.cluePage, "_state", 0x48);
+        var stOff = fieldOffset(pageCls, "_state", 0x48);
         var st = page.add(stOff).readPointer();
         if (st.isNull()) return;
         var stList = st.add(fieldOffset(wbCls.versionedState, "_list", 0x10)).readPointer();
@@ -967,8 +1355,8 @@ function clearPageState(page, keepSet) {
         if (idxs.length) wblog("清空 " + A.cgn(A.ogc(page)).readCString() + " 状态 " + idxs.length + " 条");
     } catch (e) { wblog("clearPageState err: " + e); }
 }
-function currentModSet() {
-    var cur = currentModClueIds(), set = {};
+function currentModSet(cat) {
+    var cur = currentModIds(cat), set = {};
     cur.forEach(function (id) { set[id] = 1; });
     return set;
 }
@@ -1066,19 +1454,45 @@ function restorePageDefaults(page) {
     } catch (e) { wblog("restorePageDefaults err: " + e); }
 }
 function findAllPages() {
-    var baseCls = findClassAcrossImages("WitchTrials.Views", "WitchBookPageBase");
-    if (!baseCls || baseCls.isNull()) return [];
-    var pages = findAllObjectOfType(baseCls);
-    // 首次见到页面即捕获默认值 (此时未被 mod 触碰, 处于原版默认态)
-    if (!wbDefaultsCaptured && pages.length) {
-        for (var i = 0; i < pages.length; i++) { try { capturePageDefaults(pages[i]); } catch (e) {} }
+    // 用具体页面类遍历 (基类 WitchBookPageBase 有泛型/非泛型两个, FindObjectsOfType 不稳定)
+    var out = [];
+    if (!wbCls || !wbCls.pages) return out;
+    var pn = Object.keys(wbCls.pages);
+    for (var i = 0; i < pn.length; i++) {
+        var cls = wbCls.pages[pn[i]];
+        if (!cls || cls.isNull()) continue;
+        var pages = findAllObjectOfType(cls);
+        for (var j = 0; j < pages.length; j++) out.push(pages[j]);
+    }
+    // 首次见到页面即捕获默认值 + 原版 map 基座 (此时未被 mod 触碰, 处于原版默认态)
+    if (!wbDefaultsCaptured && out.length) {
+        for (var k = 0; k < out.length; k++) { try { capturePageDefaults(out[k]); } catch (e) {} }
         wbDefaultsCaptured = true;
     }
-    return pages;
+    // 捕获原版 _loadedDataItemMap 快照 (整页重建的基座; 不依赖 Data 加载时机)
+    // 按页面实例捕获: 页面重建(新实例)时重新捕获
+    for (var c = 0; c < out.length; c++) {
+        try {
+            var ccls = A.ogc(out[c]);
+            var ccn = A.cgn(ccls).readCString();
+            for (var cc = 0; cc < Object.keys(wbCats).length; cc++) {
+                var ccat = wbCats[Object.keys(wbCats)[cc]];
+                if (ccat.page !== ccn) continue;
+                if (wbVanillaMap[ccat.name] && wbVanillaMap[ccat.name].page === out[c].toString()) break;
+                var mlist = out[c].add(fieldOffset(ccls, "_loadedDataItemMap", 0x88)).readPointer();
+                if (mlist.isNull()) break;
+                var mcnt = mlist.add(0x18).readS32(), marr = mlist.add(0x10).readPointer();
+                var ptrs = [];
+                for (var mi = 0; mi < mcnt; mi++) { var e = marr.add(0x20 + mi * 8).readPointer(); if (e && !e.isNull()) ptrs.push(e); }
+                wbVanillaMap[ccat.name] = { page: out[c].toString(), items: ptrs };
+                wblog(ccat.name + " 捕获原版基座 " + ptrs.length + " 条");
+            }
+        } catch (e) {}
+    }
+    return out;
 }
 // 清状态 + 恢复原版默认面板 — 仅 mod 切换/会话重置时调用
-// CluePage 保留当前 mod 线索; Profile/Rule/Note/Map 全部清空 (mod 不定义它们, 由 @update 重建)
-// 面板恢复为捕获的原版默认 (占位图+默认文本), 而非纯白空白
+// 各页面按其分类保留当前 mod 的条目; 其余 (原版/他 mod) 清空; 面板恢复原版默认
 function clearAllWitchBookPages() {
     try {
         if (!wbCurrentMod || wbCurrentMod === "__vanilla__") return;   // 原版剧情不干预
@@ -1086,7 +1500,10 @@ function clearAllWitchBookPages() {
         for (var i = 0; i < pages.length; i++) {
             try {
                 var cn = A.cgn(A.ogc(pages[i])).readCString();
-                var keep = (cn === "CluePage") ? currentModSet() : null;
+                var cat = null;
+                var cn2 = Object.keys(wbCats);
+                for (var j = 0; j < cn2.length; j++) { if (wbCats[cn2[j]].page === cn) { cat = wbCats[cn2[j]]; break; } }
+                var keep = cat ? currentModSet(cat) : null;
                 clearPageState(pages[i], keep);
                 restorePageDefaults(pages[i]);
             } catch (e) {}
@@ -1118,41 +1535,53 @@ function clearBookViaVanilla() {
         wblog("clearBook: WitchBookUi.ClearState 全部 5 分类已调用");
     } catch (e) { wblog("clearBook err: " + e); }
 }
+function initCatStateMaps() {
+    var cn = Object.keys(wbCats);
+    for (var i = 0; i < cn.length; i++) {
+        if (!wbData.states[cn[i]]) wbData.states[cn[i]] = {};
+        if (!wbData.pendingStates[cn[i]]) wbData.pendingStates[cn[i]] = {};
+    }
+}
 function tryInjectWitchBook() {
     try {
-        // mod 切换检测: 换剧本/回标题后重新开始 → 清掉上一 mod 注入的线索 + 重置状态
+        // mod 切换检测: 换剧本/回标题后重新开始 → 整页重建回原版基座 + 重置状态
         if (wbCurrentMod !== wbPrevMod) {
-            var allIds = Object.keys(wbData.clues);
-            if (allIds.length) {
-                var idSet = {};
-                allIds.forEach(function (id) { idSet[id] = 1; });
-                var pages = findAllObjectOfType(wbCls.cluePage);
-                if (pages.length) {
-                    clearBookViaVanilla();                 // 重置状态 + 当前选中项 (清残留显示)
-                    clearModCluesFromPage(pages[0], idSet); // 移除证物目录数据 (map/dict/itemIds)
-                    clearAllWitchBookPages();              // 清各页面状态 + 面板 (含 Profile/Rule/Note)
-                }
-            }
+            rebuildAllPages();                  // 整页重建: 清 map, 从 Data 重添全部原版条目
+            clearBookViaVanilla();              // 重置状态 + 当前选中项 (清残留显示)
+            clearAllWitchBookPages();           // 清各页面状态 + 恢复原版默认面板
             wbData.states = {}; wbData.pendingStates = {};
+            initCatStateMaps();
             wbPrevMod = wbCurrentMod;
-            wblog("mod 切换 → 状态重置, 注入范围: " + (wbCurrentMod ? "'" + wbCurrentMod + "'" : "无"));
+            wblog("mod 切换 → 整页重建 + 状态重置, 注入范围: " + (wbCurrentMod ? "'" + wbCurrentMod + "'" : "无"));
         }
-        injectCluePage();
-        // 顺带注册纹理 (全局 manager + CluePage 上的 loader)
+        initCatStateMaps();
+        // 注入所有分类 (只注入页面, 不注入 Data._items —— Data 是缓存的 ScriptableObject,
+        // 注入会跨会话残留: 页面 LoadDataAsync 从 Data 重建 map 时把上次的 mod 条目带回来
+        // → listContains=true → 跳过注入 → 无预填 → KeyNotFound。页面注入每次重新做, 自愈。)
+        var cn2 = Object.keys(wbCats);
+        for (var i = 0; i < cn2.length; i++) {
+            injectPage(wbCats[cn2[i]]);
+        }
+        // 新角色 (Profile 显示名: CharacterData 基本数据 + AuthorData 名称模板)
+        injectCharacterData();
+        injectAuthorData();
+        // 纹理 (全局 manager + 页面 loader)
         registerTexturesInto(null);
-        var pages2 = findAllObjectOfType(wbCls.cluePage);
-        if (pages2.length) registerTexturesInto(pages2[0].add(fieldOffset(wbCls.cluePage, "_addressableAssetLoader", 0x50)).readPointer());
+        var pages2 = findAllPages();
+        if (pages2.length) registerTexturesInto(pages2[0].add(fieldOffset(A.ogc(pages2[0]), "_addressableAssetLoader", 0x50)).readPointer());
     } catch (e) { wblog("tryInjectWitchBook err: " + e); }
 }
-// @update 拦截
+// @update 拦截: 按 WitchBookCategory 路由 (Clue=0 Profile=1 Map=2 Rule=3 Note=4)
 function onWitchBookUpdate(args) {
     try {
-        var cat = args[1].toInt32(), id = readStr(args[2]), ver = args[3].toInt32();
-        if (cat !== 0) return;   // WitchBookCategory.Clue = 0
-        if (!id || !isCurrentModClue(id)) { wblog(">>> @update 忽略: id='" + id + "' (非当前 mod 线索)"); return; }
-        if (wbData.states[id] === ver) return;
-        wbData.states[id] = ver;
-        wblog(">>> @update 拦截: category=Clue id='" + id + "' version=" + ver);
+        var idx = args[1].toInt32(), id = readStr(args[2]), ver = args[3].toInt32();
+        var cat = wbCatByIdx(idx);
+        if (!cat || idx === 2) return;   // Map 分类暂不处理
+        if (!id || !isCurrentModItem(cat, id)) { wblog(">>> @update 忽略: category=" + (cat?cat.name:idx) + " id='" + id + "' (非当前 mod 条目)"); return; }
+        if (!wbData.states[cat.name]) wbData.states[cat.name] = {};
+        if (wbData.states[cat.name][id] === ver) return;
+        wbData.states[cat.name][id] = ver;
+        wblog(">>> @update 拦截: category=" + cat.name + " id='" + id + "' version=" + ver);
         tryInjectWitchBook();
     } catch (e) { wblog("onWitchBookUpdate err: " + e); }
 }
@@ -1174,77 +1603,108 @@ function getFirstDictValue(dict) {
     return null;
 }
 function registerLocalizedDict(page, b) {
+    var cat = b.cat;
+    var pageCls = wbCls.pages[cat.name];
     try {
-        var dictField = fieldOffset(wbCls.cluePage, "_localizedTextData", 0xD0);
+        var dictField = fieldOffset(pageCls, "_localizedTextData", cat.locOff);
         var outer = page.add(dictField).readPointer();
-        if (outer.isNull()) { wblog("_localizedTextData 为 null, 跳过预填 '" + b.id + "'"); return; }
+        if (outer.isNull()) { wblog(cat.name + "._localizedTextData 为 null, 跳过 '" + b.id + "'"); return; }
         var outerCls = A.ogc(outer);
         // 从现有值偷内层字典的具体实现类 (不能用泛型参数: 那是 IReadOnlyDictionary 接口, object_new 会崩)
         var sample = getFirstDictValue(outer);
-        if (!sample) { wblog("_localizedTextData 无现有值, 无法确定内层字典类, 跳过 '" + b.id + "'"); return; }
+        if (!sample) { wblog(cat.name + "._localizedTextData 无现有值, 跳过 '" + b.id + "'"); return; }
         var innerCls = A.ogc(sample);
         var innerName = A.cgn(innerCls).readCString();
         var addInner = A.cgm(innerCls, Memory.allocUtf8String("Add"), 2);
         if (!addInner || addInner.isNull()) { wblog("内层字典无 Add (" + innerName + "), 跳过 '" + b.id + "'"); return; }
-        var vrec = wbData.clues[b.id].versions[String(b.ver)];
+        var vrec = wbData[cat.name][b.id].versions[String(b.ver)];
         if (!vrec) return;
-        var tags = unionLocaleKeys(vrec.name, vrec.desc);
-        if (!tags.length) return;
         var inner = A.on(innerCls);
         if (!invokeOk(A.cgm(innerCls, Memory.allocUtf8String(".ctor"), 0), inner, []).ok) { wblog("内层字典 ctor 失败 '" + b.id + "'"); return; }
-        // LocalizedTexts: 优先嵌套类; 失败则从外层字典泛型参数深层推导
-        // outer: Dictionary<IdVersionPair, IReadOnlyDictionary<LocaleKind, CluePage.LocalizedTexts>>
-        //   arg[1] = IReadOnlyDictionary<LocaleKind, LocalizedTexts> → 其 arg[1] = LocalizedTexts
-        var ltsCls = wbCls.localizedTexts;
-        if (!ltsCls || ltsCls.isNull()) {
-            try {
-                var ifaceCls = getGenericArgClass(outerCls, 1);
-                if (!ifaceCls.isNull()) ltsCls = getGenericArgClass(ifaceCls, 1);
-            } catch (e) {}
-        }
-        var ltsCtor = (ltsCls && !ltsCls.isNull()) ? A.cgm(ltsCls, Memory.allocUtf8String(".ctor"), 2) : null;
-        if (!ltsCls || ltsCls.isNull() || !ltsCtor || ltsCtor.isNull()) { wblog("CluePage.LocalizedTexts 类/ctor 未找到, 跳过 '" + b.id + "'"); return; }
-        for (var t = 0; t < tags.length; t++) {
-            var lts = A.on(ltsCls);
-            var lv = Memory.alloc(4); lv.writeS32(localeValue(tags[t]));
-            if (ltsCtor && !ltsCtor.isNull())
-                invokeOk(ltsCtor, lts, [makeS(resolveLocale(vrec.name, tags[t])), makeS(resolveLocale(vrec.desc, tags[t]))]);
-            if (addInner && !addInner.isNull())
+        if (cat.locKind === "str") {
+            // Profile: Dictionary<LocaleKind, string> — 值 = 描述字符串
+            var descTags = unionLocaleKeys(vrec.desc);
+            for (var t2 = 0; t2 < descTags.length; t2++) {
+                var lv2 = Memory.alloc(4); lv2.writeS32(localeValue(descTags[t2]));
+                invokeOk(addInner, inner, [lv2, makeS(resolveLocale(vrec.desc, descTags[t2]))]);
+            }
+        } else {
+            // Clue/Rule/Note: Dictionary<LocaleKind, Xxx.LocalizedTexts> — 值 = 二元组
+            var ltsCls = wbCls.lts[cat.name];
+            if (!ltsCls || ltsCls.isNull()) {
+                try { var ifaceCls = getGenericArgClass(outerCls, 1); if (!ifaceCls.isNull()) ltsCls = getGenericArgClass(ifaceCls, 1); } catch (e) {}
+            }
+            var ltsCtor = (ltsCls && !ltsCls.isNull()) ? A.cgm(ltsCls, Memory.allocUtf8String(".ctor"), 2) : null;
+            if (!ltsCls || ltsCls.isNull() || !ltsCtor || ltsCtor.isNull()) { wblog(cat.name + ".LocalizedTexts 类/ctor 未找到, 跳过 '" + b.id + "'"); return; }
+            var f1 = null, f2 = null;
+            if (cat.name === "clue") { f1 = vrec.name; f2 = vrec.desc; }         // (Name, Description)
+            else if (cat.name === "rule") { f1 = vrec.subtitle; f2 = vrec.desc; } // (Subtitle, Description)
+            else if (cat.name === "note") { f1 = vrec.title; f2 = vrec.desc; }   // (Title, Description)
+            var tags = unionLocaleKeys(f1, f2);
+            for (var t = 0; t < tags.length; t++) {
+                var lts = A.on(ltsCls);
+                var lv = Memory.alloc(4); lv.writeS32(localeValue(tags[t]));
+                invokeOk(ltsCtor, lts, [makeS(resolveLocale(f1, tags[t])), makeS(resolveLocale(f2, tags[t]))]);
                 invokeOk(addInner, inner, [lv, lts]);
+            }
         }
         var addOuter = A.cgm(outerCls, Memory.allocUtf8String("Add"), 2);
         if (addOuter && !addOuter.isNull()) invokeOk(addOuter, outer, [b.ivp, inner]);
-        wblog("_localizedTextData 预填 '" + b.id + "' v" + b.ver + " (" + innerName + ", " + tags.length + " 语言)");
+        // Rule 额外: _numberings 字典 (IdVersionPair → string)
+        if (cat.name === "rule") {
+            try {
+                var numField = fieldOffset(pageCls, "_numberings", 0xE0);
+                var numDict = page.add(numField).readPointer();
+                if (!numDict.isNull()) {
+                    var numCls = A.ogc(numDict);
+                    var addNum = A.cgm(numCls, Memory.allocUtf8String("Add"), 2);
+                    if (addNum && !addNum.isNull()) invokeOk(addNum, numDict, [b.ivp, makeS(vrec.numbering || "")]);
+                }
+            } catch (e) {}
+        }
+        wblog(cat.name + "._localizedTextData 预填 '" + b.id + "' v" + b.ver + " (" + innerName + ")");
     } catch (e) { wblog("registerLocalizedDict err '" + b.id + "': " + e); }
 }
-// 解析 WitchBook 相关类
+// 解析 WitchBook 相关类 (按分类建 pages/datas/items/lts 表)
 function resolveWitchBookClasses() {
     var m = {};
-    m.clueData = findClassAcrossImages("WitchTrials.Models", "ClueData");
-    m.clueDataItem = findClassAcrossImages("WitchTrials.Models", "ClueDataItem");
+    m.pages = {}; m.datas = {}; m.items = {}; m.lts = {};
+    var catNames = Object.keys(wbCats);
+    for (var i = 0; i < catNames.length; i++) {
+        var cat = wbCats[catNames[i]];
+        var pageCls = findClassAcrossImages("WitchTrials.Views", cat.page);
+        m.pages[cat.name] = pageCls;
+        m.datas[cat.name] = findClassAcrossImages("WitchTrials.Models", cat.data);
+        m.items[cat.name] = findClassAcrossImages("WitchTrials.Models", cat.item);
+        m.lts[cat.name] = (cat.name === "profile") ? ptr(0) : findNestedClass(pageCls, "LocalizedTexts");
+    }
     m.idVersionPair = findClassAcrossImages("WitchTrials.Models", "IdVersionPair");
     m.versionedState = findClassAcrossImages("WitchTrials.Models", "VersionedState");
     m.localizedText = findClassAcrossImages("GigaCreation.Essentials.Localization", "LocalizedText");
     m.witchBookScreen = findClassAcrossImages("WitchTrials.Views", "WitchBookScreen");
     m.witchBookUi = findClassAcrossImages("WitchTrials.Views", "WitchBookUi");
-    m.cluePage = findClassAcrossImages("WitchTrials.Views", "CluePage");
     m.witchBookItemThumbnail = findClassAcrossImages("WitchTrials.Views", "WitchBookItemThumbnail");
     m.witchBookItemSubjectLabel = findClassAcrossImages("WitchTrials.Views", "WitchBookItemSubjectLabel");
     m.witchBookItemButton = findClassAcrossImages("WitchTrials.Views", "WitchBookItemButton");
     m.spawnableClue = findClassAcrossImages("WitchTrials.Views", "SpawnableClue");
     m.texture2d = findClassAcrossImages("UnityEngine", "Texture2D");
     m.imageConversion = findClassAcrossImages("UnityEngine", "ImageConversion");
-    m.localizedTexts = findNestedClass(m.cluePage, "LocalizedTexts");
+    m.characterData = findClassAcrossImages("WitchTrials.Models", "CharacterData");
+    m.characterDataItem = findClassAcrossImages("WitchTrials.Models", "CharacterDataItem");
+    m.authorData = findClassAcrossImages("WitchTrials.Models", "AuthorData");
+    m.authorDataItem = findClassAcrossImages("WitchTrials.Models", "AuthorDataItem");
     return m;
 }
 function setupWitchBookHooks() {
     try {
         loadWitchBookData();
-        if (Object.keys(wbData.clues).length === 0) { wblog("无 mod 线索, 跳过"); return; }
+        var total = 0, catNames = Object.keys(wbCats);
+        for (var i = 0; i < catNames.length; i++) total += Object.keys(wbData[wbCats[catNames[i]].name]).length;
+        if (total === 0) { wblog("无 mod WitchBook 数据, 跳过"); return; }
         wbCls = resolveWitchBookClasses();
-        if (!wbCls.clueData || wbCls.clueData.isNull() || !wbCls.cluePage || wbCls.cluePage.isNull() ||
+        if (!wbCls.pages.clue || wbCls.pages.clue.isNull() ||
             !wbCls.witchBookScreen || wbCls.witchBookScreen.isNull() || !wbCls.versionedState || wbCls.versionedState.isNull()) {
-            wblog("类解析失败 (clueData/cluePage/screen/versionedState)"); return;
+            wblog("类解析失败 (pages/screen/versionedState)"); return;
         }
         // @update 入口
         ["WitchBookUi", "WitchBookScreen"].forEach(function (cn) {
@@ -1255,6 +1715,8 @@ function setupWitchBookHooks() {
                 if (uvMi && !uvMi.isNull()) Interceptor.attach(uvMi.readPointer(), { onEnter: onWitchBookUpdate });
             } catch (e) {}
         });
+        // Profile 姓名覆写 (mod 新角色显示格式化名字而非 ID)
+        hookProfileName();
         // WitchBook 打开/翻页重建 → 强制重注入
         ["BeginToPresent", "InitializePages"].forEach(function (mn) {
             try {
@@ -1274,7 +1736,7 @@ function setupWitchBookHooks() {
                     onLeave: function () {
                         try {
                             var cid = readStr(this._self.add(0x80).readPointer());  // _clueId @0x80
-                            if (cid && wbData.clues[cid]) {
+                            if (cid && wbData.clue[cid]) {
                                 wblog(">>> SpawnableClue mod 线索: '" + cid + "', 注册纹理");
                                 registerTexturesInto(null);   // 用全局 AddressablesManager
                             }
@@ -1296,7 +1758,7 @@ function setupWitchBookHooks() {
             }
         } catch (e) {}
         wblog("hooks 就绪");
-    } catch (e) { wblog("setupWitchBookHooks err: " + e); }
+    } catch (e) { wblog("setupWitchBookHooks err: " + e + " | " + (e && e.stack ? e.stack.split("\n").slice(0,3).join(" | ") : "")); }
 }
 
 // 找 UnityEngine.CoreModule image
