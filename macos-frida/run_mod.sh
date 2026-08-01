@@ -60,6 +60,18 @@ MOD_ROOT = os.environ['MOD_ROOT']
 
 JS_BASE = open(SCRIPT, encoding='utf-8').read()
 
+# 本地化对象 → 字符串 (Name/Description/Author 可能是 {zh-Hans:..., ja:...})
+def resolve_loc(v):
+    if isinstance(v, str):
+        return v
+    if isinstance(v, dict):
+        for k in ('zh-Hans', 'ja', 'zh-Hant', 'ko', 'en-US'):
+            if v.get(k):
+                return v[k]
+        if v:
+            return next(iter(v.values()))
+    return ''
+
 # 扫描 Mod
 mods = []
 if os.path.isdir(MOD_ROOT):
@@ -68,7 +80,7 @@ if os.path.isdir(MOD_ROOT):
         if os.path.isfile(ip):
             try:
                 info = json.load(open(ip, encoding='utf-8'))
-                mods.append({'Name': info['Name'], 'key': d, 'Enter': info.get('Enter', '')})
+                mods.append({'Name': resolve_loc(info.get('Name')) or d, 'key': d, 'Enter': info.get('Enter', '')})
             except Exception as e:
                 print(f'  跳过 {ip}: {e}')
 
@@ -142,7 +154,7 @@ device = frida.get_local_device()
 pid = device.spawn([GAME])
 session = device.attach(pid)
 script = session.create_script(FULL_JS)
-script.on('message', lambda m, d: print(m.get('payload', '') or m.get('description', '')))
+script.on('message', lambda m, d: print(m.get('payload', '') or m.get('description', ''), flush=True))
 script.load()
 device.resume(pid)
 print(f'>>> 游戏已启动 (PID={pid}) | Ctrl+C 停止')

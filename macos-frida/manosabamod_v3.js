@@ -51,7 +51,10 @@ function invokeOk(mi, obj, args) {
     var ex = exc.readPointer();
     if (!ex.isNull()) {
         var en = ex ? (A.ogc(ex) ? A.cgn(A.ogc(ex)).readCString() : "?") : "?";
-        console.log("[v3] invoke THREW: " + en);
+        try {
+            var jsstack = new Error().stack.split("\n").slice(1, 4).join(" | ");
+            console.log("[v3] invoke THREW: " + en + " <= " + jsstack);
+        } catch (e2) { console.log("[v3] invoke THREW: " + en); }
         return { ok: false, ret: ptr(0) };
     }
     return { ok: true, ret: ret };
@@ -209,6 +212,184 @@ function addAudioProviders(root, prefix) {
     } catch (e) { console.log("[v3] addAudioProviders err: " + e); }
 }
 
+// ===== 立绘 (Characters) 注册 — 镜像 Windows AddRichCharacter/AddSimpleCharacter + providersMap =====
+// 从 metaMap.metas[] 偷一个原版 CharacterMetadata 的 Loader.ProviderTypes 类 (List<string>)
+function stealListStringClass(metaMap) {
+    try {
+        var metas = metaMap.add(0x18).readPointer();   // ActorMetadataMap<T>.metas @0x18
+        if (metas.isNull()) return ptr(0);
+        var cnt = metas.add(0x18).readS32();
+        for (var i = 0; i < cnt; i++) {
+            var m = metas.add(0x20 + i * 8).readPointer();
+            if (m.isNull()) continue;
+            var loader = m.add(0x18).readPointer();    // ActorMetadata.Loader @0x18
+            if (loader.isNull()) continue;
+            var pt = loader.add(0x18).readPointer();   // ResourceLoaderConfiguration.ProviderTypes @0x18
+            if (pt.isNull()) continue;
+            return A.ogc(pt);
+        }
+    } catch (e) {}
+    return ptr(0);
+}
+function makeListString(cls, elems) {
+    try {
+        if (!cls || cls.isNull()) return ptr(0);
+        var list = A.on(cls);
+        var ctorMi = A.cgm(cls, Memory.allocUtf8String(".ctor"), 0);
+        if (ctorMi && !ctorMi.isNull()) invokeOk(ctorMi, list, []);
+        var addMi = A.cgm(cls, Memory.allocUtf8String("Add"), 1);
+        for (var i = 0; i < elems.length; i++) if (addMi && !addMi.isNull()) invokeOk(addMi, list, [makeS(elems[i])]);
+        return list;
+    } catch (e) { return ptr(0); }
+}
+// "#ffd1d9" → [r,g,b,a] float (Unity Color 顺序)
+function hexColorFloats(hex) {
+    var h = (hex || "").replace(/^#/, "");
+    if (h.length < 6) return [1, 1, 1, 1];
+    var r = parseInt(h.substr(0, 2), 16) / 255, g = parseInt(h.substr(2, 2), 16) / 255, b = parseInt(h.substr(4, 2), 16) / 255;
+    return [r, g, b, 1];
+}
+// 立绘 provider: ① providersMap.Add(prefix, LRP(Texture2D)) ② CharacterManager 注册 ActorMetadata
+var wbAqnLogged = false;
+function logSpriteAqn() {
+    if (wbAqnLogged) return;
+    wbAqnLogged = true;
+    try {
+        var scCls = findClassAcrossImages("Naninovel", "SpriteCharacter");
+        if (!scCls || scCls.isNull()) { console.log("[v3] SpriteCharacter 类未找到"); return; }
+        var typeObj = A.tgo(A.cgt(scCls));
+        var typeCls = A.ogc(typeObj);
+        var aqnMi = A.cgm(typeCls, Memory.allocUtf8String("get_AssemblyQualifiedName"), 0);
+        if (aqnMi && !aqnMi.isNull()) {
+            var s = invoke(aqnMi, typeObj, []);
+            console.log("[v3] SpriteCharacter AQN = '" + readStr(s) + "'");
+        } else {
+            console.log("[v3] get_AssemblyQualifiedName NOT FOUND, typeCls=" + A.cgn(typeCls).readCString());
+        }
+    } catch (e) { console.log("[v3] logSpriteAqn err: " + e); }
+}
+// 立绘 provider: ① providersMap.Add(prefix, LRP(Texture2D)) ② CharacterManagerExtended 注册 ActorMetadata
+function addCharacterProviders(root, prefix) {
+    try {
+        logSpriteAqn();
+        // ① ResourceProviderManager.providersMap.Add(prefix, lrp) — 角色 sprite 提供者
+        var rpm = findSvc("ResourceProviderManager");
+        if (rpm) {
+            var rpmCls = A.ogc(rpm);
+            var pm = rpm.add(fieldOffset(rpmCls, "providersMap", 0x20)).readPointer();
+            if (!pm.isNull()) {
+                var lrp = makeLocalResourceProvider(root);
+                var texFn = function () { return findClassAcrossImages("UnityEngine", "Texture2D"); };
+                if (!lrp.isNull() && populateConvertersDict(lrp, "JpgOrPngToTextureConverter", texFn, "providersMap/" + prefix)) {
+                    var pmCls = A.ogc(pm);
+                    // 先查是否已存在 (TitleUi 可能多次触发 → 重复 Add 抛 ArgumentException)
+                    var containsMi = A.cgm(pmCls, Memory.allocUtf8String("ContainsKey"), 1);
+                    var already = false;
+                    if (containsMi && !containsMi.isNull()) {
+                        var r = invokeOk(containsMi, pm, [makeS(prefix)]);
+                        already = r.ok && r.ret && r.ret.toInt32() === 1;
+                    }
+                    if (!already) {
+                        var addMi = A.cgm(pmCls, Memory.allocUtf8String("Add"), 2);
+                        if (addMi && !addMi.isNull() && invokeOk(addMi, pm, [makeS(prefix), lrp]).ok)
+                            console.log("[v3] providersMap.Add('" + prefix + "') OK");
+                        else
+                            console.log("[v3] providersMap.Add('" + prefix + "') 失败/已存在");
+                    }
+                }
+            }
+        }
+        // ② 注册 ActorMetadata — 用基础 CharacterManager (Configuration=CharactersConfiguration, 有 MetadataMap)
+        var cm = findSvc("CharacterManager");
+        if (!cm) cm = findSvc("CharacterManagerExtended");
+        if (!cm) { console.log("[v3] addCharacterProviders: CharacterManager NOT FOUND"); return; }
+        var cfg = null;
+        // 扫描候选 Configuration 偏移 (ActorManager.Configuration 在对象内某处)
+        var cfgCands = [0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0x40, 0x48, 0x50, 0x58, 0x60, 0x68, 0x70, 0x78, 0x80];
+        for (var ci = 0; ci < cfgCands.length; ci++) {
+            try {
+                var cand = cm.add(cfgCands[ci]).readPointer();
+                if (cand.isNull()) continue;
+                var gmm = A.cgm(A.ogc(cand), Memory.allocUtf8String("get_MetadataMap"), 0);
+                if (gmm && !gmm.isNull()) { cfg = cand; console.log("[v3] Configuration @0x" + cfgCands[ci].toString(16) + " = " + A.cgn(A.ogc(cand)).readCString()); break; }
+            } catch (e) {}
+        }
+        if (!cfg || cfg.isNull()) { console.log("[v3] CharacterManager.Configuration 未找到 (get_MetadataMap)"); return; }
+        var gmmMi = A.cgm(A.ogc(cfg), Memory.allocUtf8String("get_MetadataMap"), 0);
+        var metaMap = invoke(gmmMi, cfg, []);
+        if (metaMap.isNull()) { console.log("[v3] MetadataMap 为 null"); return; }
+        var addRecMi = A.cgm(A.ogc(metaMap), Memory.allocUtf8String("AddRecord"), 2);
+        var containsIdMi = A.cgm(A.ogc(metaMap), Memory.allocUtf8String("ContainsId"), 1);
+        var metaCls = findClassAcrossImages("Naninovel", "CharacterMetadata");
+        var loaderCls = findClassAcrossImages("Naninovel", "ResourceLoaderConfiguration");
+        var listStrCls = stealListStringClass(metaMap);
+        if (!addRecMi || addRecMi.isNull() || metaCls.isNull() || loaderCls.isNull() || listStrCls.isNull()) {
+            console.log("[v3] 立绘注册类解析失败 (AddRecord/meta/loader/List<string>)"); return;
+        }
+        var metaCtor = A.cgm(metaCls, Memory.allocUtf8String(".ctor"), 0);
+        var loaderCtor = A.cgm(loaderCls, Memory.allocUtf8String(".ctor"), 0);
+        var implStr = "Naninovel.SpriteCharacter, Elringus.Naninovel.Runtime, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null";   // 完整 AQN (IL2CPP Type.GetType 需全名)
+        var ids = Object.keys(wbData.characters), added = 0;
+        for (var i = 0; i < ids.length; i++) {
+            var cc = wbData.characters[ids[i]];
+            if (cc.key !== prefix) continue;
+            // 已注册则跳过 (TitleUi 可能多次触发)
+            if (containsIdMi && !containsIdMi.isNull()) {
+                var cr = invokeOk(containsIdMi, metaMap, [makeS(ids[i])]);
+                if (cr.ok && cr.ret && cr.ret.toInt32() === 1) continue;
+            }
+            try {
+                var meta = A.on(metaCls);
+                if (metaCtor && !metaCtor.isNull()) invokeOk(metaCtor, meta, []);
+                // Loader: ResourceLoaderConfiguration{PathPrefix=prefix/Characters, ProviderTypes=[prefix]}
+                var loader = A.on(loaderCls);
+                if (loaderCtor && !loaderCtor.isNull()) invokeOk(loaderCtor, loader, []);
+                loader.add(0x10).writePointer(makeS(prefix + "/Characters"));   // PathPrefix
+                loader.add(0x18).writePointer(makeListString(listStrCls, [prefix]));  // ProviderTypes
+                meta.add(0x18).writePointer(loader);    // Loader
+                meta.add(0x10).writePointer(makeS(implStr));  // Implementation
+                meta.add(0x30).writeFloat(0.5); meta.add(0x34).writeFloat(0.695);  // Pivot
+                meta.add(0x38).writeFloat(100);         // PixelsPerUnit (0 → 立绘不可见)
+                // DisplayName @0x78 ('​' 前缀强制用角色名)
+                var disp = cc.simple ? pickLocaleText(cc.displayName) : (pickLocaleText(cc.familyName) + pickLocaleText(cc.name));
+                if (!disp) disp = ids[i];
+                meta.add(0x78).writePointer(makeS("​" + disp));
+                // 颜色 (Characters 完整角色才有)
+                if (cc.color && !cc.simple) {
+                    var rgba = hexColorFloats(cc.color);
+                    meta.add(0x80).writeU8(1);   // UseCharacterColor
+                    for (var f = 0; f < 4; f++) meta.add(0x84 + f * 4).writeFloat(rgba[f]);   // NameColor
+                    for (var f2 = 0; f2 < 4; f2++) meta.add(0x94 + f2 * 4).writeFloat(1.0);    // MessageColor (white)
+                }
+                if (invokeOk(addRecMi, metaMap, [makeS(ids[i]), meta]).ok) added++;
+            } catch (e) { console.log("[v3] 角色注册 err '" + ids[i] + "': " + e); }
+        }
+        console.log("[v3] addCharacterProviders: 注册 " + added + " 个角色 (mod '" + prefix + "')");
+    } catch (e) { console.log("[v3] addCharacterProviders err: " + e); }
+}
+// 背景 provider: BackgroundManagerExtended.GetAppearanceLoader("MainBackground"/"Stills"/"Tricks")
+//   + JpgOrPngToTextureConverter → ProvisionSource(prefix/Backgrounds/<backId>) (镜像 Windows)
+function addBackgroundProviders(root, prefix) {
+    try {
+        var bm = findSvc("BackgroundManagerExtended");
+        if (!bm) { console.log("[v3] addBackgroundProviders: BackgroundManagerExtended NOT FOUND"); return; }
+        var galMi = A.cgm(A.ogc(bm), Memory.allocUtf8String("GetAppearanceLoader"), 1);
+        if (!galMi || galMi.isNull()) { console.log("[v3] addBackgroundProviders: GetAppearanceLoader NOT FOUND"); return; }
+        var texFn = function () { return findClassAcrossImages("UnityEngine", "Texture2D"); };
+        var backIds = ["MainBackground", "Stills", "Tricks"];
+        for (var i = 0; i < backIds.length; i++) {
+            try {
+                var loader = invoke(galMi, bm, [makeS(backIds[i])]);
+                if (!loader || loader.isNull()) { console.log("[v3] 背景 loader '" + backIds[i] + "' 为空"); continue; }
+                var lrp = makeLocalResourceProvider(root);
+                if (lrp.isNull()) continue;
+                if (!populateConvertersDict(lrp, "JpgOrPngToTextureConverter", texFn, "Backgrounds/" + backIds[i])) continue;
+                insertProvisionSource(loader, lrp, prefix + "/Backgrounds/" + backIds[i], "Backgrounds/" + backIds[i]);
+            } catch (e) { console.log("[v3] 背景 '" + backIds[i] + "' 注入 err: " + e); }
+        }
+        console.log("[v3] addBackgroundProviders 完成 (" + backIds.join("/") + ")");
+    } catch (e) { console.log("[v3] addBackgroundProviders err: " + e); }
+}
 function addModLoader(root, prefix) {
     try {
         var sm = findSvc("ScriptManager");
@@ -228,6 +409,12 @@ function addModLoader(root, prefix) {
 
         // voice + audio provider
         addAudioProviders(root, prefix);
+
+        // 背景 provider (MainBackground/Stills/Tricks)
+        addBackgroundProviders(root, prefix);
+
+        // 立绘 provider (Characters/SimpleCharacters → ActorMetadata 注册)
+        addCharacterProviders(root, prefix);
     } catch (e) { console.log("[v3] addModLoader err: " + e); }
 }
 
@@ -481,12 +668,19 @@ function loadWitchBookData() {
         var key = modList[mi].key;
         var info = readJSONFile(root + "/" + key + "/info.json");
         if (!info) { wblog("  " + key + ": info.json 读取/解析失败"); continue; }
-        // 角色数据 (Profile 关联, 供新角色名显示)
+        // 角色数据 (Profile 关联 + 立绘注册: Characters 完整角色 / SimpleCharacters 简单角色)
         if (info.Characters) {
             for (var ch = 0; ch < info.Characters.length; ch++) {
                 var cc = info.Characters[ch];
                 if (!cc.Id || wbData.characters[cc.Id]) continue;
                 wbData.characters[cc.Id] = { key: key, name: cc.Name||{}, familyName: cc.FamilyName||{}, color: cc.Color||"", age: cc.Age||"", height: cc.Height||"", weight: cc.Weight||"" };
+            }
+        }
+        if (info.SimpleCharacters) {
+            for (var sc = 0; sc < info.SimpleCharacters.length; sc++) {
+                var scc = info.SimpleCharacters[sc];
+                if (!scc.Id || wbData.characters[scc.Id]) continue;
+                wbData.characters[scc.Id] = { key: key, name: {}, familyName: {}, color: "", age: "", height: "", weight: "", simple: true, displayName: scc.DisplayName||{} };
             }
         }
         // 各分类
@@ -1563,8 +1757,8 @@ function tryInjectWitchBook() {
             injectPage(wbCats[cn2[i]]);
         }
         // 新角色 (Profile 显示名: CharacterData 基本数据 + AuthorData 名称模板)
-        injectCharacterData();
-        injectAuthorData();
+        // injectCharacterData();   // 临时禁用: 角色档案数据注入可能破坏场景 (5 个 ArgumentException)
+        // injectAuthorData();
         // 纹理 (全局 manager + 页面 loader)
         registerTexturesInto(null);
         var pages2 = findAllPages();

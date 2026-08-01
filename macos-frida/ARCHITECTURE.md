@@ -140,6 +140,27 @@ ScriptPlaylist.LoadResources
     补缺失 dict 项 → 注入当前 mod。每次会话从原版基座开始, override 完全可逆 (含 v1)。
   - 面板恢复捕获的原版默认文本/占位图 (`_defaultTexture`),空态非纯白。
 
+### 7. 背景 + 立绘 (镜像 Windows AddModLoader 背景块 + AddRichCharacter/AddSimpleCharacter)
+
+**背景** (`@back <name>`, Id 默认 MainBackground):
+- 对 `BackgroundManagerExtended.GetAppearanceLoader("MainBackground"/"Stills"/"Tricks")`
+  各加 ProvisionSource (`<key>/Backgrounds/<backId>`) + `JpgOrPngToTextureConverter` (Texture2D)。
+- 覆盖原版背景: 同名文件放 `Backgrounds/<backId>/` 即可 (provider 优先级高于原版)。
+
+**立绘** (`@char <charId>.<appearance>`):
+- ① `ResourceProviderManager.providersMap` 加 `<key>` → LRP(root) + Texture2D converter
+  (角色 sprite 提供者)。
+- ② `CharacterManager.Configuration.MetadataMap` 注册 `CharacterMetadata` (镜像 Windows):
+  - `Implementation` = `Naninovel.SpriteCharacter, Elringus.Naninovel.Runtime, Version=..., PublicKeyToken=null`
+    (**完整 AQN**, IL2CPP Type.GetType 需全名; 程序集是 Elringus.Naninovel.Runtime)。
+  - `Loader` = ResourceLoaderConfiguration{ PathPrefix=`<key>/Characters`, ProviderTypes=[`<key>`] }。
+  - `Pivot`(0.5, 0.695), `PixelsPerUnit`=100 (0 → 立绘不可见), DisplayName, Color。
+- info.json `Characters`(完整) + `SimpleCharacters`(简单) 都注册。
+
+**测试坑**: 游戏画面顶部有黑色 Overlay 遮罩, mod 剧本须先
+`@back SubId:"Overlay" Transparent tint:"#000000"` 清掉 (参考 开始一个简单的对话.md),
+否则背景/立绘被遮罩盖住看似"不显示"。
+
 ## 四、与 Windows 版的区别
 
 | 维度 | Windows (BepInEx) | macOS (Frida) |
@@ -180,5 +201,6 @@ ManosabaMod/<ModName>/
 | voice / audio (.wav) | ✅ |
 | WitchBook 全 4 分类 (Clue/Profile/Rule/Note) + 新角色 | ✅ (数据注入 + 状态 + 纹理 + 姓名) |
 | WitchBook 会话隔离 (整页重建 + override 可逆) | ✅ |
-| 背景 / 立绘 | ⏳ |
+| 背景 (Backgrounds/MainBackground|Stills|Tricks) | ✅ (JpgOrPngToTextureConverter provider) |
+| 立绘 (@char Characters/SimpleCharacters) | ✅ (ActorMetadata 注册 + providersMap) |
 | Movie (.mp4/.webm/.ogv) | ✅ (URL 流式) |
