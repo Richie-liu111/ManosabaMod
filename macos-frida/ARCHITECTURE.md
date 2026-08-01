@@ -38,8 +38,11 @@ manosaba.app (GameAssembly.dylib, IL2CPP)
         │                          + ProvisionSource 插进
         │                            ScriptLoader / TextManager / voiceLoader / audioLoader
         ├─ Movie 支持             → URL 流式 (get_UrlStreaming/BuildStreamUrl/Play/HoldResources)
+        ├─ WitchBook 线索         → 运行时读 info.json Clues + 注入页面数据/状态/纹理
+        │                          + 会话隔离 (mod 切换清理 + 恢复原版默认显示)
         └─ Interceptor.attach      → 钩 TitleUi.Activate 决定注入时机
                                      + GotoModified/脚本加载诊断链
+                                     + ScriptLoader.Load 识别当前 mod
 ```
 
 加载 mod 剧本的完整链路:
@@ -106,6 +109,33 @@ ScriptPlaylist.LoadResources
 (`Play`/`HoldResources`/`LoadMovieClip`)不能直接 runtime_invoke,但**入口/返回值
 用 Interceptor 拦**没问题。
 
+### 6. WitchBook 自定义线索 — 数据注入 + 会话隔离 (镜像 Windows ModClueLoader + ModWitchBookPatch)
+
+`@update` 链路: `UpdateWitchBook.Execute` → `WitchBookUi.UpdateVersion` → `WitchBookScreen.UpdateVersion`
+→ `CluePage.UpdateVersion` → `_state.SetVersion`。原版对 `_itemIds` 之外的 id 不处理,
+`_localizedTextData` 也没有 mod 条目 → 图鉴不显示,点击还会 KeyNotFoundException。
+
+修法 (与 Windows 一致):
+- **数据来源**: 运行时用 libc (`open/read/lseek`, Frida 无 File API) 读
+  `<MOD_ROOT>/<key>/info.json` 的 `Clues` 字段 + 扫 `WitchBook/Clues/*.png`。
+- **@update 拦截**: 钩 `WitchBookUi.UpdateVersion` + `WitchBookScreen.UpdateVersion`
+  (同步方法) → 记录状态 + 触发注入。
+- **数据注入**: 向 `CluePage._loadedDataItemMap` 注入 `VersionedItem<ClueDataItem>`
+  (object_new + 写字段, 绕开泛型 ctor); 向 `_itemIds` 追加 ID; 向 `_localizedTextData`
+  预填 `Dictionary<LocaleKind, LocalizedTexts>`(键用与 `_idVersionPair` 同一
+  IdVersionPair 实例 → 原版 RefreshPageContent 直接命中); `_state.SetVersion` 设状态。
+- **纹理**: 读 PNG → `Texture2D` + `ImageConversion.LoadImage` → 注册进
+  `AddressablesManager._loadedAssets`(经 CluePage._addressableAssetLoader 取单例),
+  `@spawn "Clue"` 弹窗和缩略图共用。
+- **当前 mod 识别**: 钩 `ScriptLoader.Load` 匹配 `modList` 的 `Enter` 路径
+  (Windows 读 `modKey` 自定义变量, 思路一致)。
+- **会话隔离** (防止跨剧本/跨会话继承):
+  - 只注入当前 mod 的线索。
+  - mod 切换/回标题时: 清各页面 `_state` (Clue 保留当前 mod, Profile/Rule/Note/Map 清空)
+    + 移除已注入目录数据 + 调 vanilla `WitchBookUi.ClearState` (镜像 `@clearBook`)。
+  - **面板不置空**: 页面首次出现时捕获原版默认文本/占位图 (`_defaultTexture`),
+    清空时恢复 → 空图鉴显示原版默认态而非纯白 (Windows 同样不直接改 UI)。
+
 ## 四、与 Windows 版的区别
 
 | 维度 | Windows (BepInEx) | macOS (Frida) |
@@ -144,6 +174,7 @@ ManosabaMod/<ModName>/
 | mod 剧本 (.nani) | ✅ |
 | 本地化文档 (.txt) | ✅ |
 | voice / audio (.wav) | ✅ |
-| WitchBook 线索 | ⏳ (Addressables 系统, 需 AddClue 注册) |
+| WitchBook 自定义线索 (Clues) | ✅ (数据注入 + 状态 + 纹理) |
+| WitchBook 自定义人物/规定/记录 | ✅ |
 | 背景 / 立绘 | ⏳ |
 | Movie (.mp4/.webm/.ogv) | ✅ (URL 流式) |

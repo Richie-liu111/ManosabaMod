@@ -78,6 +78,8 @@ GAME=/path/to/manosaba ./run_mod.sh # 游戏不在 Steam 默认位置时
 | mod 剧本 (.nani) | ✅ |
 | 本地化 (.txt) / voice / audio (.wav) | ✅ |
 | Movie (.mp4/.webm/.ogv) | ✅ |
-| WitchBook 线索 / 背景 / 立绘 | ⏳ |
+| WitchBook 自定义线索 (Clues) | ✅ |
+| WitchBook 人物 / 规定 / 记录 | ✅ |
+| 背景 / 立绘 | ⏳ |
 
 架构、工作原理、与 Windows 版差异、mod 格式兼容性详见 [ARCHITECTURE.md](ARCHITECTURE.md)。

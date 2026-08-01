@@ -940,38 +940,6 @@ function removeStateEntries(page, idSet) {
         }
     } catch (e) { wblog("removeStateEntries err: " + e); }
 }
-// 强制清空详情面板 (上方面板) 的文本组件: _subjectLabel/_descriptionLabel/_currentItemId
-// ClearState 只重置状态, 不会清 UI 文本 → 上方面板残留来自上一会话的 TMP 文本
-function clearCluePagePanel(page) {
-    try {
-        var cleared = 0;
-        var sl = page.add(fieldOffset(wbCls.cluePage, "_subjectLabel", 0xB8)).readPointer();
-        if (!sl.isNull()) {
-            var stMi = A.cgm(wbCls.witchBookItemSubjectLabel, Memory.allocUtf8String("SetText"), 1);
-            if (stMi && !stMi.isNull()) { if (invokeOk(stMi, sl, [makeS("")]).ok) cleared++; }
-        }
-        var dl = page.add(fieldOffset(wbCls.cluePage, "_descriptionLabel", 0xC0)).readPointer();
-        if (!dl.isNull()) {
-            var txtCls = A.ogc(dl);
-            var stMi2 = A.cgm(txtCls, Memory.allocUtf8String("set_text"), 1);
-            if (stMi2 && !stMi2.isNull()) { if (invokeOk(stMi2, dl, [makeS("")]).ok) cleared++; }
-        }
-        // 缩略图: _thumbnail._rawImage.texture = null (清掉残留图)
-        try {
-            var th = page.add(fieldOffset(wbCls.cluePage, "_thumbnail", 0xC8)).readPointer();
-            if (!th.isNull()) {
-                var rawImage = th.add(fieldOffset(wbCls.witchBookItemThumbnail, "_rawImage", 0x28)).readPointer();
-                if (!rawImage.isNull()) {
-                    var rawCls = A.ogc(rawImage);
-                    var setTexMi = A.cgm(rawCls, Memory.allocUtf8String("set_texture"), 1);
-                    if (setTexMi && !setTexMi.isNull()) { if (invokeOk(setTexMi, rawImage, [ptr(0)]).ok) cleared++; }
-                }
-            }
-        } catch (e) {}
-        try { page.add(fieldOffset(wbCls.cluePage, "_currentItemId", 0xA0)).writePointer(makeS("")); } catch (e) {}
-        wblog("清空详情面板 (上方面板, " + cleared + " 个组件)");
-    } catch (e) { wblog("clearCluePagePanel err: " + e); }
-}
 // 清空页面 _state (仅保留 keepSet; keepSet=null 清空全部)
 function clearPageState(page, keepSet) {
     try {
@@ -1004,60 +972,113 @@ function currentModSet() {
     cur.forEach(function (id) { set[id] = 1; });
     return set;
 }
-// 清空页面详情面板: 按页面类型清对应 TMP 标签 + 缩略图 + _currentItemId
-function clearPagePanel(page) {
+// 面板默认值捕获/恢复: 页面首次出现(未被 mod 触碰)时读取原版默认文本+默认图,
+// 清空时恢复 → 空图鉴显示原版默认态 (占位图+默认文字), 而不是纯白空白
+var wbPageDefaults = {};       // pageClass ptr -> {labels:{字段:文本}, defaultTex:ptr}
+var wbDefaultsCaptured = false;
+function capturePageDefaults(page) {
     try {
-        var pageCls = A.ogc(page);
-        var clsName = A.cgn(pageCls).readCString();
-        var cleared = 0;
-        function clearLabel(fn, useSetText) {
+        var cls = A.ogc(page);
+        var key = cls.toString();
+        if (wbPageDefaults[key]) return;
+        var pageCls = cls, clsName = A.cgn(pageCls).readCString();
+        var d = { labels: {}, defaultTex: ptr(0) };
+        var labelFields = (clsName === "CluePage") ? ["_subjectLabel", "_descriptionLabel"] :
+                          (clsName === "ProfilePage") ? ["_authorLabel", "_descriptionLabel"] :
+                          (clsName === "RulePage") ? ["_titleNumLabel", "_subtitleLabel", "_descriptionLabel"] :
+                          (clsName === "NotePage") ? ["_titleLabel", "_descriptionLabel"] : [];
+        labelFields.forEach(function (fn) {
             try {
                 var f = A.gf(pageCls, Memory.allocUtf8String(fn));
                 if (!f || f.isNull()) return;
                 var lab = page.add(A.fo(f)).readPointer();
                 if (lab.isNull()) return;
-                var labCls = A.ogc(lab);
-                var mi = useSetText ? A.cgm(labCls, Memory.allocUtf8String("SetText"), 1) : A.cgm(labCls, Memory.allocUtf8String("set_text"), 1);
-                if (mi && !mi.isNull()) { if (invokeOk(mi, lab, [makeS("")]).ok) cleared++; }
-            } catch (e) {}
-        }
-        function clearThumb() {
-            try {
-                var f = A.gf(pageCls, Memory.allocUtf8String("_thumbnail"));
-                if (!f || f.isNull()) return;
-                var th = page.add(A.fo(f)).readPointer();
-                if (th.isNull()) return;
-                var raw = th.add(fieldOffset(wbCls.witchBookItemThumbnail, "_rawImage", 0x28)).readPointer();
-                if (!raw.isNull()) {
-                    var rc = A.ogc(raw);
-                    var mi = A.cgm(rc, Memory.allocUtf8String("set_texture"), 1);
-                    if (mi && !mi.isNull()) { if (invokeOk(mi, raw, [ptr(0)]).ok) cleared++; }
+                // WitchBookItemSubjectLabel 内部是 _label (TMP_Text)
+                var tmp = lab;
+                if (fn === "_subjectLabel") {
+                    var lf = A.gf(wbCls.witchBookItemSubjectLabel, Memory.allocUtf8String("_label"));
+                    if (lf && !lf.isNull()) tmp = lab.add(A.fo(lf)).readPointer();
+                    if (tmp.isNull()) tmp = lab;
+                }
+                var labCls = A.ogc(tmp);
+                var gt = A.cgm(labCls, Memory.allocUtf8String("get_text"), 0);
+                if (gt && !gt.isNull()) {
+                    var t = invoke(gt, tmp, []);
+                    d.labels[fn] = readStr(t) || "";
                 }
             } catch (e) {}
-        }
-        if (clsName === "CluePage") { clearLabel("_subjectLabel", true); clearLabel("_descriptionLabel", false); clearThumb(); }
-        else if (clsName === "ProfilePage") { clearLabel("_authorLabel", false); clearLabel("_descriptionLabel", false); clearThumb(); }
-        else if (clsName === "RulePage") { clearLabel("_titleNumLabel", false); clearLabel("_subtitleLabel", false); clearLabel("_descriptionLabel", false); }
-        else if (clsName === "NotePage") { clearLabel("_titleLabel", false); clearLabel("_descriptionLabel", false); }
-        try { page.add(0xA0).writePointer(makeS("")); } catch (e) {}   // _currentItemId (通用基类字段)
-        if (cleared) wblog("清空 " + clsName + " 面板 (" + cleared + " 组件)");
-    } catch (e) { wblog("clearPagePanel err: " + e); }
+        });
+        // 缩略图默认纹理 (_defaultTexture)
+        try {
+            var thf = A.gf(pageCls, Memory.allocUtf8String("_thumbnail"));
+            if (thf && !thf.isNull()) {
+                var th = page.add(A.fo(thf)).readPointer();
+                if (!th.isNull()) {
+                    var dtf = A.gf(wbCls.witchBookItemThumbnail, Memory.allocUtf8String("_defaultTexture"));
+                    if (dtf && !dtf.isNull()) d.defaultTex = th.add(A.fo(dtf)).readPointer();
+                }
+            }
+        } catch (e) {}
+        wbPageDefaults[key] = d;
+        wblog("已捕获 " + clsName + " 面板默认值 (" + Object.keys(d.labels).length + " 标签)");
+    } catch (e) { wblog("capturePageDefaults err: " + e); }
+}
+function restorePageDefaults(page) {
+    try {
+        var cls = A.ogc(page);
+        var d = wbPageDefaults[cls.toString()];
+        if (!d) return;
+        var pageCls = cls, clsName = A.cgn(pageCls).readCString();
+        var labels = Object.keys(d.labels);
+        labels.forEach(function (fn) {
+            try {
+                var f = A.gf(pageCls, Memory.allocUtf8String(fn));
+                if (!f || f.isNull()) return;
+                var lab = page.add(A.fo(f)).readPointer();
+                if (lab.isNull()) return;
+                var tmp = lab;
+                if (fn === "_subjectLabel") {
+                    var lf = A.gf(wbCls.witchBookItemSubjectLabel, Memory.allocUtf8String("_label"));
+                    if (lf && !lf.isNull()) tmp = lab.add(A.fo(lf)).readPointer();
+                    if (tmp.isNull()) tmp = lab;
+                }
+                var labCls = A.ogc(tmp);
+                var mi = A.cgm(labCls, Memory.allocUtf8String("set_text"), 1);
+                if (mi && !mi.isNull()) invokeOk(mi, tmp, [makeS(d.labels[fn])]);
+            } catch (e) {}
+        });
+        try {
+            var thf = A.gf(pageCls, Memory.allocUtf8String("_thumbnail"));
+            if (thf && !thf.isNull()) {
+                var th = page.add(A.fo(thf)).readPointer();
+                if (!th.isNull() && d.defaultTex && !d.defaultTex.isNull()) {
+                    var raw = th.add(fieldOffset(wbCls.witchBookItemThumbnail, "_rawImage", 0x28)).readPointer();
+                    if (!raw.isNull()) {
+                        var rc = A.ogc(raw);
+                        var mi = A.cgm(rc, Memory.allocUtf8String("set_texture"), 1);
+                        if (mi && !mi.isNull()) invokeOk(mi, raw, [d.defaultTex]);
+                    }
+                }
+            }
+        } catch (e) {}
+        try { page.add(0xA0).writePointer(makeS("")); } catch (e) {}   // _currentItemId 不恢复, 始终清空
+        wblog("已恢复 " + clsName + " 面板默认值");
+    } catch (e) { wblog("restorePageDefaults err: " + e); }
 }
 function findAllPages() {
     var baseCls = findClassAcrossImages("WitchTrials.Views", "WitchBookPageBase");
     if (!baseCls || baseCls.isNull()) return [];
-    return findAllObjectOfType(baseCls);
+    var pages = findAllObjectOfType(baseCls);
+    // 首次见到页面即捕获默认值 (此时未被 mod 触碰, 处于原版默认态)
+    if (!wbDefaultsCaptured && pages.length) {
+        for (var i = 0; i < pages.length; i++) { try { capturePageDefaults(pages[i]); } catch (e) {} }
+        wbDefaultsCaptured = true;
+    }
+    return pages;
 }
-// 只清面板 (视觉残留) — 打开图鉴时调用; 不动状态 (mod 合法 @update 的线索要保留)
-function clearAllPagePanels() {
-    try {
-        if (!wbCurrentMod || wbCurrentMod === "__vanilla__") return;
-        var pages = findAllPages();
-        for (var i = 0; i < pages.length; i++) { try { clearPagePanel(pages[i]); } catch (e) {} }
-    } catch (e) { wblog("clearAllPagePanels err: " + e); }
-}
-// 清状态 + 面板 — 仅 mod 切换/会话重置时调用
+// 清状态 + 恢复原版默认面板 — 仅 mod 切换/会话重置时调用
 // CluePage 保留当前 mod 线索; Profile/Rule/Note/Map 全部清空 (mod 不定义它们, 由 @update 重建)
+// 面板恢复为捕获的原版默认 (占位图+默认文本), 而非纯白空白
 function clearAllWitchBookPages() {
     try {
         if (!wbCurrentMod || wbCurrentMod === "__vanilla__") return;   // 原版剧情不干预
@@ -1067,7 +1088,7 @@ function clearAllWitchBookPages() {
                 var cn = A.cgn(A.ogc(pages[i])).readCString();
                 var keep = (cn === "CluePage") ? currentModSet() : null;
                 clearPageState(pages[i], keep);
-                clearPagePanel(pages[i]);
+                restorePageDefaults(pages[i]);
             } catch (e) {}
         }
     } catch (e) { wblog("clearAllWitchBookPages err: " + e); }
