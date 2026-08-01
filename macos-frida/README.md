@@ -1,60 +1,64 @@
 # ManosabaMod macOS 移植 (Frida)
 
-把 `魔法少女の魔女审判` 的 Windows MOD 加载器 (BepInEx + Il2CppInterop + Harmony)
-移植到 **macOS (Apple Silicon)**,用 **Frida** 直接注入 IL2CPP 运行时,不依赖 BepInEx。
+用 **Frida** 在 macOS (Apple Silicon) 上加载 ManosabaMod,不依赖 BepInEx。
+mod 剧本 / 本地化 / voice / audio 已通过 provider 管线加载。
 
-## 状态 (2026-08-01)
+## 仓库结构
+
+```
+ManosabaMod-macOS/                    ← 本仓库 (IrisuM/ManosabaMod 的 fork)
+├── ManosabaLoader/                   ← 原版 Windows 加载器源码 (C#/BepInEx, 仅参考)
+├── README.md                         ← 仓库总览 (含本目录入口)
+└── macos-frida/                      ← macOS 移植 (本目录)
+    ├── README.md                     ← 使用说明 (本文件)
+    ├── ARCHITECTURE.md               ← 架构 / 原理 / 与 Windows 版区别 / mod 兼容性
+    ├── manosabamod_v3.js             ← 主 Frida 脚本 (所有注入逻辑都在这里)
+    └── run_mod.sh                    ← 启动脚本 (自动找游戏 + 注入)
+```
+
+## 使用方法
+
+### 前置条件
+- macOS **Apple Silicon** (arm64)
+- `python3` + `frida`(`pip install frida-tools`)
+- 游戏放在工作区:`<工作区>/manosaba_game_mac/manosaba.app`
+- mod 放在:`<工作区>/manosaba_game_mac/ManosabaMod/<ModName>/`(含 `info.json`)
+
+### 以本机为例
+
+假设游戏在 `/Users/richie/manosaba decompile/manosaba_game_mac/`,
+你的 mod(如 Gapless quantum spin liquid)在
+`/Users/richie/manosaba decompile/manosaba_game_mac/ManosabaMod/1919180/`:
+
+```bash
+cd /Users/richie/manosaba decompile/ManosabaMod-macOS/macos-frida
+./run_mod.sh
+```
+
+`run_mod.sh` 自动完成:
+1. 从 `macos-frida/` **向上查找**包含 `manosaba_game_mac` 的目录 → 定位工作区
+   (所以仓库放哪都行,不必和游戏同目录)
+2. 扫描 `ManosabaMod/*/info.json` → 生成 mod 选择菜单
+3. 启动游戏并注入 `manosabamod_v3.js`(Steam 绕过 + 菜单 + provider 管线)
+
+游戏内操作:
+1. 标题画面 → 点「开始」
+2. 出现 mod 选择菜单(原版剧情 + 每个 mod 一项)
+3. 点你的 mod → 剧本播放(voice 正常)
+
+### 其他用法
+```bash
+./run_mod.sh /path/to/Mods          # 指定 mod 根目录
+GAME=/path/to/manosaba ./run_mod.sh # 找不到游戏时手动指定二进制
+```
+
+## 状态
 
 | 功能 | 状态 |
 |------|------|
-| 自定义 mod 菜单 (标题画面) | ✅ |
-| mod 剧本加载 (`.nani`, 经 provider 管线) | ✅ |
-| 本地化文档 (`.txt`) | ✅ |
-| voice / audio (`.wav`) | ✅ |
-| WitchBook 线索 | ⏳ (Addressables 系统, 需 AddClue) |
-| 背景 / 立绘 | ⏳ |
+| mod 菜单 | ✅ |
+| mod 剧本 (.nani) | ✅ |
+| 本地化 (.txt) / voice / audio (.wav) | ✅ |
+| WitchBook 线索 / 背景 / Movie | ⏳ |
 
-## 运行
-
-```bash
-./run_mod.sh          # 自动找游戏 + 注入 (Ctrl+C 停止)
-./run_mod.sh <mod根目录>
-```
-
-前提:
-- 游戏在 `manosaba_game_mac/` (自动向上查找)
-- `python3` + `frida` (`pip install frida-tools`)
-- macOS Apple Silicon (arm64)
-
-## 架构
-
-```
-Frida 注入 → Steam 绕过 (dlopen hook)
-→ il2cpp_thread_attach(domain) 解锁 il2cpp_runtime_invoke
-→ 菜单: Script.FromText + AddLoadedResource (缓存)
-→ provider 管线 (镜像 Windows AddModLoader):
-    ScriptLoader / TextManager / voiceLoader / audioLoader
-    各挂 LocalResourceProvider(MOD_ROOT) + converter
-→ 游戏 @goto 驱动加载
-```
-
-## 关键技术发现
-
-1. **thread_attach 是万能钥匙** — `il2cpp_runtime_invoke` 在未 attach 的 Frida 线程上会崩。
-2. **`AddConverter<T>` 是 FSG 泛型方法** — `runtime_invoke` 对泛型方法定义报
-   `ExecutionEngineException | Invalid call to method`。**绕开方案**: 从实例化泛型类的
-   genericInst 挖出 `List<IConverter>` 类,用 inflated 泛型方法直接填充 converters 字典
-   (`il2cpp_class_get_method_from_name` 在实例化类上返回 `is_inflated=1` 的可调方法)。
-3. **Windows RVA 不跨平台** — 动态解析,不用 dump.cs 的 VA。
-4. **裸调 `ScriptLoader.Load` 会 SIGSEGV** — 必须让游戏自己的 @goto 驱动。
-5. Windows/macOS 同一 Unity (metadata v31),差异在调用时序,不在"是否编译"。
-
-## 文件
-
-| 文件 | 作用 |
-|------|------|
-| `manosabamod_v3.js` | 主 Frida 脚本 (Steam 绕过 + 菜单 + provider 注入 + 诊断 hook) |
-| `run_mod.sh` | 启动脚本 |
-| `run_probe2.py` / `run_v3test.py` | 探针 / v3 测试 runner |
-| `probe_eee.js` / `probe_fsg.js` / `probe_conv*.js` / `probe_reps.js` | 诊断探针 |
-| `ARCHIVE_2026-08-01.md` | 完整移植归档 (技术细节 / 布局 / 复现) |
+架构、工作原理、与 Windows 版差异、mod 格式兼容性详见 [ARCHITECTURE.md](ARCHITECTURE.md)。
