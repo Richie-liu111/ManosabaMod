@@ -167,8 +167,13 @@ with open(menu_path, 'w', encoding='utf-8') as f:
     f.write(build_menu_text(mods))
 print(f'>>> 已写入菜单文件: {menu_path}')
 
+# 📦 asset bundle 必须以 📦 开头 (frida 走 asset 编译); 变量经 Script.evaluate fragment 注入全局 (frida-tools REPL 同机制)
 MOD_DEBUG_JS = 'var MOD_DEBUG=true;' if MOD_DEBUG else ''
-FULL_JS = f'var modList={mods_str};var MOD_ROOT="{MOD_ROOT}";var movieMap={movie_map_json};{MOD_DEBUG_JS}"use strict";\n' + JS_BASE
+inject_code = f'var modList={mods_str};var MOD_ROOT={json.dumps(MOD_ROOT)};var movieMap={movie_map_json};{MOD_DEBUG_JS}'
+inj = 'Script.evaluate("mod-vars", %s);' % json.dumps(inject_code)
+inj_frag = f"{len(inj.encode('utf-8'))} /frida/mod-vars.js\n✄\n{inj}"
+bundle_body = JS_BASE[2:] if JS_BASE.startswith("📦\n") else JS_BASE
+FULL_JS = "📦\n" + inj_frag + "\n✄\n" + bundle_body
 
 print(f'>>> 发现 {len(mods)} 个 Mod')
 for m in mods:
@@ -184,7 +189,8 @@ else:
 device = frida.get_local_device()
 pid = device.spawn([GAME])
 session = device.attach(pid)
-script = session.create_script(FULL_JS)
+# runtime="v8": frida-compile 17 的 📦 asset bundle 需要 V8 runtime 编译 (QuickJS 默认不支持)
+script = session.create_script(FULL_JS, runtime="v8")
 script.on('message', lambda m, d: print(m.get('payload', '') or m.get('description', ''), flush=True))
 script.load()
 device.resume(pid)

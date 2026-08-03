@@ -7,6 +7,6 @@
     "build": "frida-compile src/entry.js -o dist/manosabamod.js"
   },
   "devDependencies": {
-    "frida-compile": "^17.0.0"
+    "frida-compile": "^16.4.2"
   }
 }
