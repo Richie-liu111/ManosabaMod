@@ -103,6 +103,6 @@ GAME=/path/to/manosaba ./run_mod.sh # 游戏不在 Steam 默认位置时
 | WitchBook 全 4 分类 (线索/人物/规定/记录) + 新角色 | ✅ |
 | WitchBook 会话隔离 (整页重建, override 可逆) | ✅ |
 | 背景 (@back) / 立绘 (@char) | ✅ |
-| 魔女裁判 mod 面板 (@choice handler:"<modId>") | ❌ 未实现 (见 GOALS.md) |
+| 审判 mod (@choice handler:"<modId>"，自定义论破等) | ❌ 未实现 |
 
 架构、工作原理、与 Windows 版差异、mod 格式兼容性详见 [ARCHITECTURE.md](ARCHITECTURE.md)。
