@@ -10,7 +10,7 @@ mod 剧本 / 本地化 / voice / audio 已通过 provider 管线加载。
 ~/Library/Application Support/Steam/steamapps/common/manosaba_game/
 ├── manosaba.app/                    ← 游戏本体 (Frida 注入目标)
 ├── run_mod.sh                       ← 启动脚本 (从仓库部署到这里)
-├── manosabamod_v3.js                ← 主 Frida 脚本 (从仓库部署到这里)
+├── dist/manosabamod.js              ← 主 Frida 脚本 (frida-compile 构建产物, 部署到这里)
 └── ManosabaMod/                     ← mod 目录 (首次运行 run_mod.sh 自动创建)
     ├── 1919180/                     ← 你的 mod (含 info.json + Scripts/...)
     └── TaffyModLoader/Scripts/      ← 启动时自动生成 (菜单剧本)
@@ -21,8 +21,15 @@ ManosabaMod/
 └── macos-frida/
     ├── README.md                    ← 使用说明 (本文件)
     ├── ARCHITECTURE.md              ← 架构 / 原理 / 与 Windows 版区别 / mod 兼容性
-    ├── manosabamod_v3.js            ← 主 Frida 脚本
-    └── run_mod.sh                   ← 启动脚本
+    ├── GOALS.md                     ← 目标 / Windows vs macOS 差距文档 (活的)
+    ├── src/                         ← 源码 (多文件 ES modules, 唯一源码源)
+    │   ├── entry.js                 ← 初始化编排 (API 绑定 / hook 挂载)
+    │   ├── utils.js / io.js         ← 基础工具 + libc 文件 I/O
+    │   ├── menu.js / providers.js / movie.js
+    │   └── witchbook/               ← WitchBook (state/data/textures/pages/session/characters/index)
+    ├── package.json                 ← npm: frida-compile (devDependency)
+    ├── dist/manosabamod.js          ← 构建产物 (frida-compile src/entry.js -o dist/manosabamod.js)
+    └── run_mod.sh                   ← 启动脚本 (自动构建 + 注入)
 ```
 
 ## 使用方法
@@ -38,12 +45,16 @@ ManosabaMod/
 # 1. 克隆仓库 (任何位置)
 git clone https://github.com/Richie-liu111/ManosabaMod.git
 
-# 2. 部署脚本到游戏目录 
+# 2. 首次: 安装构建工具 (frida-compile)
+cd ManosabaMod/macos-frida && npm install
+
+# 3. 部署脚本到游戏目录 (构建产物 + 启动脚本)
+mkdir -p "$HOME/Library/Application Support/Steam/steamapps/common/manosaba_game/dist"
 cp ManosabaMod/macos-frida/run_mod.sh \
-   ManosabaMod/macos-frida/manosabamod_v3.js \
+   ManosabaMod/macos-frida/dist/manosabamod.js \
    "$HOME/Library/Application Support/Steam/steamapps/common/manosaba_game/"
 
-# 3. 启动
+# 4. 启动
 cd "$HOME/Library/Application Support/Steam/steamapps/common/manosaba_game"
 ./run_mod.sh
 ```
@@ -53,8 +64,15 @@ cd "$HOME/Library/Application Support/Steam/steamapps/common/manosaba_game"
 
 `run_mod.sh` 自动完成:
 1. 定位游戏目录(见下方顺序)
-2. 扫描 `ManosabaMod/*/info.json` → 生成 mod 选择菜单
-3. 启动游戏并注入 `manosabamod_v3.js`
+2. 若在仓库里运行且有 `src/`,先用 frida-compile 构建 `dist/manosabamod.js`
+3. 扫描 `ManosabaMod/*/info.json` → 生成 mod 选择菜单 (含翻页, 每页 4 个)
+4. 启动游戏并注入 `dist/manosabamod.js`
+
+**日志分层**: 机制日志默认关闭 (运行噪音小), `MOD_DEBUG=1 ./run_mod.sh` 开启;
+游戏侧 `Unity.LogError` 始终全量输出 (最高优先级排查信号)。
+
+**开发**: 改 `src/` 后不需要手动构建 — `run_mod.sh` 在仓库里运行时自动重新构建。
+亦可手动: `npx frida-compile src/entry.js -o dist/manosabamod.js -S`
 
 ### 游戏目录定位顺序
 
@@ -74,7 +92,7 @@ GAME=/path/to/manosaba ./run_mod.sh # 游戏不在 Steam 默认位置时
 
 | 功能 | 状态 |
 |------|------|
-| mod 菜单 | ✅ |
+| mod 菜单 (含翻页, 每页 4 个) | ✅ |
 | mod 剧本 (.nani) | ✅ |
 | 本地化 (.txt) / voice / audio (.wav) | ✅ |
 | Movie (.mp4/.webm/.ogv) | ✅ |

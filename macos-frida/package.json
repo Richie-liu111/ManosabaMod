@@ -1,0 +1,12 @@
+{
+  "name": "manosabamod-macos-frida",
+  "version": "3.1.0",
+  "private": true,
+  "description": "manosaba macOS MOD loader (Frida) — 多文件 ES modules 工程, frida-compile 打包单 bundle",
+  "scripts": {
+    "build": "frida-compile src/entry.js -o dist/manosabamod.js"
+  },
+  "devDependencies": {
+    "frida-compile": "^17.0.0"
+  }
+}

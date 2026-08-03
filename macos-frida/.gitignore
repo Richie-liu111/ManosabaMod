@@ -1,0 +1,4 @@
+# 依赖与构建缓存
+node_modules/
+# macOS
+.DS_Store

@@ -31,11 +31,25 @@ if [ -z "$GAME" ] && [ -z "$GAME_DIR" ]; then
 fi
 
 GAME="${GAME:-$GAME_DIR/manosaba.app/Contents/MacOS/manosaba}"
-SCRIPT="$PWD/manosabamod_v3.js"
+SCRIPT="$PWD/dist/manosabamod.js"
 MOD_ROOT="${1:-$GAME_DIR/ManosabaMod}"
 
 if [ ! -f "$GAME" ]; then echo "错误: 找不到游戏 $GAME"; exit 1; fi
-if [ ! -f "$SCRIPT" ]; then echo "错误: 找不到脚本 $SCRIPT"; exit 1; fi
+
+# 构建: src/ 是唯一源码源, frida-compile 打包成 dist/manosabamod.js (多文件 → 单 bundle)
+# 日志分层: 机制日志默认关, MOD_DEBUG=1 开启; 游戏侧 Unity.LogError 始终全量
+if [ -d "$PWD/src" ]; then
+    echo ">>> 构建 dist/manosabamod.js ..."
+    if ! (command -v npx >/dev/null && npx --no-install frida-compile src/entry.js -o dist/manosabamod.js -S); then
+        if [ -f "$PWD/node_modules/.bin/frida-compile" ]; then
+            "$PWD/node_modules/.bin/frida-compile" src/entry.js -o dist/manosabamod.js -S || { echo "错误: frida-compile 构建失败"; exit 1; }
+        else
+            echo "错误: 找不到 frida-compile (npm install 未执行?)"
+            exit 1
+        fi
+    fi
+fi
+if [ ! -f "$SCRIPT" ]; then echo "错误: 找不到脚本 $SCRIPT (构建失败?)"; exit 1; fi
 
 PY=/opt/anaconda3/bin/python3
 if ! $PY -c "import frida" 2>/dev/null; then
@@ -50,13 +64,14 @@ echo ">>> 游戏: $GAME"
 echo ">>> 脚本: $SCRIPT"
 
 # 导出环境变量给 Python (heredoc 用带引号形式, 避免转义被 shell 处理)
-export GAME SCRIPT MOD_ROOT
+export GAME SCRIPT MOD_ROOT MOD_DEBUG
 $PY << 'ENDPY'
 import frida, time, json, os
 
 GAME = os.environ['GAME']
 SCRIPT = os.environ['SCRIPT']
 MOD_ROOT = os.environ['MOD_ROOT']
+MOD_DEBUG = os.environ.get('MOD_DEBUG') == '1'
 
 JS_BASE = open(SCRIPT, encoding='utf-8').read()
 
@@ -113,18 +128,33 @@ def setline(var, val):
     return '    @set "%s=\\"%s\\""\n' % (var, val)
 
 def build_menu_text(mods):
+    # 翻页 (镜像 Windows AddModStartMenu): 每页 perPage 条, # ChoiceList_<页> 标签
+    # 此文件仅作参考 (菜单实际由 bundle 内 Script.FromText 构造, 与 src/menu.js buildMenuText 保持一致)
     t = "@ProcessInput false\n@trialMode false\n@HideUI AutoToggle,WitchBookButtonUI AllowToggle:false time:0\n" + \
         "@ShowUI ControlPanel time:0\n@back SubId:\"Overlay\" SolidColor tint:\"#000000\" time:0 Lazy:false\n"
-    t += "@choice \"原版游戏剧情\" Lock:false play:true show:true\n"
-    t += setline('nextScenario', 'Act01_Chapter01/Act01_Chapter01_Adv01')
-    t += setline('modKey', '__vanilla__')
-    t += "    @goto .GoToModScript\n"
+    per_page = 4
+    page, idx = 0, 0
+    t += "# ChoiceList_%d\n" % page
+
+    def add_choice(nm, body):
+        return '@choice "%s" Lock:false play:true show:true\n%s    @goto .GoToModScript\n' % (nm, body)
+
+    t += add_choice('原版游戏剧情', setline('nextScenario', 'Act01_Chapter01/Act01_Chapter01_Adv01') + setline('modKey', '__vanilla__'))
+    idx += 1
     for i, m in enumerate(mods):
         nm = (m.get('Name') or 'Mod%d' % i).replace('"', '\\"')
-        t += '@choice "%s" Lock:false play:true show:true\n' % nm
-        t += setline('nextScenario', m.get('Enter') or 'Act01_Chapter01/Act01_Chapter01_Adv01')
-        t += setline('modKey', m['key'])
-        t += "    @goto .GoToModScript\n"
+        if idx >= per_page:
+            if page > 0:
+                t += '@choice "上一页" Lock:false play:true show:true\n    @goto .ChoiceList_%d\n' % (page - 1)
+            t += '@choice "下一页" Lock:false play:true show:true\n    @goto .ChoiceList_%d\n' % (page + 1)
+            t += '@Stop\n'
+            page += 1
+            t += "# ChoiceList_%d\n" % page
+            idx = 0
+        t += add_choice(nm, setline('nextScenario', m.get('Enter') or 'Act01_Chapter01/Act01_Chapter01_Adv01') + setline('modKey', m['key']))
+        idx += 1
+    if page > 0:
+        t += '@choice "上一页" Lock:false play:true show:true\n    @goto .ChoiceList_%d\n' % (page - 1)
     t += "@Stop\n\n# GoToModScript\n" + \
          "@ProcessInput true set:Continue.true,Pause.true,Skip.true,ToggleSkip.true,AutoPlay.true,ToggleUI.true,ShowBacklog.true,Rollback.true\n" + \
          "@ClearBacklog\n@goto {nextScenario}\n"
@@ -137,7 +167,8 @@ with open(menu_path, 'w', encoding='utf-8') as f:
     f.write(build_menu_text(mods))
 print(f'>>> 已写入菜单文件: {menu_path}')
 
-FULL_JS = f'var modList={mods_str};var MOD_ROOT="{MOD_ROOT}";var movieMap={movie_map_json};"use strict";\n' + JS_BASE
+MOD_DEBUG_JS = 'var MOD_DEBUG=true;' if MOD_DEBUG else ''
+FULL_JS = f'var modList={mods_str};var MOD_ROOT="{MOD_ROOT}";var movieMap={movie_map_json};{MOD_DEBUG_JS}"use strict";\n' + JS_BASE
 
 print(f'>>> 发现 {len(mods)} 个 Mod')
 for m in mods:
