@@ -207,5 +207,5 @@ ManosabaMod/<ModName>/
 | 背景 (Backgrounds/MainBackground|Stills|Tricks) | ✅ (JpgOrPngToTextureConverter provider) |
 | 立绘 (@char Characters/SimpleCharacters) | ✅ (ActorMetadata 注册 + providersMap) |
 | Movie (.mp4/.webm/.ogv) | ✅ (URL 流式) |
-| 魔女裁判 mod 面板 (@choice handler:"<modId>") | ❌ 未实现 (见 GOALS.md) |
-| CutIn (审判演出) | ❌ 未实现 |
+| @choice handler:"<modId>" | ❌ 未实现 |
+| CutIn (论破) | ❌ 未实现 |
