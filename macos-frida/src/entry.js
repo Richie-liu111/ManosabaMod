@@ -11,7 +11,7 @@
 // 日志分层: 机制日志走 dbg (MOD_DEBUG, 默认关); 游戏侧 Unity.LogError 全量 dump (dumpObj 原样 console.log)
 'use strict';
 
-import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles } from "./utils.js";
+import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, wblog } from "./utils.js";
 import { setupMovieHooks } from "./movie.js";
 import { addModLoader } from "./providers.js";
 import { hookStartGame, registerMenu, registerMenuText } from "./menu.js";
@@ -81,7 +81,7 @@ var shouldLogLoadAndPlay = true;
             else if (nm.indexOf("GigaCreation") >= 0) gigaImg = img;
         }
         setImageHandles(nvImg, csImg, gigaImg);
-        dbg("[v3] nv=" + nvImg + " cs=" + csImg + " giga=" + gigaImg + " images=" + cnt);
+        wblog("[v3] nv=" + nvImg + " cs=" + csImg + " giga=" + gigaImg + " images=" + cnt);
 
         // 动态解析 GotoModified (GigaCreation.NaninovelExtender.Common)
         var gmCls = findClassAcrossImages("GigaCreation.NaninovelExtender.Common", "GotoModified");
@@ -418,7 +418,7 @@ var shouldLogLoadAndPlay = true;
                             var root = (typeof MOD_ROOT !== "undefined") ? MOD_ROOT : "";
                             if (typeof modList !== "undefined" && modList && modList.length) {
                                 for (var mi = 0; mi < modList.length; mi++) {
-                                    dbg("[v3] ==== 为 mod '" + modList[mi].key + "' 注入 provider ====");
+                                    wblog("[v3] ==== 为 mod '" + modList[mi].key + "' 注入 provider ====");
                                     addModLoader(root, modList[mi].key);
                                 }
                             }

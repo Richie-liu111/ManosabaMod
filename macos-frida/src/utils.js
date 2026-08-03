@@ -129,16 +129,20 @@ export function populateConvertersDict(lrp, convClassName, targetClsFn, tag) {
 
 // ============ 服务查找 ============
 export function findSvc(name) {
-    var el = A.cfn(nv, Memory.allocUtf8String("Naninovel"), Memory.allocUtf8String("Engine"));
-    var f = A.gf(el, Memory.allocUtf8String("services"));
-    var l = A.sdf(el).add(A.fo(f)).readPointer();
-    var its = l.add(0x10).readPointer(); var sz = l.add(0x18).readS32();
-    for (var i = 0; i < sz; i++) {
-        var ep = its.add(0x20 + i * 8).readPointer(); if (ep.isNull()) continue;
-        var cn = A.cgn(A.ogc(ep)).readCString();
-        if (cn === name) return ep;
-    }
-    return null;
+    try {
+        var el = A.cfn(nv, Memory.allocUtf8String("Naninovel"), Memory.allocUtf8String("Engine"));
+        if (!el || el.isNull()) { wblog("[v3] findSvc('" + name + "') FAIL: Engine class NOT FOUND (nv=" + nv + ", allImgs=" + allImgs.length + ")"); return null; }
+        var f = A.gf(el, Memory.allocUtf8String("services"));
+        var l = A.sdf(el).add(A.fo(f)).readPointer();
+        var its = l.add(0x10).readPointer(); var sz = l.add(0x18).readS32();
+        for (var i = 0; i < sz; i++) {
+            var ep = its.add(0x20 + i * 8).readPointer(); if (ep.isNull()) continue;
+            var cn = A.cgn(A.ogc(ep)).readCString();
+            if (cn === name) return ep;
+        }
+        wblog("[v3] findSvc('" + name + "') NOT FOUND in " + sz + " services (nv=" + nv + ")");
+        return null;
+    } catch (e) { wblog("[v3] findSvc('" + name + "') err: " + e + " (nv=" + nv + ", allImgs=" + allImgs.length + ")"); return null; }
 }
 
 // 找 System 类型 (mscorlib 等)
