@@ -25,7 +25,10 @@ manosaba.exe
 
 ## 二、macOS 版 (Frida) 怎么工作
 
-没有 BepInEx / .NET / Harmony,直接用 **Frida 在 IL2CPP 运行时层面**做同样的事:
+没有 BepInEx / .NET / Harmony,直接用 **Frida 在 IL2CPP 运行时层面**做同样的事。
+源码是 `src/` 多文件 ES modules(便于维护),由 **frida-compile 打包成单个
+`dist/manosabamod.js` bundle** 注入(📦 asset 格式,`run_mod.sh` 用 `Script.evaluate`
+把 modList/MOD_ROOT/movieMap 作为 fragment 注入全局)。
 
 ```
 manosaba.app (GameAssembly.dylib, IL2CPP)
@@ -204,3 +207,5 @@ ManosabaMod/<ModName>/
 | 背景 (Backgrounds/MainBackground|Stills|Tricks) | ✅ (JpgOrPngToTextureConverter provider) |
 | 立绘 (@char Characters/SimpleCharacters) | ✅ (ActorMetadata 注册 + providersMap) |
 | Movie (.mp4/.webm/.ogv) | ✅ (URL 流式) |
+| 魔女裁判 mod 面板 (@choice handler:"<modId>") | ❌ 未实现 (见 GOALS.md) |
+| CutIn (审判演出) | ❌ 未实现 |

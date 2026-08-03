@@ -27,12 +27,18 @@ ManosabaMod/
     │   ├── utils.js / io.js         ← 基础工具 + libc 文件 I/O
     │   ├── menu.js / providers.js / movie.js
     │   └── witchbook/               ← WitchBook (state/data/textures/pages/session/characters/index)
-    ├── package.json                 ← npm: frida-compile (devDependency)
-    ├── dist/manosabamod.js          ← 构建产物 (frida-compile src/entry.js -o dist/manosabamod.js)
-    └── run_mod.sh                   ← 启动脚本 (自动构建 + 注入)
+    ├── package.json                 ← npm: frida-compile (devDependency, 仅改源码需要)
+    ├── dist/manosabamod.js          ← 打包产物 (单 bundle, 仓库随版本提交, 安装直接用)
+    └── run_mod.sh                   ← 启动脚本 (在仓库里运行会自动构建)
 ```
 
 ## 使用方法
+
+### 打包版 vs 源码版
+
+- **打包版（普通安装）**：只需 `run_mod.sh` + `dist/manosabamod.js` 两个文件（仓库直接提供，
+  无需 Node.js/npm）。mod 目录放在游戏目录 `ManosabaMod/` 下即可。
+- **源码版（开发）**：改 `src/` 后需要 `npm install` + 重新构建（见下文"开发"）。
 
 ### 前置条件
 - macOS **Apple Silicon** (arm64)
@@ -45,17 +51,14 @@ ManosabaMod/
 # 1. 克隆仓库 (任何位置)
 git clone https://github.com/Richie-liu111/ManosabaMod.git
 
-# 2. 首次: 安装构建工具 (frida-compile)
-cd ManosabaMod/macos-frida && npm install
+# 2. 部署到游戏目录 (打包版: run_mod.sh 放游戏根, bundle 放 dist/ 子目录 — run_mod.sh 按此定位)
+GAME="$HOME/Library/Application Support/Steam/steamapps/common/manosaba_game"
+cp ManosabaMod/macos-frida/run_mod.sh "$GAME/"
+mkdir -p "$GAME/dist"
+cp ManosabaMod/macos-frida/dist/manosabamod.js "$GAME/dist/"
 
-# 3. 部署脚本到游戏目录 (构建产物 + 启动脚本)
-mkdir -p "$HOME/Library/Application Support/Steam/steamapps/common/manosaba_game/dist"
-cp ManosabaMod/macos-frida/run_mod.sh \
-   ManosabaMod/macos-frida/dist/manosabamod.js \
-   "$HOME/Library/Application Support/Steam/steamapps/common/manosaba_game/"
-
-# 4. 启动
-cd "$HOME/Library/Application Support/Steam/steamapps/common/manosaba_game"
+# 3. 启动
+cd "$GAME"
 ./run_mod.sh
 ```
 
@@ -64,15 +67,16 @@ cd "$HOME/Library/Application Support/Steam/steamapps/common/manosaba_game"
 
 `run_mod.sh` 自动完成:
 1. 定位游戏目录(见下方顺序)
-2. 若在仓库里运行且有 `src/`,先用 frida-compile 构建 `dist/manosabamod.js`
+2. 若在仓库里运行且有 `src/`,先用 frida-compile 构建 `dist/manosabamod.js`(源码版)
 3. 扫描 `ManosabaMod/*/info.json` → 生成 mod 选择菜单 (含翻页, 每页 4 个)
 4. 启动游戏并注入 `dist/manosabamod.js`
 
 **日志分层**: 机制日志默认关闭 (运行噪音小), `MOD_DEBUG=1 ./run_mod.sh` 开启;
 游戏侧 `Unity.LogError` 始终全量输出 (最高优先级排查信号)。
 
-**开发**: 改 `src/` 后不需要手动构建 — `run_mod.sh` 在仓库里运行时自动重新构建。
-亦可手动: `npx frida-compile src/entry.js -o dist/manosabamod.js -S`
+**开发 (源码版)**: 改 `src/` 后不需要手动构建 — `run_mod.sh` 在仓库里运行时自动重新构建。
+亦可手动: `cd ManosabaMod/macos-frida && npx frida-compile src/entry.js -o dist/manosabamod.js -S`
+(首次需要 `npm install` 安装 frida-compile)。重新构建后记得重新部署到游戏目录。
 
 ### 游戏目录定位顺序
 
@@ -99,5 +103,6 @@ GAME=/path/to/manosaba ./run_mod.sh # 游戏不在 Steam 默认位置时
 | WitchBook 全 4 分类 (线索/人物/规定/记录) + 新角色 | ✅ |
 | WitchBook 会话隔离 (整页重建, override 可逆) | ✅ |
 | 背景 (@back) / 立绘 (@char) | ✅ |
+| 魔女裁判 mod 面板 (@choice handler:"<modId>") | ❌ 未实现 (见 GOALS.md) |
 
 架构、工作原理、与 Windows 版差异、mod 格式兼容性详见 [ARCHITECTURE.md](ARCHITECTURE.md)。
