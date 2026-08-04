@@ -31,8 +31,7 @@
    - 场景：mod 剧本用 `@choice handler:"<modId>"` 指定 mod 的立绘。
 2. **CutIn** — ❌ 未实现（参考：Windows 版 objectionCutInSpawnPath 改写 + sprite 替换思路）
 3. **ModChapterDisplay（存档章节名）** — ❌ 未实现（镜像参考：Windows ModChapterDisplay.cs，GameStateSlotExtended.SetNonEmptyState）
-4. **游戏原生剧本验证** — ⚠️ 开放问题：游戏原生剧本（含原版魔女裁判 `@choice handler:"Trial"`）从未在 macOS+Frida 下测试（历史只测过 mod 流程）。原版审判是否正常未知。
-5. **菜单翻页** — ✅ 2026-08-03 已回迁（perPage=4，`ChoiceList_<页>` 方案，镜像 Windows AddModStartMenu）并通过回归验证（TestWitchBook 位于第 3 页，翻页进入正常）。
+4. **菜单翻页** — ✅ 2026-08-03 已回迁（perPage=4，`ChoiceList_<页>` 方案，镜像 Windows AddModStartMenu）并通过回归验证（TestWitchBook 位于第 3 页，翻页进入正常）。
 
 ## 参考
 
