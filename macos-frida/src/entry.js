@@ -25,6 +25,10 @@ try { var dl = Module.findGlobalExportByName("dlopen"); if (dl) { var h = false;
 
 var E = {}, dom = null;
 var shouldLogLoadAndPlay = true;
+// 诊断 hook (goto 链路/加载链/SetException 栈回溯) 仅在 MOD_DEBUG=1 时装, 默认不装
+// 教训: SetException hook 对每个 UniTask 异常都做 Thread.backtrace, 审判加载的异常风暴里
+//       给引擎的取消/重入竞态加延迟, 与偶发崩溃 (MethodAccessException 未被接住) 相关
+var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
 
 // ============ 初始化 ============
 (function () {
@@ -94,8 +98,8 @@ var shouldLogLoadAndPlay = true;
         if (gmCls.isNull()) { dbg("[v3] !! GotoModified 完全找不到, 跳过 goto 相关逻辑"); }
         else { setGotoModifiedCls(gmCls); dbg("[v3] GotoModified class = " + gmCls); }
 
-        // 动态解析 LoadAndPlay 并 hook (诊断用)
-        if (gmCls && !gmCls.isNull()) {
+        // 动态解析 LoadAndPlay 并 hook (诊断用, 仅 MOD_DEBUG)
+        if (DIAG && gmCls && !gmCls.isNull()) {
             try {
                 var lapMi = A.cgm(gmCls, Memory.allocUtf8String("LoadAndPlay"), 2);
                 if (lapMi && !lapMi.isNull()) {
@@ -116,8 +120,8 @@ var shouldLogLoadAndPlay = true;
             } catch (e) { dbg("[v3] LoadAndPlay hook err: " + e); }
         }
 
-        // ===== 诊断: 完整 goto 链路 hook =====
-        try {
+        // ===== 诊断: 完整 goto 链路 hook (仅 MOD_DEBUG, 默认不装) =====
+        if (DIAG) try {
             // TGSP (Goto.TryGetScriptPathAndLabel) — 解析出的实际路径
             var gotoCls = A.cfn(nv, Memory.allocUtf8String("Naninovel.Commands"), Memory.allocUtf8String("Goto"));
             if (gotoCls && !gotoCls.isNull()) {
@@ -338,24 +342,27 @@ var shouldLogLoadAndPlay = true;
                 }
                 console.log("[v3] " + tag + " hex: " + hex);
                 // 从 +0x14 走 UTF-16 到 null, 取完整字符串 (忽略可疑长度字段)
-                try {
-                    var full = "";
-                    for (var fi = 0; fi < 300; fi++) {
-                        var c = obj.add(0x14 + fi * 2).readU16();
+                // 长读 2000: 崩溃同款异常的完整 C# 栈 (MethodAccessException 调用方) 会被截断
+                // 代理项跳过: 孤立 surrogate 会让 python print 抛 UnicodeEncodeError 打断日志流
+                function collectUtf16(baseOff, max) {
+                    var s = "";
+                    for (var fi = 0; fi < max; fi++) {
+                        var c = obj.add(baseOff + fi * 2).readU16();
                         if (c === 0) break;
-                        full += String.fromCharCode(c);
+                        if (c >= 0xD800 && c <= 0xDFFF) continue;   // 孤立代理项直接跳过
+                        s += String.fromCharCode(c);
                     }
+                    return s;
+                }
+                try {
+                    var full = collectUtf16(0x14, 2000);
                     if (full) console.log("[v3] " + tag + " FULL: " + full);
                 } catch (e) {}
                 // 从多个起点走 UTF-16 到 null
                 [0x08, 0x10, 0x14, 0x18, 0x0C].forEach(function (so) {
                     try {
-                        var s = "";
-                        for (var j = 0; j < 200; j++) {
-                            var c = obj.add(so + j * 2).readU16();
-                            if (c === 0) { console.log("[v3] " + tag + " +0x" + so.toString(16) + " utf16='" + s + "'"); return; }
-                            s += String.fromCharCode(c);
-                        }
+                        var s = collectUtf16(so, 2000);
+                        if (s) console.log("[v3] " + tag + " +0x" + so.toString(16) + " utf16='" + s + "'");
                     } catch (e) {}
                 });
             } catch (e3) { console.log("[v3] " + tag + " dump err: " + e3); }

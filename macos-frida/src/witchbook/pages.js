@@ -1,5 +1,5 @@
 // ============ WitchBook 页面注入域: 注入 Page._loadedDataItemMap + _itemIds + _state + 本地化字典预填 ============
-import { A, fieldOffset, findAllObjectOfType, getGenericArgClass, getSystemClass, invokeOk, listContainsId, makeS, readStr, wblog } from "../utils.js";
+import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, getGenericArgClass, getSystemClass, invokeOk, listContainsId, makeS, readStr, wblog } from "../utils.js";
 import { wbCls, wbData, wbOverrides } from "./state.js";
 import { currentModIds, injectVersions, localeValue, resolveLocale, unionLocaleKeys } from "./data.js";
 import { clearModItemsFromPage, isVanillaId } from "./session.js";
@@ -39,6 +39,7 @@ export function injectPage(cat) {
                 if (added > 0) wblog(cat.name + "Page._loadedDataItemMap 注入 " + added + " 条 (total=" + mapList.add(0x18).readS32() + ")");
             }
         }
+        ensureItemIdsString(page, pageCls);   // macOS: Graphic[]/Canvas[] → String[] (游戏 Contains 才不炸)
         appendItemIds(page, cat);
         applyStates(page, cat);
         return true;
@@ -48,6 +49,8 @@ export function injectPage(cat) {
 export function appendItemIds(page, cat) {
     try {
         var pageCls = wbCls.pages[cat.name];
+        // macOS 守卫: _itemIds 运行时可能是 Graphic[]/Canvas[] (泛型共享实例化差异), 非 String[] 绝不写入
+        if (!fieldIsStringArray(page, pageCls, "_itemIds")) { wblog(cat.name + "Page._itemIds 非 String[] (macOS 泛型共享), 跳过追加"); return; }
         var idsField = fieldOffset(pageCls, "_itemIds", 0x98);
         var old = page.add(idsField).readPointer();
         var newIds = [];

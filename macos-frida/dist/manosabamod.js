@@ -1,15 +1,15 @@
 📦
-28984 /src/entry.js
+30662 /src/entry.js
 2556 /src/io.js
 15039 /src/menu.js
 5211 /src/movie.js
 7940 /src/providers.js
-15018 /src/utils.js
+19588 /src/utils.js
 19304 /src/witchbook/characters.js
 13412 /src/witchbook/data.js
-10498 /src/witchbook/index.js
-10842 /src/witchbook/pages.js
-28531 /src/witchbook/session.js
+14454 /src/witchbook/index.js
+11313 /src/witchbook/pages.js
+28893 /src/witchbook/session.js
 1742 /src/witchbook/state.js
 6336 /src/witchbook/textures.js
 ✄
@@ -35,6 +35,10 @@ try {
 catch (e) { }
 var E = {}, dom = null;
 var shouldLogLoadAndPlay = true;
+// 诊断 hook (goto 链路/加载链/SetException 栈回溯) 仅在 MOD_DEBUG=1 时装, 默认不装
+// 教训: SetException hook 对每个 UniTask 异常都做 Thread.backtrace, 审判加载的异常风暴里
+//       给引擎的取消/重入竞态加延迟, 与偶发崩溃 (MethodAccessException 未被接住) 相关
+var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
 // ============ 初始化 ============
 (function () {
     var attempts = 0;
@@ -114,8 +118,8 @@ var shouldLogLoadAndPlay = true;
             setGotoModifiedCls(gmCls);
             dbg("[v3] GotoModified class = " + gmCls);
         }
-        // 动态解析 LoadAndPlay 并 hook (诊断用)
-        if (gmCls && !gmCls.isNull()) {
+        // 动态解析 LoadAndPlay 并 hook (诊断用, 仅 MOD_DEBUG)
+        if (DIAG && gmCls && !gmCls.isNull()) {
             try {
                 var lapMi = A.cgm(gmCls, Memory.allocUtf8String("LoadAndPlay"), 2);
                 if (lapMi && !lapMi.isNull()) {
@@ -140,255 +144,256 @@ var shouldLogLoadAndPlay = true;
                 dbg("[v3] LoadAndPlay hook err: " + e);
             }
         }
-        // ===== 诊断: 完整 goto 链路 hook =====
-        try {
-            // TGSP (Goto.TryGetScriptPathAndLabel) — 解析出的实际路径
-            var gotoCls = A.cfn(nv, Memory.allocUtf8String("Naninovel.Commands"), Memory.allocUtf8String("Goto"));
-            if (gotoCls && !gotoCls.isNull()) {
-                var tgspMi = A.cgm(gotoCls, Memory.allocUtf8String("TryGetScriptPathAndLabel"), 2);
-                if (tgspMi && !tgspMi.isNull()) {
-                    Interceptor.attach(tgspMi.readPointer(), {
-                        onEnter: function (a) { this.p1 = a[1]; this.p2 = a[2]; },
-                        onLeave: function (ret) {
-                            var p = this.p1 ? readStr(this.p1.readPointer()) : null;
-                            var l = this.p2 ? readStr(this.p2.readPointer()) : null;
-                            dbg("[v3] TGSP -> path='" + p + "' label='" + (l || "") + "' ret=" + ret);
-                        }
-                    });
-                    dbg("[v3] TGSP hooked");
+        // ===== 诊断: 完整 goto 链路 hook (仅 MOD_DEBUG, 默认不装) =====
+        if (DIAG)
+            try {
+                // TGSP (Goto.TryGetScriptPathAndLabel) — 解析出的实际路径
+                var gotoCls = A.cfn(nv, Memory.allocUtf8String("Naninovel.Commands"), Memory.allocUtf8String("Goto"));
+                if (gotoCls && !gotoCls.isNull()) {
+                    var tgspMi = A.cgm(gotoCls, Memory.allocUtf8String("TryGetScriptPathAndLabel"), 2);
+                    if (tgspMi && !tgspMi.isNull()) {
+                        Interceptor.attach(tgspMi.readPointer(), {
+                            onEnter: function (a) { this.p1 = a[1]; this.p2 = a[2]; },
+                            onLeave: function (ret) {
+                                var p = this.p1 ? readStr(this.p1.readPointer()) : null;
+                                var l = this.p2 ? readStr(this.p2.readPointer()) : null;
+                                dbg("[v3] TGSP -> path='" + p + "' label='" + (l || "") + "' ret=" + ret);
+                            }
+                        });
+                        dbg("[v3] TGSP hooked");
+                    }
                 }
-            }
-            // ScriptPlayerExtensions.LoadAndPlay (标准版, 静态)
-            var speCls = A.cfn(nv, Memory.allocUtf8String("Naninovel"), Memory.allocUtf8String("ScriptPlayerExtensions"));
-            if (speCls && !speCls.isNull()) {
-                var spleMi = A.cgm(speCls, Memory.allocUtf8String("LoadAndPlay"), 3);
-                if (spleMi && !spleMi.isNull()) {
-                    Interceptor.attach(spleMi.readPointer(), { onEnter: function (a) {
-                            dbg("[v3] SPE.LoadAndPlay path='" + readStr(a[1]) + "'");
-                        } });
-                    dbg("[v3] SPE.LoadAndPlay hooked");
+                // ScriptPlayerExtensions.LoadAndPlay (标准版, 静态)
+                var speCls = A.cfn(nv, Memory.allocUtf8String("Naninovel"), Memory.allocUtf8String("ScriptPlayerExtensions"));
+                if (speCls && !speCls.isNull()) {
+                    var spleMi = A.cgm(speCls, Memory.allocUtf8String("LoadAndPlay"), 3);
+                    if (spleMi && !spleMi.isNull()) {
+                        Interceptor.attach(spleMi.readPointer(), { onEnter: function (a) {
+                                dbg("[v3] SPE.LoadAndPlay path='" + readStr(a[1]) + "'");
+                            } });
+                        dbg("[v3] SPE.LoadAndPlay hooked");
+                    }
                 }
-            }
-            // GotoModified.NavigateOtherScript + Execute + 局部函数
-            if (gmCls && !gmCls.isNull()) {
-                var navMi = A.cgm(gmCls, Memory.allocUtf8String("NavigateOtherScript"), 2);
-                if (navMi && !navMi.isNull()) {
-                    var navPtr = navMi.readPointer();
-                    dbg("[v3] NavigateOtherScript addr=" + navPtr);
-                    Interceptor.attach(navPtr, { onEnter: function (a) {
-                            dbg("[v3] NavigateOtherScript path='" + readStr(a[1]) + "' label='" + (readStr(a[2]) || "") + "'");
-                        } });
-                    dbg("[v3] NavigateOtherScript hooked");
-                }
-                var execMi = A.cgm(gmCls, Memory.allocUtf8String("Execute"), 1);
-                if (execMi && !execMi.isNull()) {
-                    dbg("[v3] Execute addr=" + execMi.readPointer());
-                    Interceptor.attach(execMi.readPointer(), { onEnter: function () {
-                            dbg("[v3] GotoModified.Execute 触发");
-                        } });
-                    dbg("[v3] Execute hooked");
-                }
-                // 局部函数 (真正干活的?)
-                var lfMi = A.cgm(gmCls, Memory.allocUtf8String("<NavigateOtherScript>g__LoadAndPlay|0"), 0);
-                if (lfMi && !lfMi.isNull()) {
-                    dbg("[v3] g__LoadAndPlay|0 addr=" + lfMi.readPointer());
-                    Interceptor.attach(lfMi.readPointer(), { onEnter: function () {
-                            dbg("[v3] >>> 局部函数 g__LoadAndPlay|0 触发");
-                        } });
-                    dbg("[v3] g__LoadAndPlay|0 hooked");
-                }
-                else {
-                    dbg("[v3] 局部函数 g__LoadAndPlay|0 未找到");
-                }
-                // 嵌套状态机 <NavigateOtherScript>d__2 的 MoveNext (API: 每次返回一个指针, iter 推进)
-                try {
-                    var iter = Memory.alloc(8);
-                    iter.writePointer(ptr(0));
-                    var foundSm = false;
-                    for (;;) {
-                        var p = A.cgnt(gmCls, iter);
-                        if (!p || p.isNull())
-                            break;
-                        var nc = p.readPointer();
-                        if (!nc || nc.isNull())
-                            break;
-                        var nn = A.cgn(nc).readCString();
-                        dbg("[v3] 嵌套类型: " + nn);
-                        if (nn && (nn.indexOf("NavigateOtherScript") >= 0 || nn.indexOf("d__2") >= 0)) {
-                            var mn2 = A.cgm(nc, Memory.allocUtf8String("MoveNext"), 0);
-                            if (mn2 && !mn2.isNull()) {
-                                var mnPtr = mn2.readPointer();
-                                dbg("[v3] 状态机 " + nn + " MoveNext addr=" + mnPtr);
-                                Interceptor.attach(mnPtr, {
-                                    onEnter: function () { dbg("[v3] >>> NavigateOtherScript.MoveNext 触发"); }
-                                });
-                                dbg("[v3] MoveNext hooked");
-                                foundSm = true;
+                // GotoModified.NavigateOtherScript + Execute + 局部函数
+                if (gmCls && !gmCls.isNull()) {
+                    var navMi = A.cgm(gmCls, Memory.allocUtf8String("NavigateOtherScript"), 2);
+                    if (navMi && !navMi.isNull()) {
+                        var navPtr = navMi.readPointer();
+                        dbg("[v3] NavigateOtherScript addr=" + navPtr);
+                        Interceptor.attach(navPtr, { onEnter: function (a) {
+                                dbg("[v3] NavigateOtherScript path='" + readStr(a[1]) + "' label='" + (readStr(a[2]) || "") + "'");
+                            } });
+                        dbg("[v3] NavigateOtherScript hooked");
+                    }
+                    var execMi = A.cgm(gmCls, Memory.allocUtf8String("Execute"), 1);
+                    if (execMi && !execMi.isNull()) {
+                        dbg("[v3] Execute addr=" + execMi.readPointer());
+                        Interceptor.attach(execMi.readPointer(), { onEnter: function () {
+                                dbg("[v3] GotoModified.Execute 触发");
+                            } });
+                        dbg("[v3] Execute hooked");
+                    }
+                    // 局部函数 (真正干活的?)
+                    var lfMi = A.cgm(gmCls, Memory.allocUtf8String("<NavigateOtherScript>g__LoadAndPlay|0"), 0);
+                    if (lfMi && !lfMi.isNull()) {
+                        dbg("[v3] g__LoadAndPlay|0 addr=" + lfMi.readPointer());
+                        Interceptor.attach(lfMi.readPointer(), { onEnter: function () {
+                                dbg("[v3] >>> 局部函数 g__LoadAndPlay|0 触发");
+                            } });
+                        dbg("[v3] g__LoadAndPlay|0 hooked");
+                    }
+                    else {
+                        dbg("[v3] 局部函数 g__LoadAndPlay|0 未找到");
+                    }
+                    // 嵌套状态机 <NavigateOtherScript>d__2 的 MoveNext (API: 每次返回一个指针, iter 推进)
+                    try {
+                        var iter = Memory.alloc(8);
+                        iter.writePointer(ptr(0));
+                        var foundSm = false;
+                        for (;;) {
+                            var p = A.cgnt(gmCls, iter);
+                            if (!p || p.isNull())
+                                break;
+                            var nc = p.readPointer();
+                            if (!nc || nc.isNull())
+                                break;
+                            var nn = A.cgn(nc).readCString();
+                            dbg("[v3] 嵌套类型: " + nn);
+                            if (nn && (nn.indexOf("NavigateOtherScript") >= 0 || nn.indexOf("d__2") >= 0)) {
+                                var mn2 = A.cgm(nc, Memory.allocUtf8String("MoveNext"), 0);
+                                if (mn2 && !mn2.isNull()) {
+                                    var mnPtr = mn2.readPointer();
+                                    dbg("[v3] 状态机 " + nn + " MoveNext addr=" + mnPtr);
+                                    Interceptor.attach(mnPtr, {
+                                        onEnter: function () { dbg("[v3] >>> NavigateOtherScript.MoveNext 触发"); }
+                                    });
+                                    dbg("[v3] MoveNext hooked");
+                                    foundSm = true;
+                                }
                             }
                         }
+                        if (!foundSm)
+                            dbg("[v3] 未找到 NavigateOtherScript 状态机");
                     }
-                    if (!foundSm)
-                        dbg("[v3] 未找到 NavigateOtherScript 状态机");
-                }
-                catch (e) {
-                    dbg("[v3] 状态机查找 err: " + e);
-                }
-                // System.Exception.ToString() — NRE 的完整堆栈
-                try {
-                    var coreImg = null;
-                    for (var ci = 0; ci < allImgs.length; ci++) {
-                        var inm2 = A.ign(allImgs[ci]).readCString();
-                        if (inm2.indexOf("mscorlib") >= 0 || inm2.indexOf("CoreLib") >= 0 || inm2.indexOf("System.Runtime") >= 0) {
-                            coreImg = allImgs[ci];
-                            break;
+                    catch (e) {
+                        dbg("[v3] 状态机查找 err: " + e);
+                    }
+                    // System.Exception.ToString() — NRE 的完整堆栈
+                    try {
+                        var coreImg = null;
+                        for (var ci = 0; ci < allImgs.length; ci++) {
+                            var inm2 = A.ign(allImgs[ci]).readCString();
+                            if (inm2.indexOf("mscorlib") >= 0 || inm2.indexOf("CoreLib") >= 0 || inm2.indexOf("System.Runtime") >= 0) {
+                                coreImg = allImgs[ci];
+                                break;
+                            }
                         }
-                    }
-                    if (coreImg) {
-                        var excCls = A.cfn(coreImg, Memory.allocUtf8String("System"), Memory.allocUtf8String("Exception"));
-                        if (excCls && !excCls.isNull()) {
-                            var tsMi = A.cgm(excCls, Memory.allocUtf8String("ToString"), 0);
-                            if (tsMi && !tsMi.isNull()) {
-                                Interceptor.attach(tsMi.readPointer(), {
-                                    onEnter: function (a) {
-                                        this.exc = a[0];
-                                        try {
-                                            var cn0 = a[0] ? readStr(a[0].add(0x10).readPointer()) : null;
-                                            if (cn0 && cn0.indexOf("NullReference") >= 0) {
-                                                var ga2 = Process.findModuleByName("GameAssembly.dylib");
-                                                var bt = null;
-                                                try {
-                                                    bt = Thread.backtrace(this.context, Backtracer.ACCURATE);
-                                                }
-                                                catch (e2) {
-                                                    dbg("[v3] bt ACCURATE err: " + e2);
+                        if (coreImg) {
+                            var excCls = A.cfn(coreImg, Memory.allocUtf8String("System"), Memory.allocUtf8String("Exception"));
+                            if (excCls && !excCls.isNull()) {
+                                var tsMi = A.cgm(excCls, Memory.allocUtf8String("ToString"), 0);
+                                if (tsMi && !tsMi.isNull()) {
+                                    Interceptor.attach(tsMi.readPointer(), {
+                                        onEnter: function (a) {
+                                            this.exc = a[0];
+                                            try {
+                                                var cn0 = a[0] ? readStr(a[0].add(0x10).readPointer()) : null;
+                                                if (cn0 && cn0.indexOf("NullReference") >= 0) {
+                                                    var ga2 = Process.findModuleByName("GameAssembly.dylib");
+                                                    var bt = null;
                                                     try {
-                                                        bt = Thread.backtrace(this.context, Backtracer.FUZZY);
+                                                        bt = Thread.backtrace(this.context, Backtracer.ACCURATE);
                                                     }
-                                                    catch (e3) {
-                                                        dbg("[v3] bt FUZZY err: " + e3);
-                                                    }
-                                                }
-                                                if (bt) {
-                                                    var rvas = [];
-                                                    for (var bi = 0; bi < Math.min(16, bt.length); bi++) {
+                                                    catch (e2) {
+                                                        dbg("[v3] bt ACCURATE err: " + e2);
                                                         try {
-                                                            rvas.push("0x" + bt[bi].sub(ga2.base).toString(16));
+                                                            bt = Thread.backtrace(this.context, Backtracer.FUZZY);
                                                         }
-                                                        catch (e4) {
-                                                            rvas.push("?");
+                                                        catch (e3) {
+                                                            dbg("[v3] bt FUZZY err: " + e3);
                                                         }
                                                     }
-                                                    dbg("[v3] ****** NRE 原生栈: " + rvas.join(" "));
-                                                }
-                                                else {
-                                                    dbg("[v3] ****** NRE bt null");
+                                                    if (bt) {
+                                                        var rvas = [];
+                                                        for (var bi = 0; bi < Math.min(16, bt.length); bi++) {
+                                                            try {
+                                                                rvas.push("0x" + bt[bi].sub(ga2.base).toString(16));
+                                                            }
+                                                            catch (e4) {
+                                                                rvas.push("?");
+                                                            }
+                                                        }
+                                                        dbg("[v3] ****** NRE 原生栈: " + rvas.join(" "));
+                                                    }
+                                                    else {
+                                                        dbg("[v3] ****** NRE bt null");
+                                                    }
                                                 }
                                             }
-                                        }
-                                        catch (e) {
-                                            dbg("[v3] ToString onEnter err: " + e);
-                                        }
-                                    },
-                                    onLeave: function () {
-                                        if (!this.exc || this.exc.isNull())
-                                            return;
-                                        var cn = readStr(this.exc.add(0x10).readPointer());
-                                        if (cn && cn.indexOf("NullReference") >= 0) {
-                                            var msg = readStr(this.exc.add(0x18).readPointer());
-                                            var st = readStr(this.exc.add(0x40).readPointer());
-                                            dbg("[v3] ****** NRE: " + cn + (msg ? " | " + msg : ""));
-                                            dbg("[v3] ****** 堆栈: " + (st || "<无>"));
-                                        }
-                                    }
-                                });
-                                dbg("[v3] Exception.ToString hooked (coreImg=" + coreImg + ")");
-                            }
-                        }
-                    }
-                }
-                catch (e) {
-                    dbg("[v3] Exception hook err: " + e);
-                }
-                // AsyncUniTaskMethodBuilder.SetException — 原生栈定位抛异常处
-                try {
-                    var utImg = null;
-                    for (var ui = 0; ui < allImgs.length; ui++) {
-                        var unin = A.ign(allImgs[ui]).readCString();
-                        if (unin.indexOf("UniTask") >= 0) {
-                            utImg = allImgs[ui];
-                            break;
-                        }
-                    }
-                    if (utImg) {
-                        var builderCls = A.cfn(utImg, Memory.allocUtf8String("Cysharp.Threading.Tasks.CompilerServices"), Memory.allocUtf8String("AsyncUniTaskMethodBuilder"));
-                        if (builderCls && !builderCls.isNull()) {
-                            var setExcMi = A.cgm(builderCls, Memory.allocUtf8String("SetException"), 1);
-                            if (setExcMi && !setExcMi.isNull()) {
-                                dbg("[v3] AsyncUniTaskMethodBuilder.SetException addr=" + setExcMi.readPointer());
-                                Interceptor.attach(setExcMi.readPointer(), {
-                                    onEnter: function () {
-                                        try {
-                                            var ga2 = Process.findModuleByName("GameAssembly.dylib");
-                                            var bt = Thread.backtrace(this.context, Backtracer.ACCURATE);
-                                            var rvas = [];
-                                            for (var bi = 0; bi < Math.min(14, bt.length); bi++) {
-                                                var r = bt[bi].sub(ga2.base);
-                                                rvas.push("0x" + r.toString(16));
+                                            catch (e) {
+                                                dbg("[v3] ToString onEnter err: " + e);
                                             }
-                                            dbg("[v3] #### SetException 原生栈: " + rvas.join(" "));
+                                        },
+                                        onLeave: function () {
+                                            if (!this.exc || this.exc.isNull())
+                                                return;
+                                            var cn = readStr(this.exc.add(0x10).readPointer());
+                                            if (cn && cn.indexOf("NullReference") >= 0) {
+                                                var msg = readStr(this.exc.add(0x18).readPointer());
+                                                var st = readStr(this.exc.add(0x40).readPointer());
+                                                dbg("[v3] ****** NRE: " + cn + (msg ? " | " + msg : ""));
+                                                dbg("[v3] ****** 堆栈: " + (st || "<无>"));
+                                            }
                                         }
-                                        catch (e) {
-                                            dbg("[v3] backtrace err: " + e);
-                                        }
-                                    }
-                                });
-                                dbg("[v3] SetException hooked");
-                            }
-                            else {
-                                dbg("[v3] SetException NOT FOUND");
+                                    });
+                                    dbg("[v3] Exception.ToString hooked (coreImg=" + coreImg + ")");
+                                }
                             }
                         }
                     }
+                    catch (e) {
+                        dbg("[v3] Exception hook err: " + e);
+                    }
+                    // AsyncUniTaskMethodBuilder.SetException — 原生栈定位抛异常处
+                    try {
+                        var utImg = null;
+                        for (var ui = 0; ui < allImgs.length; ui++) {
+                            var unin = A.ign(allImgs[ui]).readCString();
+                            if (unin.indexOf("UniTask") >= 0) {
+                                utImg = allImgs[ui];
+                                break;
+                            }
+                        }
+                        if (utImg) {
+                            var builderCls = A.cfn(utImg, Memory.allocUtf8String("Cysharp.Threading.Tasks.CompilerServices"), Memory.allocUtf8String("AsyncUniTaskMethodBuilder"));
+                            if (builderCls && !builderCls.isNull()) {
+                                var setExcMi = A.cgm(builderCls, Memory.allocUtf8String("SetException"), 1);
+                                if (setExcMi && !setExcMi.isNull()) {
+                                    dbg("[v3] AsyncUniTaskMethodBuilder.SetException addr=" + setExcMi.readPointer());
+                                    Interceptor.attach(setExcMi.readPointer(), {
+                                        onEnter: function () {
+                                            try {
+                                                var ga2 = Process.findModuleByName("GameAssembly.dylib");
+                                                var bt = Thread.backtrace(this.context, Backtracer.ACCURATE);
+                                                var rvas = [];
+                                                for (var bi = 0; bi < Math.min(14, bt.length); bi++) {
+                                                    var r = bt[bi].sub(ga2.base);
+                                                    rvas.push("0x" + r.toString(16));
+                                                }
+                                                dbg("[v3] #### SetException 原生栈: " + rvas.join(" "));
+                                            }
+                                            catch (e) {
+                                                dbg("[v3] backtrace err: " + e);
+                                            }
+                                        }
+                                    });
+                                    dbg("[v3] SetException hooked");
+                                }
+                                else {
+                                    dbg("[v3] SetException NOT FOUND");
+                                }
+                            }
+                        }
+                    }
+                    catch (e) {
+                        dbg("[v3] UniTask hook err: " + e);
+                    }
                 }
-                catch (e) {
-                    dbg("[v3] UniTask hook err: " + e);
+                // ScriptLoader 服务的加载入口
+                var slCls = A.cfn(nv, Memory.allocUtf8String("Naninovel"), Memory.allocUtf8String("ScriptLoader"));
+                if (slCls && !slCls.isNull()) {
+                    var loadMi2 = A.cgm(slCls, Memory.allocUtf8String("Load"), 2);
+                    if (loadMi2 && !loadMi2.isNull()) {
+                        dbg("[v3] ScriptLoader.Load addr=" + loadMi2.readPointer());
+                        Interceptor.attach(loadMi2.readPointer(), { onEnter: function (a) {
+                                dbg("[v3] >>> ScriptLoader.Load path='" + readStr(a[1]) + "' startIndex=" + a[2].toInt32());
+                            } });
+                        dbg("[v3] ScriptLoader.Load hooked");
+                    }
+                    var ilMi = A.cgm(slCls, Memory.allocUtf8String("IsLoaded"), 1);
+                    if (ilMi && !ilMi.isNull()) {
+                        Interceptor.attach(ilMi.readPointer(), { onEnter: function (a) {
+                                dbg("[v3] ScriptLoader.IsLoaded path='" + readStr(a[1]) + "'");
+                            } });
+                        dbg("[v3] ScriptLoader.IsLoaded hooked");
+                    }
+                    // ResourceLoader<T>.GetLoaded(string) — 缓存直接命中 (ScriptLoader 继承自 ResourceLoader<Script>)
+                    var glMi = A.cgm(slCls, Memory.allocUtf8String("GetLoaded"), 1);
+                    if (glMi && !glMi.isNull()) {
+                        dbg("[v3] ResourceLoader.GetLoaded addr=" + glMi.readPointer());
+                        Interceptor.attach(glMi.readPointer(), { onEnter: function (a) {
+                                dbg("[v3] >>> GetLoaded path='" + readStr(a[1]) + "'");
+                            } });
+                        dbg("[v3] GetLoaded hooked");
+                    }
+                    else {
+                        dbg("[v3] GetLoaded NOT FOUND");
+                    }
                 }
             }
-            // ScriptLoader 服务的加载入口
-            var slCls = A.cfn(nv, Memory.allocUtf8String("Naninovel"), Memory.allocUtf8String("ScriptLoader"));
-            if (slCls && !slCls.isNull()) {
-                var loadMi2 = A.cgm(slCls, Memory.allocUtf8String("Load"), 2);
-                if (loadMi2 && !loadMi2.isNull()) {
-                    dbg("[v3] ScriptLoader.Load addr=" + loadMi2.readPointer());
-                    Interceptor.attach(loadMi2.readPointer(), { onEnter: function (a) {
-                            dbg("[v3] >>> ScriptLoader.Load path='" + readStr(a[1]) + "' startIndex=" + a[2].toInt32());
-                        } });
-                    dbg("[v3] ScriptLoader.Load hooked");
-                }
-                var ilMi = A.cgm(slCls, Memory.allocUtf8String("IsLoaded"), 1);
-                if (ilMi && !ilMi.isNull()) {
-                    Interceptor.attach(ilMi.readPointer(), { onEnter: function (a) {
-                            dbg("[v3] ScriptLoader.IsLoaded path='" + readStr(a[1]) + "'");
-                        } });
-                    dbg("[v3] ScriptLoader.IsLoaded hooked");
-                }
-                // ResourceLoader<T>.GetLoaded(string) — 缓存直接命中 (ScriptLoader 继承自 ResourceLoader<Script>)
-                var glMi = A.cgm(slCls, Memory.allocUtf8String("GetLoaded"), 1);
-                if (glMi && !glMi.isNull()) {
-                    dbg("[v3] ResourceLoader.GetLoaded addr=" + glMi.readPointer());
-                    Interceptor.attach(glMi.readPointer(), { onEnter: function (a) {
-                            dbg("[v3] >>> GetLoaded path='" + readStr(a[1]) + "'");
-                        } });
-                    dbg("[v3] GetLoaded hooked");
-                }
-                else {
-                    dbg("[v3] GetLoaded NOT FOUND");
-                }
+            catch (e) {
+                dbg("[v3] 诊断 hook 失败: " + e);
             }
-        }
-        catch (e) {
-            dbg("[v3] 诊断 hook 失败: " + e);
-        }
         // ===== 捕获 Unity 错误日志 =====
         // dumpObj 输出游戏侧错误详情 — 全量保留 (不随 MOD_DEBUG 开关), 是最高优先级信息 (ARCHIVE 教训 2)
         function dumpObj(obj, tag) {
@@ -407,14 +412,22 @@ var shouldLogLoadAndPlay = true;
                 }
                 console.log("[v3] " + tag + " hex: " + hex);
                 // 从 +0x14 走 UTF-16 到 null, 取完整字符串 (忽略可疑长度字段)
-                try {
-                    var full = "";
-                    for (var fi = 0; fi < 300; fi++) {
-                        var c = obj.add(0x14 + fi * 2).readU16();
+                // 长读 2000: 崩溃同款异常的完整 C# 栈 (MethodAccessException 调用方) 会被截断
+                // 代理项跳过: 孤立 surrogate 会让 python print 抛 UnicodeEncodeError 打断日志流
+                function collectUtf16(baseOff, max) {
+                    var s = "";
+                    for (var fi = 0; fi < max; fi++) {
+                        var c = obj.add(baseOff + fi * 2).readU16();
                         if (c === 0)
                             break;
-                        full += String.fromCharCode(c);
+                        if (c >= 0xD800 && c <= 0xDFFF)
+                            continue; // 孤立代理项直接跳过
+                        s += String.fromCharCode(c);
                     }
+                    return s;
+                }
+                try {
+                    var full = collectUtf16(0x14, 2000);
                     if (full)
                         console.log("[v3] " + tag + " FULL: " + full);
                 }
@@ -422,15 +435,9 @@ var shouldLogLoadAndPlay = true;
                 // 从多个起点走 UTF-16 到 null
                 [0x08, 0x10, 0x14, 0x18, 0x0C].forEach(function (so) {
                     try {
-                        var s = "";
-                        for (var j = 0; j < 200; j++) {
-                            var c = obj.add(so + j * 2).readU16();
-                            if (c === 0) {
-                                console.log("[v3] " + tag + " +0x" + so.toString(16) + " utf16='" + s + "'");
-                                return;
-                            }
-                            s += String.fromCharCode(c);
-                        }
+                        var s = collectUtf16(so, 2000);
+                        if (s)
+                            console.log("[v3] " + tag + " +0x" + so.toString(16) + " utf16='" + s + "'");
                     }
                     catch (e) { }
                 });
@@ -1525,6 +1532,105 @@ export function fieldOffset(cls, name, fallback) {
     catch (e) { }
     return fallback;
 }
+// macOS IL2CPP 泛型共享守卫: WitchBookPageBase._itemIds 在 CluePage 实例化为 Graphic[]、
+// NotePage 为 Canvas[] (Windows 是 string[]) → 写 string[] 进去 = 内存破坏 → 写入前必须验证
+export function fieldIsStringArray(obj, cls, name) {
+    try {
+        var f = A.gf(cls, Memory.allocUtf8String(name));
+        if (!f || f.isNull())
+            return false;
+        var v = obj.add(A.fo(f)).readPointer();
+        if (!v || v.isNull())
+            return false;
+        var cn = A.cgn(A.ogc(v)).readCString();
+        return cn.indexOf("String[") >= 0;
+    }
+    catch (e) {
+        return false;
+    }
+}
+// macOS 泛型共享修复 (原版 macOS bug 的根治):
+// 游戏自身 WitchBookPageBase.UpdateVersion 里 _itemIds.Contains(id) 的共享体把数组强转
+// IEnumerable<string> → CluePage._itemIds=Graphic[]/NotePage=Canvas[] 时必抛 MethodAccessException
+// → 有时被 Unity 吞掉 (黑屏), 有时未捕获 → SIGABRT (崩溃; 4 份 crash 栈同 RVA 0x3404d4 实证)。
+// 修法: 执行游戏逻辑前把字段换回 string[], 内容取自 _loadedDataItemMap (与 Windows 的 id 集合一致)
+// → 游戏原逻辑 (Contains 门 + SetVersion) 完整工作, 崩溃与黑屏同时消失。
+// 返回 true = 字段已是/已修复为 string[]; false = 未处理 (字段缺失/null/无法提取)。
+export function ensureItemIdsString(page, cls) {
+    try {
+        var f = A.gf(cls, Memory.allocUtf8String("_itemIds"));
+        if (!f || f.isNull())
+            return false;
+        var off = A.fo(f);
+        var arr = page.add(off).readPointer();
+        if (!arr || arr.isNull())
+            return false;
+        var cn = A.cgn(A.ogc(arr)).readCString();
+        if (cn.indexOf("String[") >= 0)
+            return true; // 已是 string[], 无需换
+        var ids = [];
+        // 首选: _loadedDataItemMap 的 id 集合 (游戏 Windows 语义: 已知条目集合)
+        try {
+            var mf = A.gf(cls, Memory.allocUtf8String("_loadedDataItemMap"));
+            if (mf && !mf.isNull()) {
+                var mapList = page.add(A.fo(mf)).readPointer();
+                if (!mapList.isNull()) {
+                    var mc = mapList.add(0x18).readS32();
+                    var mitems = mapList.add(0x10).readPointer();
+                    if (!mitems.isNull() && mc > 0 && mc < 100000) {
+                        var mvCls = getGenericArgClass(A.ogc(mapList), 0);
+                        var midOff = fieldOffset(mvCls, "_id", 0x10);
+                        for (var i = 0; i < mc; i++) {
+                            var me = mitems.add(0x20 + i * 8).readPointer();
+                            var ms = (!me.isNull()) ? readStr(me.add(midOff).readPointer()) : null;
+                            ids.push(ms || "");
+                        }
+                    }
+                }
+            }
+        }
+        catch (e1) {
+            ids = [];
+        }
+        // 回退: 从数组元素提取 (string 元素直接读; 对象元素读 _id 字段)
+        if (!ids.length) {
+            var len = arr.add(0x18).readS32();
+            if (len > 0 && len < 100000) {
+                var elemCls = ptr(0), elemIsStr = false, idOff = 0x10;
+                for (var i = 0; i < len; i++) {
+                    var e2 = arr.add(0x20 + i * 8).readPointer();
+                    var s2 = null;
+                    if (!e2.isNull()) {
+                        if (elemCls.isNull()) {
+                            elemCls = A.ogc(e2);
+                            elemIsStr = (A.cgn(elemCls).readCString() === "System.String");
+                            if (!elemIsStr)
+                                idOff = fieldOffset(elemCls, "_id", 0x10);
+                        }
+                        s2 = elemIsStr ? readStr(e2) : readStr(e2.add(idOff).readPointer());
+                    }
+                    ids.push(s2 || "");
+                }
+            }
+        }
+        if (!ids.length) {
+            wblog(A.cgn(cls).readCString() + "._itemIds " + cn + " 内容为空, 跳过重建");
+            return false;
+        }
+        var strCls = getSystemClass("String");
+        if (!strCls || strCls.isNull())
+            return false;
+        var na = A.an(strCls, ids.length);
+        for (var i = 0; i < ids.length; i++)
+            na.add(0x20 + i * 8).writePointer(makeS(ids[i]));
+        page.add(off).writePointer(na);
+        wblog(A.cgn(cls).readCString() + "._itemIds " + cn + " → String[] 重建 (" + ids.length + " 条)");
+        return true;
+    }
+    catch (e) {
+        return false;
+    }
+}
 // Object.FindObjectsOfType(Type) → Object[] → 非空实例数组
 export function findAllObjectOfType(cls) {
     try {
@@ -2408,7 +2514,7 @@ export function injectVersions(list, addMi, vItemCls, cat, id, rec, page) {
 //   3. 显示: Interceptor.replace CluePage.RefreshPageContent / SetupItemButton —— mod 线索直接设
 //      _subjectLabel/_descriptionLabel/_thumbnail (绕开 _localizedTextData 的 KeyNotFoundException)。
 // 数据来源: 运行时读 <MOD_ROOT>/<modKey>/info.json 的 Clues 字段 + 扫 WitchBook/Clues/*.png。
-import { A, dbg, fieldOffset, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, wblog } from "../utils.js";
+import { A, dbg, ensureItemIdsString, fieldOffset, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, wblog } from "../utils.js";
 import { initCatStateMaps, setWbCls, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbPrevMod } from "./state.js";
 import { isCurrentModItem, loadWitchBookData, wbCatByIdx, wbCats } from "./data.js";
 import { clearAllWitchBookPages, clearBookViaVanilla, detectCurrentMod, findAllPages, rebuildAllPages } from "./session.js";
@@ -2470,11 +2576,50 @@ export function setupWitchBookHooks() {
                 if (!cls || cls.isNull())
                     return;
                 var uvMi = A.cgm(cls, Memory.allocUtf8String("UpdateVersion"), 3);
-                if (uvMi && !uvMi.isNull())
+                // NO_UPDATE_HOOK=1 (A/B 隔离): 跳过 @update hook — 审判加载时逐事件 hook 延迟是崩溃竞态嫌疑
+                if (uvMi && !uvMi.isNull() && typeof NO_UPDATE_HOOK === 'undefined')
                     Interceptor.attach(uvMi.readPointer(), { onEnter: onWitchBookUpdate });
             }
             catch (e) { }
         });
+        // macOS 泛型共享根治: 游戏自身 WitchBookPageBase.UpdateVersion 里 _itemIds.Contains(id)
+        // 在 Graphic[]/Canvas[] 上抛 MAE → 崩/黑屏 (原版 macOS bug, 加载器写入只是放大器)。
+        // onEnter 先把字段换回 String[] → 游戏原逻辑 (Contains 门 + SetVersion) 正常工作。
+        try {
+            var uvCands = [];
+            var uvBase = findClassAcrossImages("WitchTrials.Views", "WitchBookPageBase");
+            if (uvBase && !uvBase.isNull())
+                uvCands.push(uvBase);
+            var uvKeys = Object.keys(wbCls.pages);
+            for (var uvi = 0; uvi < uvKeys.length; uvi++)
+                uvCands.push(wbCls.pages[uvKeys[uvi]]);
+            var uvSeen = {};
+            for (var uvi2 = 0; uvi2 < uvCands.length; uvi2++) {
+                try {
+                    var uvc = uvCands[uvi2];
+                    if (!uvc || uvc.isNull())
+                        continue;
+                    for (var uvn = 1; uvn <= 3; uvn++) {
+                        var uvMi2 = A.cgm(uvc, Memory.allocUtf8String("UpdateVersion"), uvn);
+                        if (!uvMi2 || uvMi2.isNull())
+                            continue;
+                        var uvP = uvMi2.readPointer();
+                        if (!uvP || uvP.isNull() || uvSeen[uvP.toString()])
+                            continue;
+                        uvSeen[uvP.toString()] = 1;
+                        Interceptor.attach(uvP, { onEnter: function (a) { try {
+                                ensureItemIdsString(a[0], A.ogc(a[0]));
+                            }
+                            catch (e) { } } });
+                        wblog("page UpdateVersion hook (" + A.cgn(uvc).readCString() + " " + uvn + " 参) @" + uvP);
+                    }
+                }
+                catch (e) { }
+            }
+        }
+        catch (e) {
+            wblog("page UpdateVersion hook err: " + e);
+        }
         // Profile 姓名覆写 (mod 新角色显示格式化名字而非 ID)
         hookProfileName();
         // WitchBook 打开/翻页重建 → 强制重注入
@@ -2565,6 +2710,47 @@ export function tryInjectWitchBook() {
         wblog("tryInjectWitchBook err: " + e);
     }
 }
+// MAE 诊断: 打印页面关键字段的运行时类型 (仅第一次 @update 时; 原版基座污染检查)
+// 背景: 崩溃 = WitchBookPageBase.UpdateVersion 内 Enumerable.Contains(source=Graphic[], value=string)
+//       → 需确认 _itemIds 等字段在 @update 时刻的运行时类型
+var _pageTypesDumped = false;
+function dumpPageFieldTypes() {
+    if (_pageTypesDumped)
+        return;
+    _pageTypesDumped = true;
+    try {
+        var pages = findAllPages();
+        var fields = ["_itemIds", "_loadedDataItemMap", "_items", "_localizedTextData"];
+        for (var i = 0; i < pages.length; i++) {
+            try {
+                var pc = A.ogc(pages[i]);
+                var pcn = A.cgn(pc).readCString();
+                var parts = [];
+                for (var fi = 0; fi < fields.length; fi++) {
+                    try {
+                        var f = A.gf(pc, Memory.allocUtf8String(fields[fi]));
+                        if (!f || f.isNull()) {
+                            parts.push(fields[fi] + "=未找到");
+                            continue;
+                        }
+                        var off = A.fo(f);
+                        var v = pages[i].add(off).readPointer();
+                        var vcn = (!v || v.isNull()) ? "null" : A.cgn(A.ogc(v)).readCString();
+                        parts.push(fields[fi] + "@0x" + off.toString(16) + "=" + vcn);
+                    }
+                    catch (e2) {
+                        parts.push(fields[fi] + "=err");
+                    }
+                }
+                wblog("  [页面] " + pcn + " " + parts.join(" "));
+            }
+            catch (e3) { }
+        }
+    }
+    catch (e) {
+        wblog("dumpPageFieldTypes err: " + e);
+    }
+}
 // @update 拦截: 按 WitchBookCategory 路由 (Clue=0 Profile=1 Map=2 Rule=3 Note=4)
 export function onWitchBookUpdate(args) {
     try {
@@ -2572,6 +2758,7 @@ export function onWitchBookUpdate(args) {
         var cat = wbCatByIdx(idx);
         if (!cat || idx === 2)
             return; // Map 分类暂不处理
+        dumpPageFieldTypes(); // MAE 诊断: @update 时刻页面字段类型
         if (!id || !isCurrentModItem(cat, id)) {
             wblog(">>> @update 忽略: category=" + (cat ? cat.name : idx) + " id='" + id + "' (非当前 mod 条目)");
             return;
@@ -2591,7 +2778,7 @@ export function onWitchBookUpdate(args) {
 
 ✄
 // ============ WitchBook 页面注入域: 注入 Page._loadedDataItemMap + _itemIds + _state + 本地化字典预填 ============
-import { A, fieldOffset, findAllObjectOfType, getGenericArgClass, getSystemClass, invokeOk, listContainsId, makeS, readStr, wblog } from "../utils.js";
+import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, getGenericArgClass, getSystemClass, invokeOk, listContainsId, makeS, readStr, wblog } from "../utils.js";
 import { wbCls, wbData, wbOverrides } from "./state.js";
 import { currentModIds, injectVersions, localeValue, resolveLocale, unionLocaleKeys } from "./data.js";
 import { clearModItemsFromPage, isVanillaId } from "./session.js";
@@ -2634,6 +2821,7 @@ export function injectPage(cat) {
                     wblog(cat.name + "Page._loadedDataItemMap 注入 " + added + " 条 (total=" + mapList.add(0x18).readS32() + ")");
             }
         }
+        ensureItemIdsString(page, pageCls); // macOS: Graphic[]/Canvas[] → String[] (游戏 Contains 才不炸)
         appendItemIds(page, cat);
         applyStates(page, cat);
         return true;
@@ -2647,6 +2835,11 @@ export function injectPage(cat) {
 export function appendItemIds(page, cat) {
     try {
         var pageCls = wbCls.pages[cat.name];
+        // macOS 守卫: _itemIds 运行时可能是 Graphic[]/Canvas[] (泛型共享实例化差异), 非 String[] 绝不写入
+        if (!fieldIsStringArray(page, pageCls, "_itemIds")) {
+            wblog(cat.name + "Page._itemIds 非 String[] (macOS 泛型共享), 跳过追加");
+            return;
+        }
         var idsField = fieldOffset(pageCls, "_itemIds", 0x98);
         var old = page.add(idsField).readPointer();
         var newIds = [];
@@ -2841,7 +3034,7 @@ export function registerLocalizedDict(page, b) {
 ✄
 // ============ WitchBook 会话隔离域: mod 切换检测 / 整页重建 / 状态清理 / 面板默认值 ============
 // 镜像 Windows ModClueLoader + ModWitchBookPatch: mod 切换/回标题时从原版基座重建, 防残留继承
-import { A, fieldOffset, findAllObjectOfType, findFirstObjectOfType, findSvc, getGenericArgClass, getSystemClass, invoke, invokeOk, listContainsId, makeS, readStr, wblog } from "../utils.js";
+import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, findFirstObjectOfType, findSvc, getGenericArgClass, getSystemClass, invoke, invokeOk, listContainsId, makeS, readStr, wblog } from "../utils.js";
 import { wbCats, currentModSet, localeValue, makeIdVersionPair, unionLocaleKeys } from "./data.js";
 import { initCatStateMaps, setWbCurrentMod, setWbDefaultsCaptured, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbDefaultsCaptured, wbPageDefaults, wbVanillaMap } from "./state.js";
 import { getFirstDictValue } from "./pages.js";
@@ -2926,6 +3119,8 @@ export function rebuildItemIdsFromMap(page, pageCls, mapList, vItemCls, idOff) {
             if (id && ids.indexOf(id) === -1)
                 ids.push(id);
         }
+        // macOS 守卫: 先修复泛型共享实例化差异 (Graphic[]/Canvas[] → String[]), 再写
+        ensureItemIdsString(page, pageCls);
         var strCls = getSystemClass("String");
         var narr = A.an(strCls, ids.length);
         for (var i = 0; i < ids.length; i++)
@@ -3194,22 +3389,24 @@ export function clearModItemsFromPage(page, pageCls, idSet) {
                     invokeOk(rmD, outer, [toDel[di]]);
             }
         }
-        // 3) _itemIds (string[]): 重建
-        var idsField = fieldOffset(pageCls, "_itemIds", 0x98);
-        var old = page.add(idsField).readPointer();
-        if (!old.isNull()) {
-            var keep = [];
-            var olen = old.add(0x18).readS32();
-            for (var oi = 0; oi < olen; oi++) {
-                var s = readStr(old.add(0x20 + oi * 8).readPointer());
-                if (s && !idSet[s])
-                    keep.push(s);
+        // 3) _itemIds: 重建 (先修复泛型共享实例化差异, 再按 idSet 过滤)
+        if (ensureItemIdsString(page, pageCls)) {
+            var idsField = fieldOffset(pageCls, "_itemIds", 0x98);
+            var old = page.add(idsField).readPointer();
+            if (!old.isNull()) {
+                var keep = [];
+                var olen = old.add(0x18).readS32();
+                for (var oi = 0; oi < olen; oi++) {
+                    var s = readStr(old.add(0x20 + oi * 8).readPointer());
+                    if (s && !idSet[s])
+                        keep.push(s);
+                }
+                var strCls = getSystemClass("String");
+                var narr = A.an(strCls, keep.length);
+                for (var ki = 0; ki < keep.length; ki++)
+                    narr.add(0x20 + ki * 8).writePointer(makeS(keep[ki]));
+                page.add(idsField).writePointer(narr);
             }
-            var strCls = getSystemClass("String");
-            var narr = A.an(strCls, keep.length);
-            for (var ki = 0; ki < keep.length; ki++)
-                narr.add(0x20 + ki * 8).writePointer(makeS(keep[ki]));
-            page.add(idsField).writePointer(narr);
         }
         // 4) _state._list (List<IdVersionPair>): 移除 Id ∈ idSet
         removeStateEntries(page, pageCls, idSet);

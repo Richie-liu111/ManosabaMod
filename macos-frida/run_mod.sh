@@ -169,11 +169,15 @@ print(f'>>> 已写入菜单文件: {menu_path}')
 
 # 📦 asset bundle 必须以 📦 开头 (frida 走 asset 编译); 变量经 Script.evaluate fragment 注入全局 (frida-tools REPL 同机制)
 MOD_DEBUG_JS = 'var MOD_DEBUG=true;' if MOD_DEBUG else ''
-inject_code = f'var modList={mods_str};var MOD_ROOT={json.dumps(MOD_ROOT)};var movieMap={movie_map_json};{MOD_DEBUG_JS}'
+NO_UPDATE_JS = 'var NO_UPDATE_HOOK=true;' if os.environ.get('NO_UPDATE_HOOK') == '1' else ''
+inject_code = f'var modList={mods_str};var MOD_ROOT={json.dumps(MOD_ROOT)};var movieMap={movie_map_json};{MOD_DEBUG_JS}{NO_UPDATE_JS}'
 inj = 'Script.evaluate("mod-vars", %s);' % json.dumps(inject_code)
 inj_frag = f"{len(inj.encode('utf-8'))} /frida/mod-vars.js\n✄\n{inj}"
 bundle_body = JS_BASE[2:] if JS_BASE.startswith("📦\n") else JS_BASE
 FULL_JS = "📦\n" + inj_frag + "\n✄\n" + bundle_body
+# 崩溃诊断探针 (probe_embed.js, 临时): 独立 frida 脚本附加, 不塞进 📦 包
+# (v8 下 📦 包内多出的 fragment 只是模块资产不会被执行; 独立脚本 = standalone 探针同机制)
+_probe_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'probe_embed.js')
 
 print(f'>>> 发现 {len(mods)} 个 Mod')
 for m in mods:
@@ -190,9 +194,21 @@ device = frida.get_local_device()
 pid = device.spawn([GAME])
 session = device.attach(pid)
 # runtime="v8": frida-compile 17 的 📦 asset bundle 需要 V8 runtime 编译 (QuickJS 默认不支持)
+def on_msg(m, d):
+    s = m.get('payload', '') or m.get('description', '')
+    try:
+        print(s, flush=True)
+    except Exception:
+        print(s.encode('utf-8', 'replace').decode('utf-8', 'replace'), flush=True)
 script = session.create_script(FULL_JS, runtime="v8")
-script.on('message', lambda m, d: print(m.get('payload', '') or m.get('description', ''), flush=True))
+script.on('message', on_msg)
 script.load()
+if os.path.isfile(_probe_path):
+    probe_code = open(_probe_path, encoding='utf-8').read()
+    pscript = session.create_script(probe_code, runtime="v8")
+    pscript.on('message', on_msg)
+    pscript.load()
+    print('>>> 已附加探针 (probe_embed.js, %d 字节, 独立脚本; 删除该文件可撤销)' % len(probe_code.encode('utf-8')))
 device.resume(pid)
 print(f'>>> 游戏已启动 (PID={pid}) | Ctrl+C 停止')
 try:

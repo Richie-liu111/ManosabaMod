@@ -11,7 +11,7 @@
 //   3. 显示: Interceptor.replace CluePage.RefreshPageContent / SetupItemButton —— mod 线索直接设
 //      _subjectLabel/_descriptionLabel/_thumbnail (绕开 _localizedTextData 的 KeyNotFoundException)。
 // 数据来源: 运行时读 <MOD_ROOT>/<modKey>/info.json 的 Clues 字段 + 扫 WitchBook/Clues/*.png。
-import { A, dbg, fieldOffset, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, wblog } from "../utils.js";
+import { A, dbg, ensureItemIdsString, fieldOffset, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, wblog } from "../utils.js";
 import { initCatStateMaps, setWbCls, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbPrevMod } from "./state.js";
 import { isCurrentModItem, loadWitchBookData, wbCatByIdx, wbCats } from "./data.js";
 import { clearAllWitchBookPages, clearBookViaVanilla, detectCurrentMod, findAllPages, rebuildAllPages } from "./session.js";
@@ -65,9 +65,36 @@ export function setupWitchBookHooks() {
                 var cls = wbCls[cn === "WitchBookUi" ? "witchBookUi" : "witchBookScreen"];
                 if (!cls || cls.isNull()) return;
                 var uvMi = A.cgm(cls, Memory.allocUtf8String("UpdateVersion"), 3);
-                if (uvMi && !uvMi.isNull()) Interceptor.attach(uvMi.readPointer(), { onEnter: onWitchBookUpdate });
+                // NO_UPDATE_HOOK=1 (A/B 隔离): 跳过 @update hook — 审判加载时逐事件 hook 延迟是崩溃竞态嫌疑
+                if (uvMi && !uvMi.isNull() && typeof NO_UPDATE_HOOK === 'undefined') Interceptor.attach(uvMi.readPointer(), { onEnter: onWitchBookUpdate });
             } catch (e) {}
         });
+        // macOS 泛型共享根治: 游戏自身 WitchBookPageBase.UpdateVersion 里 _itemIds.Contains(id)
+        // 在 Graphic[]/Canvas[] 上抛 MAE → 崩/黑屏 (原版 macOS bug, 加载器写入只是放大器)。
+        // onEnter 先把字段换回 String[] → 游戏原逻辑 (Contains 门 + SetVersion) 正常工作。
+        try {
+            var uvCands = [];
+            var uvBase = findClassAcrossImages("WitchTrials.Views", "WitchBookPageBase");
+            if (uvBase && !uvBase.isNull()) uvCands.push(uvBase);
+            var uvKeys = Object.keys(wbCls.pages);
+            for (var uvi = 0; uvi < uvKeys.length; uvi++) uvCands.push(wbCls.pages[uvKeys[uvi]]);
+            var uvSeen = {};
+            for (var uvi2 = 0; uvi2 < uvCands.length; uvi2++) {
+                try {
+                    var uvc = uvCands[uvi2];
+                    if (!uvc || uvc.isNull()) continue;
+                    for (var uvn = 1; uvn <= 3; uvn++) {
+                        var uvMi2 = A.cgm(uvc, Memory.allocUtf8String("UpdateVersion"), uvn);
+                        if (!uvMi2 || uvMi2.isNull()) continue;
+                        var uvP = uvMi2.readPointer();
+                        if (!uvP || uvP.isNull() || uvSeen[uvP.toString()]) continue;
+                        uvSeen[uvP.toString()] = 1;
+                        Interceptor.attach(uvP, { onEnter: function (a) { try { ensureItemIdsString(a[0], A.ogc(a[0])); } catch (e) {} } });
+                        wblog("page UpdateVersion hook (" + A.cgn(uvc).readCString() + " " + uvn + " 参) @" + uvP);
+                    }
+                } catch (e) {}
+            }
+        } catch (e) { wblog("page UpdateVersion hook err: " + e); }
         // Profile 姓名覆写 (mod 新角色显示格式化名字而非 ID)
         hookProfileName();
         // WitchBook 打开/翻页重建 → 强制重注入
@@ -142,12 +169,43 @@ export function tryInjectWitchBook() {
         if (pages2.length) registerTexturesInto(pages2[0].add(fieldOffset(A.ogc(pages2[0]), "_addressableAssetLoader", 0x50)).readPointer());
     } catch (e) { wblog("tryInjectWitchBook err: " + e); }
 }
+// MAE 诊断: 打印页面关键字段的运行时类型 (仅第一次 @update 时; 原版基座污染检查)
+// 背景: 崩溃 = WitchBookPageBase.UpdateVersion 内 Enumerable.Contains(source=Graphic[], value=string)
+//       → 需确认 _itemIds 等字段在 @update 时刻的运行时类型
+var _pageTypesDumped = false;
+function dumpPageFieldTypes() {
+    if (_pageTypesDumped) return;
+    _pageTypesDumped = true;
+    try {
+        var pages = findAllPages();
+        var fields = ["_itemIds", "_loadedDataItemMap", "_items", "_localizedTextData"];
+        for (var i = 0; i < pages.length; i++) {
+            try {
+                var pc = A.ogc(pages[i]);
+                var pcn = A.cgn(pc).readCString();
+                var parts = [];
+                for (var fi = 0; fi < fields.length; fi++) {
+                    try {
+                        var f = A.gf(pc, Memory.allocUtf8String(fields[fi]));
+                        if (!f || f.isNull()) { parts.push(fields[fi] + "=未找到"); continue; }
+                        var off = A.fo(f);
+                        var v = pages[i].add(off).readPointer();
+                        var vcn = (!v || v.isNull()) ? "null" : A.cgn(A.ogc(v)).readCString();
+                        parts.push(fields[fi] + "@0x" + off.toString(16) + "=" + vcn);
+                    } catch (e2) { parts.push(fields[fi] + "=err"); }
+                }
+                wblog("  [页面] " + pcn + " " + parts.join(" "));
+            } catch (e3) {}
+        }
+    } catch (e) { wblog("dumpPageFieldTypes err: " + e); }
+}
 // @update 拦截: 按 WitchBookCategory 路由 (Clue=0 Profile=1 Map=2 Rule=3 Note=4)
 export function onWitchBookUpdate(args) {
     try {
         var idx = args[1].toInt32(), id = readStr(args[2]), ver = args[3].toInt32();
         var cat = wbCatByIdx(idx);
         if (!cat || idx === 2) return;   // Map 分类暂不处理
+        dumpPageFieldTypes();            // MAE 诊断: @update 时刻页面字段类型
         if (!id || !isCurrentModItem(cat, id)) { wblog(">>> @update 忽略: category=" + (cat?cat.name:idx) + " id='" + id + "' (非当前 mod 条目)"); return; }
         if (!wbData.states[cat.name]) wbData.states[cat.name] = {};
         if (wbData.states[cat.name][id] === ver) return;

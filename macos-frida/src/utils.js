@@ -179,6 +179,85 @@ export function fieldOffset(cls, name, fallback) {
     } catch (e) {}
     return fallback;
 }
+// macOS IL2CPP 泛型共享守卫: WitchBookPageBase._itemIds 在 CluePage 实例化为 Graphic[]、
+// NotePage 为 Canvas[] (Windows 是 string[]) → 写 string[] 进去 = 内存破坏 → 写入前必须验证
+export function fieldIsStringArray(obj, cls, name) {
+    try {
+        var f = A.gf(cls, Memory.allocUtf8String(name));
+        if (!f || f.isNull()) return false;
+        var v = obj.add(A.fo(f)).readPointer();
+        if (!v || v.isNull()) return false;
+        var cn = A.cgn(A.ogc(v)).readCString();
+        return cn.indexOf("String[") >= 0;
+    } catch (e) { return false; }
+}
+// macOS 泛型共享修复 (原版 macOS bug 的根治):
+// 游戏自身 WitchBookPageBase.UpdateVersion 里 _itemIds.Contains(id) 的共享体把数组强转
+// IEnumerable<string> → CluePage._itemIds=Graphic[]/NotePage=Canvas[] 时必抛 MethodAccessException
+// → 有时被 Unity 吞掉 (黑屏), 有时未捕获 → SIGABRT (崩溃; 4 份 crash 栈同 RVA 0x3404d4 实证)。
+// 修法: 执行游戏逻辑前把字段换回 string[], 内容取自 _loadedDataItemMap (与 Windows 的 id 集合一致)
+// → 游戏原逻辑 (Contains 门 + SetVersion) 完整工作, 崩溃与黑屏同时消失。
+// 返回 true = 字段已是/已修复为 string[]; false = 未处理 (字段缺失/null/无法提取)。
+export function ensureItemIdsString(page, cls) {
+    try {
+        var f = A.gf(cls, Memory.allocUtf8String("_itemIds"));
+        if (!f || f.isNull()) return false;
+        var off = A.fo(f);
+        var arr = page.add(off).readPointer();
+        if (!arr || arr.isNull()) return false;
+        var cn = A.cgn(A.ogc(arr)).readCString();
+        if (cn.indexOf("String[") >= 0) return true;   // 已是 string[], 无需换
+        var ids = [];
+        // 首选: _loadedDataItemMap 的 id 集合 (游戏 Windows 语义: 已知条目集合)
+        try {
+            var mf = A.gf(cls, Memory.allocUtf8String("_loadedDataItemMap"));
+            if (mf && !mf.isNull()) {
+                var mapList = page.add(A.fo(mf)).readPointer();
+                if (!mapList.isNull()) {
+                    var mc = mapList.add(0x18).readS32();
+                    var mitems = mapList.add(0x10).readPointer();
+                    if (!mitems.isNull() && mc > 0 && mc < 100000) {
+                        var mvCls = getGenericArgClass(A.ogc(mapList), 0);
+                        var midOff = fieldOffset(mvCls, "_id", 0x10);
+                        for (var i = 0; i < mc; i++) {
+                            var me = mitems.add(0x20 + i * 8).readPointer();
+                            var ms = (!me.isNull()) ? readStr(me.add(midOff).readPointer()) : null;
+                            ids.push(ms || "");
+                        }
+                    }
+                }
+            }
+        } catch (e1) { ids = []; }
+        // 回退: 从数组元素提取 (string 元素直接读; 对象元素读 _id 字段)
+        if (!ids.length) {
+            var len = arr.add(0x18).readS32();
+            if (len > 0 && len < 100000) {
+                var elemCls = ptr(0), elemIsStr = false, idOff = 0x10;
+                for (var i = 0; i < len; i++) {
+                    var e2 = arr.add(0x20 + i * 8).readPointer();
+                    var s2 = null;
+                    if (!e2.isNull()) {
+                        if (elemCls.isNull()) {
+                            elemCls = A.ogc(e2);
+                            elemIsStr = (A.cgn(elemCls).readCString() === "System.String");
+                            if (!elemIsStr) idOff = fieldOffset(elemCls, "_id", 0x10);
+                        }
+                        s2 = elemIsStr ? readStr(e2) : readStr(e2.add(idOff).readPointer());
+                    }
+                    ids.push(s2 || "");
+                }
+            }
+        }
+        if (!ids.length) { wblog(A.cgn(cls).readCString() + "._itemIds " + cn + " 内容为空, 跳过重建"); return false; }
+        var strCls = getSystemClass("String");
+        if (!strCls || strCls.isNull()) return false;
+        var na = A.an(strCls, ids.length);
+        for (var i = 0; i < ids.length; i++) na.add(0x20 + i * 8).writePointer(makeS(ids[i]));
+        page.add(off).writePointer(na);
+        wblog(A.cgn(cls).readCString() + "._itemIds " + cn + " → String[] 重建 (" + ids.length + " 条)");
+        return true;
+    } catch (e) { return false; }
+}
 // Object.FindObjectsOfType(Type) → Object[] → 非空实例数组
 export function findAllObjectOfType(cls) {
     try {

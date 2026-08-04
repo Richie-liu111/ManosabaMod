@@ -173,6 +173,7 @@ ScriptPlaylist.LoadResources
 | 调用托管代码 | 直接 C# | `il2cpp_runtime_invoke` (+ thread_attach) |
 | 注册 converter | `AddConverter<T>()` (C# 泛型调用) | 直接填充 converters 字典 (inflated 方法) |
 | 异步加载 | 游戏线程自然执行 | 必须让游戏 @goto 驱动 |
+| IL2CPP 泛型共享 | 全量实例化 (字段类型与声明一致) | **共享实例化 → 部分字段运行时类型漂移** (见 七) |
 | 平台 | Windows x64 | macOS Apple Silicon (arm64) |
 
 ## 五、mod 格式兼容性 — 为什么 mod 直接能用
@@ -209,3 +210,48 @@ ManosabaMod/<ModName>/
 | Movie (.mp4/.webm/.ogv) | ✅ (URL 流式) |
 | @choice handler:"<modId>" | ❌ 未实现 |
 | CutIn (论破) | ❌ 未实现 |
+
+## 七、macOS 已知坑与修复
+
+### 7.1 IL2CPP 泛型共享 → _itemIds 运行时类型漂移 (原版审判偶发闪退/黑屏)
+
+**现象**: 原版审判存档加载偶发闪退 (SIGABRT), 或审判场景黑屏 (证据: 4 份 crash 栈
+RVA 0x3404d4 完全一致; 不加载任何 mod 也会发生, 加载 mod 后概率显著升高)。
+崩溃与黑屏是**同一个异常**的两种结局 (被 Unity 捕获 → LogError 黑屏; 未捕获 → abort)。
+
+**根因链** (macOS IL2CPP 泛型共享, Windows 版无此问题):
+- `WitchBookPageBase<T>._itemIds` 声明为 `T[]`, 页面类按 T 实例化:
+  `CluePage`→`Graphic[]`, `NotePage`→`Canvas[]`, `Profile/Rule`→`String[]` (Windows 全是 `string[]`)。
+- 游戏自身 `WitchBookPageBase.UpdateVersion` 里 `_itemIds.Contains(id)` 的**共享体**
+  把数组强转 `IEnumerable<string>` → 类型检查失败 → **MethodAccessException**
+  ("Attempt to access method 'IEnumerable<string>.GetEnumerator' on type 'UnityEngine.UI.Graphic[]' failed")。
+- 审判存档加载/`@update` 命令必然走到这里 → 原版 macOS 自身缺陷。
+
+**加载器的双重角色**:
+1. 放大器: 注入写 `string[]` 进 `Graphic[]` 字段 = 内存破坏, 且注入的 mod 状态让
+   场景重建路径更频繁触发 UpdateVersion。→ 修复 a。
+2. 受害者: 即使加载器完全不写, 游戏自己照样会炸 (纯原版偶发)。→ 修复 b。
+
+**修复 a — 写入守卫** (`utils.fieldIsStringArray`): 所有 `_itemIds` 写入点
+(`appendItemIds` / `rebuildItemIdsFromMap` / `clearModItemsFromPage` 第 3 段)
+先验证运行时类型, 非 `String[]` 绝不写入 (防内存破坏)。
+
+**修复 b — 换数组根治** (`utils.ensureItemIdsString`, 2026-08-04):
+- hook 各页面类 + `WitchBookPageBase` 的 `UpdateVersion` (1-3 参, methodPointer 去重)
+  `onEnter` → 若 `_itemIds` 非 `String[]`, 从 `_loadedDataItemMap` 提取全部 id
+  **重建真 `string[]` 写回** (内容 = Windows 语义的 id 集合) → 游戏原逻辑
+  (Contains 门 + SetVersion) 完整执行 → MAE 无源, **崩溃与黑屏同时消灭**,
+  原版审判状态设置恢复正常。
+- 所有加载器写入点也先 `ensureItemIdsString` 再写 (CluePage 的追加逻辑随之恢复)。
+
+**风险/遗留**: 换数组后游戏其它读 `_itemIds` 的位置 (若有) 语义未验证 ——
+当前证据 (Windows mod 只靠 `_itemIds` 做 Contains 门) 表明安全, 待长期回归确认。
+
+### 7.2 其它已踩坑
+
+- `il2cpp_class_get_field_from_name` / `class_get_method_from_name` 只查本类声明,
+  基类字段/方法需沿 `il2cpp_class_get_parent` 走链 (walkCls)。
+- `Il2CppDumper` 在 macOS 上不可用 (CodeRegistration/MetadataRegistration 解析不出,
+  `il2cpp_codegen_register` 非导出符号)。
+- 探针/诊断脚本 (probe_*.js) 必须作为**独立** `create_script` 附加 —
+  📦 bundle 的 fragment 是模块资产, 不被 import 就不会执行。

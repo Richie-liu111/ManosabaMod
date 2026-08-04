@@ -1,6 +1,6 @@
 // ============ WitchBook 会话隔离域: mod 切换检测 / 整页重建 / 状态清理 / 面板默认值 ============
 // 镜像 Windows ModClueLoader + ModWitchBookPatch: mod 切换/回标题时从原版基座重建, 防残留继承
-import { A, fieldOffset, findAllObjectOfType, findFirstObjectOfType, findSvc, getGenericArgClass, getSystemClass, invoke, invokeOk, listContainsId, makeS, readStr, wblog } from "../utils.js";
+import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, findFirstObjectOfType, findSvc, getGenericArgClass, getSystemClass, invoke, invokeOk, listContainsId, makeS, readStr, wblog } from "../utils.js";
 import { wbCats, currentModSet, localeValue, makeIdVersionPair, unionLocaleKeys } from "./data.js";
 import { initCatStateMaps, setWbCurrentMod, setWbDefaultsCaptured, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbDefaultsCaptured, wbPageDefaults, wbVanillaMap } from "./state.js";
 import { getFirstDictValue } from "./pages.js";
@@ -64,6 +64,8 @@ export function rebuildItemIdsFromMap(page, pageCls, mapList, vItemCls, idOff) {
             var id = readStr(e.add(idOff).readPointer());
             if (id && ids.indexOf(id) === -1) ids.push(id);
         }
+        // macOS 守卫: 先修复泛型共享实例化差异 (Graphic[]/Canvas[] → String[]), 再写
+        ensureItemIdsString(page, pageCls);
         var strCls = getSystemClass("String");
         var narr = A.an(strCls, ids.length);
         for (var i = 0; i < ids.length; i++) narr.add(0x20 + i * 8).writePointer(makeS(ids[i]));
@@ -257,20 +259,22 @@ export function clearModItemsFromPage(page, pageCls, idSet) {
                 for (var di = 0; di < toDel.length; di++) invokeOk(rmD, outer, [toDel[di]]);
             }
         }
-        // 3) _itemIds (string[]): 重建
-        var idsField = fieldOffset(pageCls, "_itemIds", 0x98);
-        var old = page.add(idsField).readPointer();
-        if (!old.isNull()) {
-            var keep = [];
-            var olen = old.add(0x18).readS32();
-            for (var oi = 0; oi < olen; oi++) {
-                var s = readStr(old.add(0x20 + oi * 8).readPointer());
-                if (s && !idSet[s]) keep.push(s);
+        // 3) _itemIds: 重建 (先修复泛型共享实例化差异, 再按 idSet 过滤)
+        if (ensureItemIdsString(page, pageCls)) {
+            var idsField = fieldOffset(pageCls, "_itemIds", 0x98);
+            var old = page.add(idsField).readPointer();
+            if (!old.isNull()) {
+                var keep = [];
+                var olen = old.add(0x18).readS32();
+                for (var oi = 0; oi < olen; oi++) {
+                    var s = readStr(old.add(0x20 + oi * 8).readPointer());
+                    if (s && !idSet[s]) keep.push(s);
+                }
+                var strCls = getSystemClass("String");
+                var narr = A.an(strCls, keep.length);
+                for (var ki = 0; ki < keep.length; ki++) narr.add(0x20 + ki * 8).writePointer(makeS(keep[ki]));
+                page.add(idsField).writePointer(narr);
             }
-            var strCls = getSystemClass("String");
-            var narr = A.an(strCls, keep.length);
-            for (var ki = 0; ki < keep.length; ki++) narr.add(0x20 + ki * 8).writePointer(makeS(keep[ki]));
-            page.add(idsField).writePointer(narr);
         }
         // 4) _state._list (List<IdVersionPair>): 移除 Id ∈ idSet
         removeStateEntries(page, pageCls, idSet);
