@@ -247,7 +247,20 @@ RVA 0x3404d4 完全一致; 不加载任何 mod 也会发生, 加载 mod 后概�
 **风险/遗留**: 换数组后游戏其它读 `_itemIds` 的位置 (若有) 语义未验证 ——
 当前证据 (Windows mod 只靠 `_itemIds` 做 Contains 门) 表明安全, 待长期回归确认。
 
-### 7.2 其它已踩坑
+### 7.2 @char SubId 立绘残留 (剧本用法层, 非加载器缺陷)
+
+**已确认事实**: `@char SubId:"Middle" <char>.<appearance>` (如 BoneWingEma 的
+`SubId:"Middle" gyEma-Ch2.8`) 显示的立绘在回标题后**不被清除**;
+无 SubId 用法的 mod (Rewind) 无残留 → SubId 是差异因素 (A/B 确认)。
+
+**机制 (推断, 未引擎级实锤)**: SubId 是 Naninovel 的**槽位参数** — 带 SubId 时 actor
+实例注册为复合 key `{charId}-{SubId}` (同屏可显示同一角色多实例); 回标题时引擎的
+舞台清理按角色 id 遍历移除, 复合 key 的 SubId 实例找不到 → 留在舞台上 → 残留。
+
+**性质**: 剧本用法层的显示特性, 不影响崩溃/数据; 作者可用 `@hideChars` 或指定槽位
+清除。原版剧本同样受此规则约束。
+
+### 7.3 其它已踩坑
 
 - `il2cpp_class_get_field_from_name` / `class_get_method_from_name` 只查本类声明,
   基类字段/方法需沿 `il2cpp_class_get_parent` 走链 (walkCls)。
