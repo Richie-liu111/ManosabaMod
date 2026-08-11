@@ -1,6 +1,6 @@
 // ============ WitchBook 纹理域: PNG → Texture2D → AddressablesManager._loadedAssets ============
 // 缩略图 + @spawn ClueItem 共用; 镜像 Windows ModTextureHelper
-import { A, fieldOffset, findAllObjectOfType, findClassAcrossImages, getSystemClass, invokeOk, makeS, nv, readStr, wblog } from "../utils.js";
+import { A, fieldOffset, findAllObjectOfType, findClassAcrossImages, getSystemClass, invokeOk, makeS, nv, readStr, wblog, dbg, error, warn } from "../utils.js";
 import { fileReadBytes } from "../io.js";
 import { wbCls, wbData } from "./state.js";
 import { currentModIds, wbCats } from "./data.js";
@@ -12,7 +12,7 @@ export function loadModTexture(id) {
     if (!path) return null;
     try {
         var fb = fileReadBytes(path);
-        if (!fb || fb.size <= 0) { wblog("读取纹理失败 '" + id + "'"); return null; }
+        if (!fb || fb.size <= 0) { warn("读取纹理失败 '" + id + "'"); return null; }
         var byteCls = getSystemClass("Byte");
         var barr = A.an(byteCls, fb.size);
         // byte[] 是值类型数组, 数据从 +0x20 起原始字节
@@ -23,13 +23,13 @@ export function loadModTexture(id) {
         var ctorMi = A.cgm(wbCls.texture2d, Memory.allocUtf8String(".ctor"), 2);
         if (ctorMi && !ctorMi.isNull()) invokeOk(ctorMi, tex, [wbuf, hbuf]);
         var liMi = A.cgm(wbCls.imageConversion, Memory.allocUtf8String("LoadImage"), 2);
-        if (!liMi || liMi.isNull()) { wblog("ImageConversion.LoadImage NOT FOUND"); return null; }
+        if (!liMi || liMi.isNull()) { warn("ImageConversion.LoadImage NOT FOUND"); return null; }
         var r = invokeOk(liMi, ptr(0), [tex, barr]);   // 静态
-        if (!r.ok) { wblog("LoadImage 失败 '" + id + "'"); return null; }
+        if (!r.ok) { warn("LoadImage 失败 '" + id + "'"); return null; }
         wbData.texCache[id] = tex;
-        wblog("纹理加载 '" + id + "' -> " + tex);
+        dbg("纹理加载 '" + id + "' -> " + tex);
         return tex;
-    } catch (e) { wblog("loadModTexture err '" + id + "': " + e); return null; }
+    } catch (e) { error("loadModTexture err '" + id + "': " + e); return null; }
 }
 export function findAddressablesManager() {
     // 1) 各页面 _addressableAssetLoader (同一 AddressablesManager 单例)
@@ -65,13 +65,13 @@ export function registerTexturesInto(managerPtr) {
     try {
         // 未指定时用全局 AddressablesManager 服务 (镜像 Windows ServiceLocator.Get<IAddressablesManager>)
         if (!managerPtr || managerPtr.isNull()) managerPtr = findAddressablesManager();
-        if (!managerPtr || managerPtr.isNull()) { wblog("AddressablesManager 未找到"); return; }
+        if (!managerPtr || managerPtr.isNull()) { warn("AddressablesManager 未找到"); return; }
         var mgrCls = A.ogc(managerPtr);
         var dict = managerPtr.add(fieldOffset(mgrCls, "_loadedAssets", 0x18)).readPointer();
-        if (dict.isNull()) { wblog("AddressablesManager._loadedAssets 为 null"); return; }
+        if (dict.isNull()) { warn("AddressablesManager._loadedAssets 为 null"); return; }
         var dictCls = A.ogc(dict);
         var addMi = A.cgm(dictCls, Memory.allocUtf8String("Add"), 2);
-        if (!addMi || addMi.isNull()) { wblog("Dict.Add NOT FOUND"); return; }
+        if (!addMi || addMi.isNull()) { warn("Dict.Add NOT FOUND"); return; }
         // 收集当前 mod 所有带纹理的条目 (clue/profile)
         var texIds = [], catNames = Object.keys(wbCats);
         for (var ci = 0; ci < catNames.length; ci++) {
@@ -94,7 +94,7 @@ export function registerTexturesInto(managerPtr) {
             if (invokeOk(addMi, dict, [makeS(addr), tex]).ok) count++;
         }
         if (count > 0) wblog("Addressables 注册 " + count + " 张纹理");
-    } catch (e) { wblog("registerTexturesInto err: " + e); }
+    } catch (e) { error("registerTexturesInto err: " + e); }
 }
 export function dictContainsKey(dict, key) {
     try {

@@ -34,6 +34,12 @@ GAME="${GAME:-$GAME_DIR/manosaba.app/Contents/MacOS/manosaba}"
 SCRIPT="$PWD/dist/manosabamod.js"
 MOD_ROOT="${1:-$GAME_DIR/ManosabaMod}"
 
+# 日志系统: modlog.txt 默认在游戏根 (每运行截断重开), MOD_LOG 可覆盖;
+# MOD_NO_COLOR=1 关闭终端颜色 (重定向/全量捕获时用: MOD_NO_COLOR=1 ./run_mod.sh > all.log)
+MOD_LOG="${MOD_LOG:-$GAME_DIR/modlog.txt}"
+MOD_NO_COLOR="${MOD_NO_COLOR:-0}"
+PLAYER_LOG="$HOME/Library/Logs/Re,AER/manosaba/Player.log"
+
 if [ ! -f "$GAME" ]; then echo "错误: 找不到游戏 $GAME"; exit 1; fi
 
 # 构建: src/ 是唯一源码源, frida-compile 打包成 dist/manosabamod.js (多文件 → 单 bundle)
@@ -62,16 +68,25 @@ fi
 
 echo ">>> 游戏: $GAME"
 echo ">>> 脚本: $SCRIPT"
+echo ">>> Mod 日志: $MOD_LOG (MOD_DEBUG=${MOD_DEBUG:-0})"
 
 # 导出环境变量给 Python (heredoc 用带引号形式, 避免转义被 shell 处理)
-export GAME SCRIPT MOD_ROOT MOD_DEBUG
+export GAME SCRIPT MOD_ROOT MOD_DEBUG MOD_LOG MOD_NO_COLOR PLAYER_LOG
 $PY << 'ENDPY'
-import frida, time, json, os
+import frida, time, json, os, re, sys
 
 GAME = os.environ['GAME']
 SCRIPT = os.environ['SCRIPT']
 MOD_ROOT = os.environ['MOD_ROOT']
 MOD_DEBUG = os.environ.get('MOD_DEBUG') == '1'
+MOD_LOG = os.environ.get('MOD_LOG') or ''
+MOD_NO_COLOR = os.environ.get('MOD_NO_COLOR') == '1'
+PLAYER_LOG = os.environ.get('PLAYER_LOG') or ''
+IS_TTY = sys.stdout.isatty()
+# 关键事实 (2026-08-10 实证): 本 setup 中 bundle 的 console.log 不经 frida 消息桥,
+# 由 V8 runtime 直接写到游戏进程的 stdout 副本 (spawn 保留的父进程 fd) → 剥色必须在 JS 侧:
+# 非 TTY (重定向/管道) 或 MOD_NO_COLOR=1 时注入 MOD_NO_COLOR=true → log.js 输出明文。
+JS_NO_COLOR = (not IS_TTY) or MOD_NO_COLOR
 
 JS_BASE = open(SCRIPT, encoding='utf-8').read()
 
@@ -160,9 +175,9 @@ def build_menu_text(mods):
          "@ClearBacklog\n@goto {nextScenario}\n"
     return t
 
-menu_dir = os.path.join(MOD_ROOT, 'TaffyModLoader', 'Scripts')
+menu_dir = os.path.join(MOD_ROOT, 'ModLoader', 'Scripts')
 os.makedirs(menu_dir, exist_ok=True)
-menu_path = os.path.join(menu_dir, 'TaffyStart.nani')
+menu_path = os.path.join(menu_dir, 'ModStart.nani')
 with open(menu_path, 'w', encoding='utf-8') as f:
     f.write(build_menu_text(mods))
 print(f'>>> 已写入菜单文件: {menu_path}')
@@ -170,14 +185,22 @@ print(f'>>> 已写入菜单文件: {menu_path}')
 # 📦 asset bundle 必须以 📦 开头 (frida 走 asset 编译); 变量经 Script.evaluate fragment 注入全局 (frida-tools REPL 同机制)
 MOD_DEBUG_JS = 'var MOD_DEBUG=true;' if MOD_DEBUG else ''
 NO_UPDATE_JS = 'var NO_UPDATE_HOOK=true;' if os.environ.get('NO_UPDATE_HOOK') == '1' else ''
-inject_code = f'var modList={mods_str};var MOD_ROOT={json.dumps(MOD_ROOT)};var movieMap={movie_map_json};{MOD_DEBUG_JS}{NO_UPDATE_JS}'
+# MOD_LOG/MOD_NO_COLOR 用 json.dumps (路径含空格/中文安全); 空 MOD_LOG → JS 端走默认兜底路径
+inject_code = ('var modList=%s;var MOD_ROOT=%s;var movieMap=%s;var MOD_LOG=%s;var MOD_NO_COLOR=%s;'
+               % (mods_str, json.dumps(MOD_ROOT), movie_map_json, json.dumps(MOD_LOG), json.dumps(JS_NO_COLOR))) \
+              + MOD_DEBUG_JS + NO_UPDATE_JS
 inj = 'Script.evaluate("mod-vars", %s);' % json.dumps(inject_code)
 inj_frag = f"{len(inj.encode('utf-8'))} /frida/mod-vars.js\n✄\n{inj}"
 bundle_body = JS_BASE[2:] if JS_BASE.startswith("📦\n") else JS_BASE
 FULL_JS = "📦\n" + inj_frag + "\n✄\n" + bundle_body
-# 崩溃诊断探针 (probe_embed.js, 临时): 独立 frida 脚本附加, 不塞进 📦 包
-# (v8 下 📦 包内多出的 fragment 只是模块资产不会被执行; 独立脚本 = standalone 探针同机制)
-_probe_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'probe_embed.js')
+# ===== probe_embed.js 崩溃诊断探针 (已停用, 仅保留说明) =====
+# 用途: 2026-08-04 排查"原版审判环节偶发崩溃"(_itemIds=Graphic[] 泛型共享 → Contains 抛 MAE)
+# 的临时诊断脚本。独立 frida 脚本附加(不走 📦 包, 与 📦 内 fragment 相互独立), 钩
+# GameAssembly+0x3404d4 转储异常对象 + 原生栈, 按异常类型做 5 条/类 廉价过滤。
+# 2026-08-11: 诊断已完成 + 探针日志是良性 OperationCanceledException(UniTask 异步取消)噪音,
+# 游戏目录探针文件已删除, 此处调用一并停用。
+# 以后若再排查崩溃: 把 probe_embed.js 放回 run_mod.sh 同级目录, 再取消下面两段注释即可重新附加。
+#_probe_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'probe_embed.js')
 
 print(f'>>> 发现 {len(mods)} 个 Mod')
 for m in mods:
@@ -195,6 +218,7 @@ pid = device.spawn([GAME])
 session = device.attach(pid)
 # runtime="v8": frida-compile 17 的 📦 asset bundle 需要 V8 runtime 编译 (QuickJS 默认不支持)
 def on_msg(m, d):
+    # 注意: bundle 的 console.log 不经此回调 (见 JS_NO_COLOR 注释); 这里只兜底 frida 错误消息等
     s = m.get('payload', '') or m.get('description', '')
     try:
         print(s, flush=True)
@@ -203,12 +227,12 @@ def on_msg(m, d):
 script = session.create_script(FULL_JS, runtime="v8")
 script.on('message', on_msg)
 script.load()
-if os.path.isfile(_probe_path):
-    probe_code = open(_probe_path, encoding='utf-8').read()
-    pscript = session.create_script(probe_code, runtime="v8")
-    pscript.on('message', on_msg)
-    pscript.load()
-    print('>>> 已附加探针 (probe_embed.js, %d 字节, 独立脚本; 删除该文件可撤销)' % len(probe_code.encode('utf-8')))
+# if os.path.isfile(_probe_path):
+#     probe_code = open(_probe_path, encoding='utf-8').read()
+#     pscript = session.create_script(probe_code, runtime="v8")
+#     pscript.on('message', on_msg)
+#     pscript.load()
+#     print('>>> 已附加探针 (probe_embed.js, %d 字节, 独立脚本; 删除该文件可撤销)' % len(probe_code.encode('utf-8')))
 device.resume(pid)
 print(f'>>> 游戏已启动 (PID={pid}) | Ctrl+C 停止')
 try:
@@ -216,4 +240,7 @@ try:
 except KeyboardInterrupt:
     session.detach()
     print('\n>>> 已停止')
+    print('>>> Mod 日志: %s (MOD_DEBUG=%s)' % (MOD_LOG or '<游戏根>/modlog.txt', MOD_DEBUG))
+    if PLAYER_LOG and os.path.isfile(PLAYER_LOG):
+        print('>>> Unity 日志: %s' % PLAYER_LOG)
 ENDPY

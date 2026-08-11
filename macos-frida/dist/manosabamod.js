@@ -1,17 +1,19 @@
 📦
-30662 /src/entry.js
-2556 /src/io.js
-15039 /src/menu.js
+31900 /src/entry.js
+1938 /src/banner.js
+4173 /src/io.js
+6046 /src/log.js
+15030 /src/menu.js
 5211 /src/movie.js
-7940 /src/providers.js
-19588 /src/utils.js
-19304 /src/witchbook/characters.js
-13412 /src/witchbook/data.js
-14454 /src/witchbook/index.js
-11313 /src/witchbook/pages.js
-28893 /src/witchbook/session.js
+7948 /src/providers.js
+21197 /src/utils.js
+19310 /src/witchbook/characters.js
+13419 /src/witchbook/data.js
+14547 /src/witchbook/index.js
+11323 /src/witchbook/pages.js
+28903 /src/witchbook/session.js
 1742 /src/witchbook/state.js
-6336 /src/witchbook/textures.js
+6346 /src/witchbook/textures.js
 ✄
 import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, wblog } from "./utils.js";
 import { setupMovieHooks } from "./movie.js";
@@ -21,6 +23,14 @@ import { resetWitchBookSession } from "./witchbook/session.js";
 import { setupWitchBookHooks } from "./witchbook/index.js";
 import { registerTexturesInto } from "./witchbook/textures.js";
 import { wbCls } from "./witchbook/state.js";
+import { initLog, installCrashHandler, logLevel } from "./log.js";
+import { printStartupBanner } from "./banner.js";
+// ============ 日志系统初始化 (顶层最先: 覆盖整个 init, 含 GameAssembly 加载失败) ============
+// MOD_LOG/MOD_NO_COLOR 由 run_mod.sh 的 fragment 注入全局; initLog 早于首个 wblog (doInit)
+initLog((typeof MOD_LOG !== "undefined" && MOD_LOG) ? MOD_LOG : null, typeof MOD_NO_COLOR !== "undefined" && MOD_NO_COLOR);
+installCrashHandler();
+// MOD 初始化横幅: 角色 ASCII 艺术 + 项目声明 (打印时文件已开, 终端彩色 / modlog.txt 明文)
+printStartupBanner();
 // ============ Steam 绕过 (Phase 1) ============
 try {
     var dl = Module.findGlobalExportByName("dlopen");
@@ -396,21 +406,24 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
             }
         // ===== 捕获 Unity 错误日志 =====
         // dumpObj 输出游戏侧错误详情 — 全量保留 (不随 MOD_DEBUG 开关), 是最高优先级信息 (ARCHIVE 教训 2)
-        function dumpObj(obj, tag) {
+        // 级别路由: LogError/LogException→ERROR(红), LogWarning→WARN(黄), Log→INFO(青); 进终端+文件
+        function dumpObj(obj, tag, level) {
+            if (level === undefined)
+                level = 0; // 默认按错误处理
             if (!obj || obj.isNull()) {
-                console.log("[v3] " + tag + ": <null>");
+                logLevel(level, "[v3] " + tag + ": <null>");
                 return;
             }
             try {
                 var cls = A.ogc(obj);
                 var cn = cls ? A.cgn(cls).readCString() : "?";
-                console.log("[v3] " + tag + " obj=" + obj + " class=" + cn);
+                logLevel(level, "[v3] " + tag + " obj=" + obj + " class=" + cn);
                 // hexdump 前 48 字节
                 var hex = "";
                 for (var i = 0; i < 48; i++) {
                     hex += obj.add(i).readU8().toString(16).padStart(2, "0") + (i % 16 === 15 ? " " : "");
                 }
-                console.log("[v3] " + tag + " hex: " + hex);
+                logLevel(level, "[v3] " + tag + " hex: " + hex);
                 // 从 +0x14 走 UTF-16 到 null, 取完整字符串 (忽略可疑长度字段)
                 // 长读 2000: 崩溃同款异常的完整 C# 栈 (MethodAccessException 调用方) 会被截断
                 // 代理项跳过: 孤立 surrogate 会让 python print 抛 UnicodeEncodeError 打断日志流
@@ -429,7 +442,7 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                 try {
                     var full = collectUtf16(0x14, 2000);
                     if (full)
-                        console.log("[v3] " + tag + " FULL: " + full);
+                        logLevel(level, "[v3] " + tag + " FULL: " + full);
                 }
                 catch (e) { }
                 // 从多个起点走 UTF-16 到 null
@@ -437,13 +450,13 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                     try {
                         var s = collectUtf16(so, 2000);
                         if (s)
-                            console.log("[v3] " + tag + " +0x" + so.toString(16) + " utf16='" + s + "'");
+                            logLevel(level, "[v3] " + tag + " +0x" + so.toString(16) + " utf16='" + s + "'");
                     }
                     catch (e) { }
                 });
             }
             catch (e3) {
-                console.log("[v3] " + tag + " dump err: " + e3);
+                logLevel(level, "[v3] " + tag + " dump err: " + e3);
             }
         }
         try {
@@ -458,18 +471,22 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
             if (ueImg) {
                 var dbgCls = A.cfn(ueImg, Memory.allocUtf8String("UnityEngine"), Memory.allocUtf8String("Debug"));
                 if (dbgCls && !dbgCls.isNull()) {
+                    // 级别映射: LogError/LogException→ERROR(红), LogWarning→WARN(黄), Log→INFO(青)
+                    // → Naninovel 剧本提醒 (缺翻译/解析错等) 自动带级别/颜色/入文件
                     ["LogError", "LogException", "Log", "LogWarning"].forEach(function (mn) {
+                        var lv = (mn === "LogError" || mn === "LogException") ? 0
+                            : (mn === "LogWarning") ? 1 : 2;
                         for (var ac = 1; ac <= 2; ac++) {
                             var m = A.cgm(dbgCls, Memory.allocUtf8String(mn), ac);
                             if (m && !m.isNull()) {
-                                (function (mn2, ac2) {
+                                (function (mn2, ac2, lv2) {
                                     Interceptor.attach(m.readPointer(), {
                                         onEnter: function (a) {
                                             // Debug.LogError 等是静态方法 → 第一个参数在 a[0]
-                                            dumpObj(a[0], "Unity." + mn2 + "(" + ac2 + ")");
+                                            dumpObj(a[0], "Unity." + mn2 + "(" + ac2 + ")", lv2);
                                         }
                                     });
-                                })(mn, ac);
+                                })(mn, ac, lv);
                             }
                         }
                     });
@@ -552,9 +569,47 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
 })();
 
 ✄
-// ============ 原生文件 I/O (Frida 运行时无 File/readFileSync, 用 libc open/read/lseek) ============
-import { dbg } from "./utils.js";
+// 启动横幅: 角色 ASCII 画 (内嵌进 bundle, 运行时不读外部文件) + 项目声明
+import { logBanner, info } from "./log.js";
+export var BANNER_ART = `@@@@@@@@@@@~$@@@@A@~4$F@@@@PF~~~~~~~~~F4@@@@@@@@@@@@@@@@@@@@@@
+@@@@@@@@@MFR@4@@@ \`     ~                 ~~R@@@@@@@@@@@@@@@@@
+@@@@@@@@@@     ~~                             ~@@@@@@@@@@@@@@@
+@@@@@@@@@@@                                     ~@@@@@@@@@@@@@
+@@@@@@@@@@Py                                      #@@@@@@@@@@@
+@@@@@@$g=a- ~                                      $@@@@@@@@@@
+@@@@@@@@F                                          4@@@@@@@@@@
+@@@@F~\`                     g                       $@@@@@@@@@
+@@@@@@@gg-y-_           _,  $_                      4@@@@@@@@@
+@@@@@@@@Rgym^      ,    f' 4@@,.     ,   _          4@@@@@@@@@
+@@@@@@WP@$P       :          yB$gg$yy$   ^           @@@@@@@@@
+@@@@@$@@F\` _\\- _.i      agggg@@@@@@@@@y_   gw        $@@@@@@@@
+@@@@@@$y_  \` ~ g@"9     "@@@@@@@@@@@@@@@@@@$<        M@@@@@@@@
+@@@@@@@@@@F    \`         @$@@@@@@@@@@@@@@@P          L@@@@@@@@
+@@@@@@@@@@$_             ~@@@@@@@@@@@@@@@P~          l0@@@@@@@
+@@@@@@@@@@@@g y            \`~R@@@@@@@PF~              @@@@@@@@
+@@@@@@@@@@@@@y@                ~FT~y                  4M@@@@@@
+@@@@@@@@@@@@ F              Jgygg@@@ jy             _  '@@@@@@
+@@@@@@@@@@@Fy^               0@@@@@@@@@              @y 4@@@@@
+@@@@@@@@@@5y^              _g$$@@@@@@@$              \`E$ 9@@@@
+@@@@@@@@@y$\`              a@F\`"FTF~~@@$               \`@$"@@@@
+@@@@@@@@yF                9\`         4F       Z_       ~$ $@@@
+@@@@@@@F_aF      __         qy     g,         F$        \` 4@@@
+@@@@@@F,@~       \`WL       J@@     4$_  ^    sy'          4@@@
+`;
+export function printStartupBanner() {
+    logBanner(BANNER_ART);
+    info("早期测试版本，本人能力有限，不保证全功能稳定，欢迎提 PR 、issue 共同维护");
+    info("https://github.com/Richie-liu111/ManosabaMod");
+}
+
+✄
+// ============ 原生文件 I/O (Frida 运行时无 File/readFileSync, 用 libc open/read/lseek/write) ============
+// 读: fileReadString/fileReadBytes/fileExists/readJSONFile
+// 写: openForWrite/writeString/fileSync (日志系统 log.js 使用)
+// 注: io.js 不再 import utils.js (避免 utils→log→io→utils 环); 本地 iodbg 等价 (MOD_DEBUG 启动时定死)。
 var ioApi = null;
+function iodbg() { if (typeof globalThis !== "undefined" && globalThis.MOD_DEBUG)
+    console.log.apply(console, arguments); }
 export function getIO() {
     if (ioApi)
         return ioApi;
@@ -563,11 +618,13 @@ export function getIO() {
         return a ? new NativeFunction(a, ret, args) : null;
     };
     ioApi = {
-        open: mk("open", 'int', ['pointer', 'int']),
+        open: mk("open", 'int', ['pointer', 'int', 'int']),
         close: mk("close", 'int', ['int']),
         read: mk("read", 'int', ['int', 'pointer', 'uint']),
+        write: mk("write", 'long', ['int', 'pointer', 'uint']),
         lseek: mk("lseek", 'long', ['int', 'long', 'int']),
-        access: mk("access", 'int', ['pointer', 'int'])
+        access: mk("access", 'int', ['pointer', 'int']),
+        fsync: mk("fsync", 'int', ['int'])
     };
     return ioApi;
 }
@@ -576,7 +633,7 @@ export function fileReadString(path) {
         var io = getIO();
         if (!io.open)
             return null;
-        var fd = io.open(Memory.allocUtf8String(path), 0);
+        var fd = io.open(Memory.allocUtf8String(path), 0, 0);
         if (fd < 0)
             return null;
         var size = io.lseek(fd, 0, 2);
@@ -601,7 +658,7 @@ export function fileReadBytes(path) {
         var io = getIO();
         if (!io.open)
             return null;
-        var fd = io.open(Memory.allocUtf8String(path), 0);
+        var fd = io.open(Memory.allocUtf8String(path), 0, 0);
         if (fd < 0)
             return null;
         var size = io.lseek(fd, 0, 2);
@@ -634,23 +691,215 @@ export function readJSONFile(path) {
     try {
         var s = fileReadString(path);
         if (s === null) {
-            dbg("readJSONFile 读取失败 '" + path + "'");
+            iodbg("readJSONFile 读取失败 '" + path + "'");
             return null;
         }
         return JSON.parse(s);
     }
     catch (e) {
-        dbg("readJSONFile 解析失败 '" + path + "': " + e);
+        iodbg("readJSONFile 解析失败 '" + path + "': " + e);
         return null;
     }
+}
+// ===== 写入路径 (日志系统) =====
+export function openForWrite(path) {
+    try {
+        var io = getIO();
+        if (!io.open)
+            return -1;
+        // Darwin fcntl: O_WRONLY=0x0001 O_CREAT=0x0200 O_TRUNC=0x0400
+        return io.open(Memory.allocUtf8String(path), 0x0001 | 0x0200 | 0x0400, 0o644);
+    }
+    catch (e) {
+        return -1;
+    }
+}
+export function writeString(fd, s) {
+    try {
+        var io = getIO();
+        if (!io.write || fd < 0)
+            return -1;
+        var buf = Memory.allocUtf8String(s);
+        var len = 0;
+        while (buf.add(len).readU8() !== 0)
+            len++; // UTF-8 字节长 (扫 NUL, 免编码坑)
+        var off = 0;
+        while (off < len) {
+            var r = io.write(fd, buf.add(off), len - off); // 部分写入循环, r<=0 兜底
+            if (r <= 0)
+                break;
+            off += r;
+        }
+        return off;
+    }
+    catch (e) {
+        return -1;
+    }
+}
+export function fileSync(fd) {
+    try {
+        var io = getIO();
+        if (io.fsync && fd >= 0)
+            return io.fsync(fd);
+    }
+    catch (e) { }
+    return -1;
+}
+
+✄
+// ============ 日志系统: 级别 / 颜色 / 时间戳 / 文件写入 / 崩溃前 flush ============
+// 机制: bundle 内所有日志 (wblog/dbg/Unity dumpObj) 经此模块统一输出。
+//   console 彩色 (ERROR红/WARN黄/INFO青/DEBUG灰), 文件明文逐行同步写 (崩溃不丢已写行)。
+//   文件路径: MOD_LOG fragment (run_mod.sh 注入) 或可执行文件上溯到游戏根; 每运行截断重开。
+// 约束: 所有日志调用在 initLog 之后 (entry.js 顶层先 initLog 再装 crash handler)。
+import { openForWrite, writeString, fileSync } from "./io.js";
+export var LEVELS = { ERROR: 0, WARN: 1, INFO: 2, DEBUG: 3 };
+var LEVEL_TAG = ["ERROR", "WARN", "INFO", "DEBUG"];
+var LEVEL_COLOR = ["31", "33", "36", "90"]; // 红 / 黄 / 青 / 灰
+var _fd = -1, _path = null, _noColor = false, _initDone = false;
+function isDbg() { return typeof MOD_DEBUG !== "undefined" && MOD_DEBUG; }
+function ts() {
+    var d = new Date();
+    var p2 = function (n) { return (n < 10 ? "0" : "") + n; };
+    var p3 = function (n) { n = Math.floor(n); return (n < 100 ? "0" : "") + (n < 10 ? "0" : "") + n; };
+    return p2(d.getHours()) + ":" + p2(d.getMinutes()) + ":" + p2(d.getSeconds()) + "." + p3(d.getMilliseconds());
+}
+function isoDate() {
+    var d = new Date();
+    var p2 = function (n) { return (n < 10 ? "0" : "") + n; };
+    return d.getFullYear() + "-" + p2(d.getMonth() + 1) + "-" + p2(d.getDate());
+}
+// 兜底路径 (未走 run_mod.sh, 如 REPL): 从主模块可执行路径上溯 4 级到游戏根
+function defaultLogPath() {
+    try {
+        var p = Process.mainModule ? Process.mainModule.path : "";
+        if (p) {
+            var ps = p.split("/");
+            if (ps.length > 4)
+                return ps.slice(0, ps.length - 4).join("/") + "/modlog.txt";
+        }
+    }
+    catch (e) { }
+    return null;
+}
+export function initLog(path, noColor) {
+    if (_initDone)
+        return;
+    _initDone = true;
+    _noColor = !!noColor;
+    var p = path || defaultLogPath();
+    if (p) {
+        _fd = openForWrite(p);
+        if (_fd >= 0)
+            _path = p;
+    }
+    if (_fd < 0) {
+        try {
+            console.log("[v3][log] modlog 文件不可用: " + (p || "<未指定>") + " (仅终端)");
+        }
+        catch (e) { }
+        return;
+    }
+    // 会话头 (文件明文首段, 自描述)
+    var hdr = "[v3][" + isoDate() + " " + ts() + "][session] ==== manosabamod 运行开始 ====\n" +
+        "[v3][session] modlog=" + p + " MOD_DEBUG=" + isDbg() + " noColor=" + _noColor + "\n";
+    writeString(_fd, hdr);
+}
+function emit(level, args) {
+    var parts = [];
+    for (var i = 0; i < args.length; i++) {
+        var v = args[i];
+        parts.push(v === undefined ? "undefined" : v === null ? "null" : String(v));
+    }
+    var msg = parts.join(" ");
+    var line = "[v3][" + ts() + "][" + LEVEL_TAG[level] + "] " + msg;
+    if (_noColor)
+        console.log(line);
+    else
+        console.log("\x1b[" + LEVEL_COLOR[level] + "m" + line + "\x1b[0m");
+    if (_fd >= 0) {
+        // 文件明文: 无 ANSI; 消息内换行 → 续行缩进 4 格 (每条逻辑记录从列 0 开始, 好 grep)
+        var rec = line.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n/g, "\n    ");
+        writeString(_fd, rec + "\n");
+    }
+}
+export function error() { emit(LEVELS.ERROR, arguments); }
+export function warn() { emit(LEVELS.WARN, arguments); }
+export function info() { emit(LEVELS.INFO, arguments); }
+export function debug() { if (isDbg())
+    emit(LEVELS.DEBUG, arguments); }
+// dumpObj 等按级别路由的入口: logLevel(lv, ...args)
+export function logLevel(level) { emit(level, Array.prototype.slice.call(arguments, 1)); }
+// ASCII 横幅 (MOD 初始化阶段): 整块原样输出保持对齐, 不带逐行 [v3][ts][LEVEL] 前缀;
+// 终端青色 (36, 与 INFO 同系), 文件明文原样。约束同 emit (initLog 之后调用)。
+export function logBanner(art) {
+    if (!art)
+        return;
+    var lines = String(art).replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+    for (var i = 0; i < lines.length; i++) {
+        var ln = lines[i];
+        if (_noColor)
+            console.log(ln);
+        else
+            console.log("\x1b[36m" + ln + "\x1b[0m");
+        if (_fd >= 0)
+            writeString(_fd, ln + "\n");
+    }
+}
+// ===== 崩溃前 flush =====
+// 进程将崩溃时 (SIGSEGV/SIGABRT 等) 追加一条尾部标记到文件。回调运行在异常上下文,
+// 禁 console/RPC (死锁风险), 只做同步文件 write + fsync; 返回 false 放行 → 游戏崩溃行为不变。
+function crashLine(type, addr) {
+    if (_fd < 0)
+        return;
+    try {
+        var line = "[v3][" + ts() + "][FATAL] !!! CRASH signal=" + (type || "?") + " address=" + (addr ? addr.toString() : "0x0") + "\n";
+        writeString(_fd, line);
+        fileSync(_fd);
+    }
+    catch (e) { }
+}
+export function installCrashHandler() {
+    if (typeof Process === "undefined" || !Process.setExceptionHandler) {
+        installCrashHandlerFallback();
+        return;
+    }
+    try {
+        Process.setExceptionHandler(function (details) {
+            try {
+                crashLine(details && details.type, details && details.address);
+            }
+            catch (e) { }
+            return false; // 不链式转发 (返回语义未承诺), 直接放行崩溃
+        });
+    }
+    catch (e) {
+        installCrashHandlerFallback();
+    }
+}
+function installCrashHandlerFallback() {
+    // setExceptionHandler 不可用备选: 钩 abort / __pthread_kill(SIGABRT=6)
+    try {
+        var a = Module.findGlobalExportByName("abort");
+        if (a)
+            Interceptor.attach(a, { onEnter: function () { crashLine("abort", ptr(0)); } });
+        var k = Module.findGlobalExportByName("__pthread_kill");
+        if (k)
+            Interceptor.attach(k, { onEnter: function (ar) { try {
+                    if (ar[1] && ar[1].toInt32() === 6)
+                        crashLine("SIGABRT", ptr(0));
+                }
+                catch (e) { } } });
+    }
+    catch (e) { }
 }
 
 ✄
 // ============ 菜单域: 菜单文本 (含翻页, 回迁自 16h 版) + 剧本注册 + StartGame @goto 重定向 ============
 // 镜像 Windows AddModStartMenu (ModResourceLoader.cs) + HookStartGame
 import { A, dbg, findClassAcrossImages, findSvc, findUnityImg, gotoModifiedCls, invoke, invokeOk, makeLocalResourceProvider, makeNamedStringCtor, makeS, makeUnityObject, readStr } from "./utils.js";
-var modScriptPrefix = "TaffyModLoader";
-var modMenuScript = "TaffyStart";
+var modScriptPrefix = "ModLoader";
+var modMenuScript = "ModStart";
 // ============ 菜单文本 (镜像 Windows AddModStartMenu, 简化) ============
 // buildMenuText 采用 16h 版 (含翻页): 每页 perPage 条, # ChoiceList_<页> 标签, 上一页/下一页 + @Stop
 // (16h 回迁的唯一功能, 镜像 Windows AddModStartMenu 的 ChoiceList_<页> 方案)
@@ -967,7 +1216,7 @@ export function hookStartGame() {
                 var cmdCls = A.ogc(cmd);
                 if (gotoModifiedCls && !gotoModifiedCls.isNull() && cmdCls.equals(gotoModifiedCls)) {
                     dbg("[v3] 找到 StartGame 下的 GotoModified @ line " + i + ", cmd=" + cmd);
-                    // Path.SetValue(NamedString(value="TaffyStart", name=""))
+                    // Path.SetValue(NamedString(value="ModStart", name=""))
                     var pathObj = cmd.add(0x30).readPointer();
                     var nspCls = A.ogc(pathObj);
                     var svMi = A.cgm(nspCls, Memory.allocUtf8String("SetValue"), 1);
@@ -1108,7 +1357,7 @@ export function setupMovieHooks() {
 ✄
 // ============ provider 管线注册 (镜像 Windows AddModLoader, inflated 泛型版) ============
 // 含: 剧本/本地化/voice/audio/背景 provider 注入; 立绘注册在 witchbook/characters.js
-import { A, dbg, findClassAcrossImages, findSvc, getGenericArgClass, invoke, invokeOk, makeLocalResourceProvider, makeS, populateConvertersDict, wblog } from "./utils.js";
+import { A, dbg, findClassAcrossImages, findSvc, getGenericArgClass, invoke, invokeOk, makeLocalResourceProvider, makeS, populateConvertersDict, wblog, error, warn } from "./utils.js";
 import { addCharacterProviders } from "./witchbook/characters.js";
 // 把 provision source 插入 ResourceLoader 的 ProvisionSources
 export function insertProvisionSource(rl, lrp, prefix, tag) {
@@ -1210,12 +1459,12 @@ export function addBackgroundProviders(root, prefix) {
     try {
         var bm = findSvc("BackgroundManagerExtended");
         if (!bm) {
-            wblog("[v3] addBackgroundProviders: BackgroundManagerExtended NOT FOUND");
+            warn("[v3] addBackgroundProviders: BackgroundManagerExtended NOT FOUND");
             return;
         }
         var galMi = A.cgm(A.ogc(bm), Memory.allocUtf8String("GetAppearanceLoader"), 1);
         if (!galMi || galMi.isNull()) {
-            wblog("[v3] addBackgroundProviders: GetAppearanceLoader NOT FOUND");
+            warn("[v3] addBackgroundProviders: GetAppearanceLoader NOT FOUND");
             return;
         }
         var texFn = function () { return findClassAcrossImages("UnityEngine", "Texture2D"); };
@@ -1224,51 +1473,51 @@ export function addBackgroundProviders(root, prefix) {
             try {
                 var loader = invoke(galMi, bm, [makeS(backIds[i])]);
                 if (!loader || loader.isNull()) {
-                    wblog("[v3] 背景 loader '" + backIds[i] + "' 为空");
+                    warn("[v3] 背景 loader '" + backIds[i] + "' 为空");
                     continue;
                 }
                 var lrp = makeLocalResourceProvider(root);
                 if (lrp.isNull()) {
-                    wblog("[v3] 背景 LRP 创建失败 ('" + backIds[i] + "')");
+                    warn("[v3] 背景 LRP 创建失败 ('" + backIds[i] + "')");
                     continue;
                 }
                 if (!populateConvertersDict(lrp, "JpgOrPngToTextureConverter", texFn, "Backgrounds/" + backIds[i])) {
-                    wblog("[v3] 背景 converters 填充失败 ('" + backIds[i] + "')");
+                    warn("[v3] 背景 converters 填充失败 ('" + backIds[i] + "')");
                     continue;
                 }
                 insertProvisionSource(loader, lrp, prefix + "/Backgrounds/" + backIds[i], "Backgrounds/" + backIds[i]);
             }
             catch (e) {
-                wblog("[v3] 背景 '" + backIds[i] + "' 注入 err: " + e);
+                error("[v3] 背景 '" + backIds[i] + "' 注入 err: " + e);
             }
         }
         wblog("[v3] addBackgroundProviders 完成 (" + backIds.join("/") + ")");
     }
     catch (e) {
-        wblog("[v3] addBackgroundProviders err: " + e);
+        error("[v3] addBackgroundProviders err: " + e);
     }
 }
 export function addModLoader(root, prefix) {
     try {
         var sm = findSvc("ScriptManager");
         if (!sm) {
-            wblog("[v3] addModLoader: ScriptManager NOT FOUND (prefix='" + prefix + "')");
+            error("[v3] addModLoader: ScriptManager NOT FOUND (prefix='" + prefix + "')");
             return;
         }
         var rl = sm.add(0x28).readPointer();
         if (rl.isNull()) {
-            wblog("[v3] addModLoader: scriptLoader NULL (prefix='" + prefix + "')");
+            error("[v3] addModLoader: scriptLoader NULL (prefix='" + prefix + "')");
             return;
         }
         // 剧本 provider: LRP(MOD_ROOT) + NaniToScriptAssetConverter + ProvisionSource(prefix/Scripts)
         var lrp = makeLocalResourceProvider(root);
         if (lrp.isNull()) {
-            wblog("[v3] addModLoader: LRP 创建失败 (root='" + root + "')");
+            error("[v3] addModLoader: LRP 创建失败 (root='" + root + "')");
             return;
         }
         var scriptFn = function () { return findClassAcrossImages("Naninovel", "Script"); };
         if (!populateConvertersDict(lrp, "NaniToScriptAssetConverter", scriptFn, "Script")) {
-            wblog("[v3] addModLoader: Script converters 失败 ('" + prefix + "')");
+            error("[v3] addModLoader: Script converters 失败 ('" + prefix + "')");
             return;
         }
         insertProvisionSource(rl, lrp, prefix + "/Scripts", "addModLoader(Script)");
@@ -1282,7 +1531,7 @@ export function addModLoader(root, prefix) {
         addCharacterProviders(root, prefix);
     }
     catch (e) {
-        wblog("[v3] addModLoader err: " + e);
+        error("[v3] addModLoader err: " + e);
     }
 }
 
@@ -1298,11 +1547,16 @@ export var nv = null, cs = null, giga = null;
 export var allImgs = [];
 // GotoModified 类 (entry.js 解析, menu.js 的 hookStartGame 使用)
 export var gotoModifiedCls = null;
+// 日志输出统一走 log.js: console 彩色 (ERROR红/WARN黄/INFO青/DEBUG灰) + 文件明文 modlog.txt
+// wblog=INFO 默认显示; dbg=DEBUG 归 MOD_DEBUG (默认关)。导出名/签名不变 → 调用点零改动。
+import { debug as logDebug, info as logInfo, warn as logWarn, error as logError } from "./log.js";
 // 日志开关: 全局 MOD_DEBUG (run_mod.sh 可注入), 默认关
 export var MOD_DEBUG = (typeof globalThis !== "undefined" && globalThis.MOD_DEBUG) ? true : false;
 export function dbg() { if (MOD_DEBUG)
-    console.log.apply(console, arguments); }
-export function wblog(msg) { console.log("[v3][WitchBook] " + msg); }
+    logDebug.apply(null, arguments); }
+export function wblog(msg) { logInfo("[WitchBook] " + msg); }
+export function warn() { logWarn.apply(null, arguments); }
+export function error() { logError.apply(null, arguments); }
 // setter (ES modules import 绑定只读, 赋值必须在模块内; entry.js 初始化时调用)
 export function setImageHandles(nvImg, csImg, gigaImg) { nv = nvImg; cs = csImg; giga = gigaImg; }
 export function setGotoModifiedCls(c) { gotoModifiedCls = c; }
@@ -1467,7 +1721,7 @@ export function findSvc(name) {
     try {
         var el = A.cfn(nv, Memory.allocUtf8String("Naninovel"), Memory.allocUtf8String("Engine"));
         if (!el || el.isNull()) {
-            wblog("[v3] findSvc('" + name + "') FAIL: Engine class NOT FOUND (nv=" + nv + ", allImgs=" + allImgs.length + ")");
+            warn("[v3] findSvc('" + name + "') FAIL: Engine class NOT FOUND (nv=" + nv + ", allImgs=" + allImgs.length + ")");
             return null;
         }
         var f = A.gf(el, Memory.allocUtf8String("services"));
@@ -1482,11 +1736,11 @@ export function findSvc(name) {
             if (cn === name)
                 return ep;
         }
-        wblog("[v3] findSvc('" + name + "') NOT FOUND in " + sz + " services (nv=" + nv + ")");
+        warn("[v3] findSvc('" + name + "') NOT FOUND in " + sz + " services (nv=" + nv + ")");
         return null;
     }
     catch (e) {
-        wblog("[v3] findSvc('" + name + "') err: " + e + " (nv=" + nv + ", allImgs=" + allImgs.length + ")");
+        error("[v3] findSvc('" + name + "') err: " + e + " (nv=" + nv + ", allImgs=" + allImgs.length + ")");
         return null;
     }
 }
@@ -1559,15 +1813,34 @@ export function fieldIsStringArray(obj, cls, name) {
 export function ensureItemIdsString(page, cls) {
     try {
         var f = A.gf(cls, Memory.allocUtf8String("_itemIds"));
-        if (!f || f.isNull())
+        if (!f || f.isNull()) {
+            warn(A.cgn(cls).readCString() + "._itemIds 字段未找到");
             return false;
+        }
         var off = A.fo(f);
         var arr = page.add(off).readPointer();
-        if (!arr || arr.isNull())
-            return false;
-        var cn = A.cgn(A.ogc(arr)).readCString();
+        // 防御: arr 可能不是合法对象 (页面重建后字段偏移读到字符串数据), A.ogc 会原生访问违例。
+        // 用 isReadable 预检 + try 包裹, 拿到真实类型/实例类用于诊断。
+        var cn = "null";
+        if (arr && !arr.isNull()) {
+            try {
+                cn = A.cgn(A.ogc(arr)).readCString();
+            }
+            catch (e0) {
+                cn = "?不可读@0x" + arr;
+            }
+        }
+        var instCls = "";
+        try {
+            instCls = A.cgn(A.ogc(page)).readCString();
+        }
+        catch (e1) {
+            instCls = "?";
+        }
+        dbg(A.cgn(cls).readCString() + "._itemIds off=0x" + off.toString(16) + " val=" + arr + " type=" + cn + " 实例=" + instCls);
         if (cn.indexOf("String[") >= 0)
             return true; // 已是 string[], 无需换
+        // off=0x98 经各页面交叉验证是对的; val 悬空/垃圾正是要修的 → 一律用合法 String[] 覆盖
         var ids = [];
         // 首选: _loadedDataItemMap 的 id 集合 (游戏 Windows 语义: 已知条目集合)
         try {
@@ -1592,8 +1865,8 @@ export function ensureItemIdsString(page, cls) {
         catch (e1) {
             ids = [];
         }
-        // 回退: 从数组元素提取 (string 元素直接读; 对象元素读 _id 字段)
-        if (!ids.length) {
+        // 回退: 从数组元素提取 (string 元素直接读; 对象元素读 _id 字段) — 仅当数组可读时
+        if (!ids.length && arr && !arr.isNull() && Memory.isReadable(arr)) {
             var len = arr.add(0x18).readS32();
             if (len > 0 && len < 100000) {
                 var elemCls = ptr(0), elemIsStr = false, idOff = 0x10;
@@ -1613,13 +1886,13 @@ export function ensureItemIdsString(page, cls) {
                 }
             }
         }
-        if (!ids.length) {
-            wblog(A.cgn(cls).readCString() + "._itemIds " + cn + " 内容为空, 跳过重建");
+        // 兜底: map/数组都取不到也写合法 String[] (可能为空) — 空数组同样让游戏 Contains 安全返回 false,
+        // 不会再在 null/Graphic[] 上崩 (宁可空数组不显示, 也不留崩溃窗口)
+        var strCls = getSystemClass("String");
+        if (!strCls || strCls.isNull()) {
+            error(A.cgn(cls).readCString() + "._itemIds String 类未找到");
             return false;
         }
-        var strCls = getSystemClass("String");
-        if (!strCls || strCls.isNull())
-            return false;
         var na = A.an(strCls, ids.length);
         for (var i = 0; i < ids.length; i++)
             na.add(0x20 + i * 8).writePointer(makeS(ids[i]));
@@ -1628,6 +1901,7 @@ export function ensureItemIdsString(page, cls) {
         return true;
     }
     catch (e) {
+        error("ensureItemIdsString err(" + A.cgn(cls).readCString() + "): " + e);
         return false;
     }
 }
@@ -1674,7 +1948,7 @@ export function findAllObjectOfType(cls) {
         return out;
     }
     catch (e) {
-        wblog("findAllObjectOfType err: " + e);
+        error("findAllObjectOfType err: " + e);
         return [];
     }
 }
@@ -1780,7 +2054,7 @@ export function makeLocalResourceProvider(root) {
 ✄
 // ============ WitchBook 角色域: 立绘 provider 注册 + CharacterData/AuthorData 注入 + Profile 姓名覆写 ============
 // 镜像 Windows AddRichCharacter/AddSimpleCharacter + TryInjectCharacterData + TryInjectAuthorData + ProfilePageRefreshContent_Patch
-import { A, dbg, fieldOffset, findClassAcrossImages, findFirstObjectOfType, findSvc, invoke, invokeOk, listContainsId, makeLocalResourceProvider, makeS, populateConvertersDict, readStr, wblog } from "../utils.js";
+import { A, dbg, fieldOffset, findClassAcrossImages, findFirstObjectOfType, findSvc, invoke, invokeOk, listContainsId, makeLocalResourceProvider, makeS, populateConvertersDict, readStr, wblog, error, warn } from "../utils.js";
 import { wbCls, wbCurrentMod, wbData } from "./state.js";
 import { buildLocalizedTextArray, localeValue, pickLocaleText, resolveLocale, unionLocaleKeys } from "./data.js";
 // ===== 立绘 (Characters) 注册 — 镜像 Windows AddRichCharacter/AddSimpleCharacter + providersMap =====
@@ -1997,12 +2271,12 @@ export function injectCharacterData() {
         if (Object.keys(wbData.characters).length === 0)
             return;
         if (!wbCls.characterData || wbCls.characterData.isNull()) {
-            wblog("CharacterData 类未解析");
+            warn("CharacterData 类未解析");
             return;
         }
         var inst = findFirstObjectOfType(wbCls.characterData);
         if (!inst) {
-            wblog("CharacterData 实例未找到 (可能未加载)");
+            warn("CharacterData 实例未找到 (可能未加载)");
             return;
         }
         var items = inst.add(fieldOffset(wbCls.characterData, "_items", 0x18)).readPointer();
@@ -2027,7 +2301,7 @@ export function injectCharacterData() {
             if (ctorMi && !ctorMi.isNull()) {
                 var r = invokeOk(ctorMi, item, [makeS(ids[i]), nameArr, famArr, makeS(cc.age), makeS(cc.height), makeS(cc.weight)]);
                 if (!r.ok) {
-                    wblog("CharacterDataItem.ctor 失败 '" + ids[i] + "'");
+                    warn("CharacterDataItem.ctor 失败 '" + ids[i] + "'");
                     continue;
                 }
             }
@@ -2046,7 +2320,7 @@ export function injectCharacterData() {
             wblog("CharacterData 注入 " + added + " 个角色");
     }
     catch (e) {
-        wblog("injectCharacterData err: " + e);
+        error("injectCharacterData err: " + e);
     }
 }
 // ProfilePage.RefreshPageContent onLeave: 覆写 mod 新角色的姓名标签 (_authorLabel @0xB8)
@@ -2059,7 +2333,7 @@ export function hookProfileName() {
             return;
         var mi = A.cgm(cls, Memory.allocUtf8String("RefreshPageContent"), 1);
         if (!mi || mi.isNull()) {
-            wblog("ProfilePage.RefreshPageContent NOT FOUND");
+            warn("ProfilePage.RefreshPageContent NOT FOUND");
             return;
         }
         Interceptor.attach(mi.readPointer(), {
@@ -2100,7 +2374,7 @@ export function hookProfileName() {
         wblog("ProfilePage 姓名覆写 hook 就绪");
     }
     catch (e) {
-        wblog("hookProfileName err: " + e);
+        error("hookProfileName err: " + e);
     }
 }
 // 生成 AuthorData 模板 (镜像 Windows AuthorTaggedTextGenerator.BuildFullName: 姓首字大号带色 + 名首字次大号)
@@ -2142,12 +2416,12 @@ export function injectAuthorData() {
         if (Object.keys(wbData.characters).length === 0)
             return;
         if (!wbCls.authorData || wbCls.authorData.isNull()) {
-            wblog("AuthorData 类未解析");
+            warn("AuthorData 类未解析");
             return;
         }
         var inst = findFirstObjectOfType(wbCls.authorData);
         if (!inst) {
-            wblog("AuthorData 实例未找到 (可能未加载)");
+            warn("AuthorData 实例未找到 (可能未加载)");
             return;
         }
         var items = inst.add(fieldOffset(wbCls.authorData, "_items", 0x18)).readPointer();
@@ -2180,7 +2454,7 @@ export function injectAuthorData() {
             var item = A.on(itemCls);
             if (ctorMi && !ctorMi.isNull()) {
                 if (!invokeOk(ctorMi, item, [makeS(ids[i]), arr]).ok) {
-                    wblog("AuthorDataItem.ctor 失败 '" + ids[i] + "'");
+                    warn("AuthorDataItem.ctor 失败 '" + ids[i] + "'");
                     continue;
                 }
             }
@@ -2195,13 +2469,13 @@ export function injectAuthorData() {
             wblog("AuthorData 注入 " + added + " 个角色模板");
     }
     catch (e) {
-        wblog("injectAuthorData err: " + e);
+        error("injectAuthorData err: " + e);
     }
 }
 
 ✄
 // ============ WitchBook 数据域: 分类表 / 数据加载 / 版本项构建 / 本地化工具 ============
-import { A, dbg, fieldOffset, findClassAcrossImages, getGenericArgClass, invokeOk, makeS, wblog } from "../utils.js";
+import { A, dbg, fieldOffset, findClassAcrossImages, getGenericArgClass, invokeOk, makeS, wblog, error, warn } from "../utils.js";
 import { fileExists, readJSONFile } from "../io.js";
 import { setWbReady, wbData, wbCurrentMod, wbReady, wbCls } from "./state.js";
 import { registerLocalizedDict } from "./pages.js";
@@ -2253,7 +2527,7 @@ export function loadWitchBookData() {
         var key = modList[mi].key;
         var info = readJSONFile(root + "/" + key + "/info.json");
         if (!info) {
-            wblog("  " + key + ": info.json 读取/解析失败");
+            warn("  " + key + ": info.json 读取/解析失败");
             continue;
         }
         // 角色数据 (Profile 关联 + 立绘注册: Characters 完整角色 / SimpleCharacters 简单角色)
@@ -2278,11 +2552,11 @@ export function loadWitchBookData() {
         for (var cn = 0; cn < catNames.length; cn++) {
             var cat = wbCats[catNames[cn]];
             if (!cat || !cat.name) {
-                wblog("  cat 配置异常: key=" + catNames[cn]);
+                warn("  cat 配置异常: key=" + catNames[cn]);
                 continue;
             }
             if (!wbData[cat.name]) {
-                wblog("  wbData 缺分类 '" + cat.name + "', wbData 键=" + Object.keys(wbData).join(","));
+                warn("  wbData 缺分类 '" + cat.name + "', wbData 键=" + Object.keys(wbData).join(","));
                 return;
             }
             var groups = info[cat.field];
@@ -2294,7 +2568,7 @@ export function loadWitchBookData() {
                 if (!grp.Id || !grp.Items || !grp.Items.length)
                     continue;
                 if (wbData[cat.name][grp.Id]) {
-                    wblog("重复 " + cat.name + " ID '" + grp.Id + "' 跳过 (首个 mod 优先)");
+                    warn("重复 " + cat.name + " ID '" + grp.Id + "' 跳过 (首个 mod 优先)");
                     continue;
                 }
                 var rec = { key: key, versions: {}, path: null };
@@ -2387,7 +2661,7 @@ export function buildLocalizedTextArray(locObj) {
         }
         var arr = A.an(wbCls.localizedText, tags.length);
         if (!arr || arr.isNull()) {
-            wblog("LocalizedText[] 创建失败");
+            warn("LocalizedText[] 创建失败");
             return ptr(0);
         }
         var ctorMi = A.cgm(wbCls.localizedText, Memory.allocUtf8String(".ctor"), 2);
@@ -2403,7 +2677,7 @@ export function buildLocalizedTextArray(locObj) {
         return arr;
     }
     catch (e) {
-        wblog("buildLocalizedTextArray err: " + e);
+        error("buildLocalizedTextArray err: " + e);
         return ptr(0);
     }
 }
@@ -2478,7 +2752,7 @@ export function buildVersionedItemFor(cat, vItemCls, id, ver, rec) {
         return { vi: vi, ivp: ivp, id: id, ver: ver, cat: cat };
     }
     catch (e) {
-        wblog("buildVersionedItemFor err '" + id + "': " + e);
+        error("buildVersionedItemFor err '" + id + "': " + e);
         return null;
     }
 }
@@ -2490,7 +2764,7 @@ export function injectVersions(list, addMi, vItemCls, cat, id, rec, page) {
         if (!b || !b.vi || b.vi.isNull())
             continue;
         if (!invokeOk(addMi, list, [b.vi]).ok) {
-            wblog("List.Add 失败 '" + id + " v" + keys[i] + "'");
+            warn("List.Add 失败 '" + id + " v" + keys[i] + "'");
             continue;
         }
         added++;
@@ -2514,7 +2788,7 @@ export function injectVersions(list, addMi, vItemCls, cat, id, rec, page) {
 //   3. 显示: Interceptor.replace CluePage.RefreshPageContent / SetupItemButton —— mod 线索直接设
 //      _subjectLabel/_descriptionLabel/_thumbnail (绕开 _localizedTextData 的 KeyNotFoundException)。
 // 数据来源: 运行时读 <MOD_ROOT>/<modKey>/info.json 的 Clues 字段 + 扫 WitchBook/Clues/*.png。
-import { A, dbg, ensureItemIdsString, fieldOffset, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, wblog } from "../utils.js";
+import { A, dbg, ensureItemIdsString, fieldOffset, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, wblog, error, warn } from "../utils.js";
 import { initCatStateMaps, setWbCls, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbPrevMod } from "./state.js";
 import { isCurrentModItem, loadWitchBookData, wbCatByIdx, wbCats } from "./data.js";
 import { clearAllWitchBookPages, clearBookViaVanilla, detectCurrentMod, findAllPages, rebuildAllPages } from "./session.js";
@@ -2560,13 +2834,13 @@ export function setupWitchBookHooks() {
         for (var i = 0; i < catNames.length; i++)
             total += Object.keys(wbData[wbCats[catNames[i]].name]).length;
         if (total === 0) {
-            wblog("无 mod WitchBook 数据, 跳过");
+            warn("无 mod WitchBook 数据, 跳过");
             return;
         }
         setWbCls(resolveWitchBookClasses());
         if (!wbCls.pages.clue || wbCls.pages.clue.isNull() ||
             !wbCls.witchBookScreen || wbCls.witchBookScreen.isNull() || !wbCls.versionedState || wbCls.versionedState.isNull()) {
-            wblog("类解析失败 (pages/screen/versionedState)");
+            error("类解析失败 (pages/screen/versionedState)");
             return;
         }
         // @update 入口
@@ -2618,7 +2892,7 @@ export function setupWitchBookHooks() {
             }
         }
         catch (e) {
-            wblog("page UpdateVersion hook err: " + e);
+            error("page UpdateVersion hook err: " + e);
         }
         // Profile 姓名覆写 (mod 新角色显示格式化名字而非 ID)
         hookProfileName();
@@ -2628,7 +2902,7 @@ export function setupWitchBookHooks() {
                 var mi = A.cgm(wbCls.witchBookScreen, Memory.allocUtf8String(mn), 0);
                 if (mi && !mi.isNull())
                     Interceptor.attach(mi.readPointer(), { onEnter: function () {
-                            wblog(">>> WitchBook " + mn + " 触发");
+                            dbg(">>> WitchBook " + mn + " 触发");
                             tryInjectWitchBook(); // 内部处理 mod 切换清理 (状态+面板) + 注入
                         } });
             }
@@ -2644,7 +2918,7 @@ export function setupWitchBookHooks() {
                         try {
                             var cid = readStr(this._self.add(0x80).readPointer()); // _clueId @0x80
                             if (cid && wbData.clue[cid]) {
-                                wblog(">>> SpawnableClue mod 线索: '" + cid + "', 注册纹理");
+                                dbg(">>> SpawnableClue mod 线索: '" + cid + "', 注册纹理");
                                 registerTexturesInto(null); // 用全局 AddressablesManager
                             }
                         }
@@ -2673,7 +2947,7 @@ export function setupWitchBookHooks() {
         wblog("hooks 就绪");
     }
     catch (e) {
-        wblog("setupWitchBookHooks err: " + e + " | " + (e && e.stack ? e.stack.split("\n").slice(0, 3).join(" | ") : ""));
+        error("setupWitchBookHooks err: " + e + " | " + (e && e.stack ? e.stack.split("\n").slice(0, 3).join(" | ") : ""));
     }
 }
 export function tryInjectWitchBook() {
@@ -2705,9 +2979,10 @@ export function tryInjectWitchBook() {
         var pages2 = findAllPages();
         if (pages2.length)
             registerTexturesInto(pages2[0].add(fieldOffset(A.ogc(pages2[0]), "_addressableAssetLoader", 0x50)).readPointer());
+        wblog("tryInjectWitchBook 完成");
     }
     catch (e) {
-        wblog("tryInjectWitchBook err: " + e);
+        error("tryInjectWitchBook err: " + e);
     }
 }
 // MAE 诊断: 打印页面关键字段的运行时类型 (仅第一次 @update 时; 原版基座污染检查)
@@ -2742,13 +3017,13 @@ function dumpPageFieldTypes() {
                         parts.push(fields[fi] + "=err");
                     }
                 }
-                wblog("  [页面] " + pcn + " " + parts.join(" "));
+                dbg("  [页面] " + pcn + " " + parts.join(" "));
             }
             catch (e3) { }
         }
     }
     catch (e) {
-        wblog("dumpPageFieldTypes err: " + e);
+        error("dumpPageFieldTypes err: " + e);
     }
 }
 // @update 拦截: 按 WitchBookCategory 路由 (Clue=0 Profile=1 Map=2 Rule=3 Note=4)
@@ -2760,7 +3035,7 @@ export function onWitchBookUpdate(args) {
             return; // Map 分类暂不处理
         dumpPageFieldTypes(); // MAE 诊断: @update 时刻页面字段类型
         if (!id || !isCurrentModItem(cat, id)) {
-            wblog(">>> @update 忽略: category=" + (cat ? cat.name : idx) + " id='" + id + "' (非当前 mod 条目)");
+            dbg(">>> @update 忽略: category=" + (cat ? cat.name : idx) + " id='" + id + "' (非当前 mod 条目)");
             return;
         }
         if (!wbData.states[cat.name])
@@ -2770,15 +3045,16 @@ export function onWitchBookUpdate(args) {
         wbData.states[cat.name][id] = ver;
         wblog(">>> @update 拦截: category=" + cat.name + " id='" + id + "' version=" + ver);
         tryInjectWitchBook();
+        dbg(">>> onWitchBookUpdate 返回");
     }
     catch (e) {
-        wblog("onWitchBookUpdate err: " + e);
+        error("onWitchBookUpdate err: " + e);
     }
 }
 
 ✄
 // ============ WitchBook 页面注入域: 注入 Page._loadedDataItemMap + _itemIds + _state + 本地化字典预填 ============
-import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, getGenericArgClass, getSystemClass, invokeOk, listContainsId, makeS, readStr, wblog } from "../utils.js";
+import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, getGenericArgClass, getSystemClass, invokeOk, listContainsId, makeS, readStr, wblog, dbg, error, warn } from "../utils.js";
 import { wbCls, wbData, wbOverrides } from "./state.js";
 import { currentModIds, injectVersions, localeValue, resolveLocale, unionLocaleKeys } from "./data.js";
 import { clearModItemsFromPage, isVanillaId } from "./session.js";
@@ -2827,7 +3103,7 @@ export function injectPage(cat) {
         return true;
     }
     catch (e) {
-        wblog("injectPage err(" + cat.name + "): " + e);
+        error("injectPage err(" + cat.name + "): " + e);
         return false;
     }
 }
@@ -2837,7 +3113,7 @@ export function appendItemIds(page, cat) {
         var pageCls = wbCls.pages[cat.name];
         // macOS 守卫: _itemIds 运行时可能是 Graphic[]/Canvas[] (泛型共享实例化差异), 非 String[] 绝不写入
         if (!fieldIsStringArray(page, pageCls, "_itemIds")) {
-            wblog(cat.name + "Page._itemIds 非 String[] (macOS 泛型共享), 跳过追加");
+            warn(cat.name + "Page._itemIds 非 String[] (macOS 泛型共享), 跳过追加");
             return;
         }
         var idsField = fieldOffset(pageCls, "_itemIds", 0x98);
@@ -2868,7 +3144,7 @@ export function appendItemIds(page, cat) {
         wblog(cat.name + "Page._itemIds: +" + appended + " 纯新 ID, 共 " + newIds.length);
     }
     catch (e) {
-        wblog("appendItemIds err: " + e);
+        error("appendItemIds err: " + e);
     }
 }
 // 3) 状态: _state.SetVersion (各 State 都是 VersionedState 子类, 同步方法可 runtime_invoke)
@@ -2904,7 +3180,7 @@ export function applyStates(page, cat) {
         wblog(cat.name + "Page 状态应用 " + applied + " 条");
     }
     catch (e) {
-        wblog("applyStates err: " + e);
+        error("applyStates err: " + e);
     }
 }
 // 显示层: 预填 CluePage._localizedTextData (IReadOnlyDictionary<IdVersionPair, IReadOnlyDictionary<LocaleKind, LocalizedTexts>>)
@@ -2935,21 +3211,21 @@ export function registerLocalizedDict(page, b) {
         var dictField = fieldOffset(pageCls, "_localizedTextData", cat.locOff);
         var outer = page.add(dictField).readPointer();
         if (outer.isNull()) {
-            wblog(cat.name + "._localizedTextData 为 null, 跳过 '" + b.id + "'");
+            warn(cat.name + "._localizedTextData 为 null, 跳过 '" + b.id + "'");
             return;
         }
         var outerCls = A.ogc(outer);
         // 从现有值偷内层字典的具体实现类 (不能用泛型参数: 那是 IReadOnlyDictionary 接口, object_new 会崩)
         var sample = getFirstDictValue(outer);
         if (!sample) {
-            wblog(cat.name + "._localizedTextData 无现有值, 跳过 '" + b.id + "'");
+            warn(cat.name + "._localizedTextData 无现有值, 跳过 '" + b.id + "'");
             return;
         }
         var innerCls = A.ogc(sample);
         var innerName = A.cgn(innerCls).readCString();
         var addInner = A.cgm(innerCls, Memory.allocUtf8String("Add"), 2);
         if (!addInner || addInner.isNull()) {
-            wblog("内层字典无 Add (" + innerName + "), 跳过 '" + b.id + "'");
+            warn("内层字典无 Add (" + innerName + "), 跳过 '" + b.id + "'");
             return;
         }
         var vrec = wbData[cat.name][b.id].versions[String(b.ver)];
@@ -2957,7 +3233,7 @@ export function registerLocalizedDict(page, b) {
             return;
         var inner = A.on(innerCls);
         if (!invokeOk(A.cgm(innerCls, Memory.allocUtf8String(".ctor"), 0), inner, []).ok) {
-            wblog("内层字典 ctor 失败 '" + b.id + "'");
+            warn("内层字典 ctor 失败 '" + b.id + "'");
             return;
         }
         if (cat.locKind === "str") {
@@ -2982,7 +3258,7 @@ export function registerLocalizedDict(page, b) {
             }
             var ltsCtor = (ltsCls && !ltsCls.isNull()) ? A.cgm(ltsCls, Memory.allocUtf8String(".ctor"), 2) : null;
             if (!ltsCls || ltsCls.isNull() || !ltsCtor || ltsCtor.isNull()) {
-                wblog(cat.name + ".LocalizedTexts 类/ctor 未找到, 跳过 '" + b.id + "'");
+                warn(cat.name + ".LocalizedTexts 类/ctor 未找到, 跳过 '" + b.id + "'");
                 return;
             }
             var f1 = null, f2 = null;
@@ -3024,17 +3300,17 @@ export function registerLocalizedDict(page, b) {
             }
             catch (e) { }
         }
-        wblog(cat.name + "._localizedTextData 预填 '" + b.id + "' v" + b.ver + " (" + innerName + ")");
+        dbg(cat.name + "._localizedTextData 预填 '" + b.id + "' v" + b.ver + " (" + innerName + ")");
     }
     catch (e) {
-        wblog("registerLocalizedDict err '" + b.id + "': " + e);
+        error("registerLocalizedDict err '" + b.id + "': " + e);
     }
 }
 
 ✄
 // ============ WitchBook 会话隔离域: mod 切换检测 / 整页重建 / 状态清理 / 面板默认值 ============
 // 镜像 Windows ModClueLoader + ModWitchBookPatch: mod 切换/回标题时从原版基座重建, 防残留继承
-import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, findFirstObjectOfType, findSvc, getGenericArgClass, getSystemClass, invoke, invokeOk, listContainsId, makeS, readStr, wblog } from "../utils.js";
+import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, findFirstObjectOfType, findSvc, getGenericArgClass, getSystemClass, invoke, invokeOk, listContainsId, makeS, readStr, wblog, error, warn } from "../utils.js";
 import { wbCats, currentModSet, localeValue, makeIdVersionPair, unionLocaleKeys } from "./data.js";
 import { initCatStateMaps, setWbCurrentMod, setWbDefaultsCaptured, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbDefaultsCaptured, wbPageDefaults, wbVanillaMap } from "./state.js";
 import { getFirstDictValue } from "./pages.js";
@@ -3158,7 +3434,7 @@ export function restorePageFromData(page, pageCls, cat) {
         var snap = wbVanillaMap[cat.name];
         var ptrs = snap ? snap.items : null;
         if (!ptrs || !ptrs.length) {
-            wblog(cat.name + " 整页重建跳过 (快照未捕获)");
+            warn(cat.name + " 整页重建跳过 (快照未捕获)");
             return;
         }
         var mapList = page.add(fieldOffset(pageCls, "_loadedDataItemMap", 0x88)).readPointer();
@@ -3202,7 +3478,7 @@ export function restorePageFromData(page, pageCls, cat) {
         wblog(cat.name + " 整页重建: " + added + " 条 (原版基座)");
     }
     catch (e) {
-        wblog("restorePageFromData err: " + e);
+        error("restorePageFromData err: " + e);
     }
 }
 // 对所有分类页面做整页重建 (mod 切换/回标题时调用)
@@ -3226,7 +3502,7 @@ export function rebuildAllPages() {
         }
     }
     catch (e) {
-        wblog("rebuildAllPages err: " + e);
+        error("rebuildAllPages err: " + e);
     }
 }
 // 为恢复的原版条目构建 _localizedTextData 字典项
@@ -3280,7 +3556,7 @@ export function restoreVanillaDict(page, pageCls, cat, vi, vItemCls) {
             invokeOk(addOuter, outer, [ivp, inner]);
     }
     catch (e) {
-        wblog("restoreVanillaDict err: " + e);
+        error("restoreVanillaDict err: " + e);
     }
 }
 // 读 LocalizedText[] (LocalizedText: _locale@0x10 int, _text@0x18 string) → {localeTag: text}
@@ -3420,7 +3696,7 @@ export function clearModItemsFromPage(page, pageCls, idSet) {
             wblog("清除旧 mod 条目 " + removed + " 条");
     }
     catch (e) {
-        wblog("clearModItemsFromPage err: " + e);
+        error("clearModItemsFromPage err: " + e);
     }
 }
 // 从 _state._list 移除指定 id 的状态 (IdVersionPair.Id @+0x10)
@@ -3457,7 +3733,7 @@ export function removeStateEntries(page, pageCls, idSet) {
         }
     }
     catch (e) {
-        wblog("removeStateEntries err: " + e);
+        error("removeStateEntries err: " + e);
     }
 }
 // 清空页面 _state (仅保留 keepSet; keepSet=null 清空全部)
@@ -3495,7 +3771,7 @@ export function clearPageState(page, keepSet) {
             wblog("清空 " + A.cgn(A.ogc(page)).readCString() + " 状态 " + idxs.length + " 条");
     }
     catch (e) {
-        wblog("clearPageState err: " + e);
+        error("clearPageState err: " + e);
     }
 }
 // 面板默认值捕获/恢复: 页面首次出现(未被 mod 触碰)时读取原版默认文本+默认图,
@@ -3555,7 +3831,7 @@ export function capturePageDefaults(page) {
         wblog("已捕获 " + clsName + " 面板默认值 (" + Object.keys(d.labels).length + " 标签)");
     }
     catch (e) {
-        wblog("capturePageDefaults err: " + e);
+        error("capturePageDefaults err: " + e);
     }
 }
 export function restorePageDefaults(page) {
@@ -3612,7 +3888,7 @@ export function restorePageDefaults(page) {
         wblog("已恢复 " + clsName + " 面板默认值");
     }
     catch (e) {
-        wblog("restorePageDefaults err: " + e);
+        error("restorePageDefaults err: " + e);
     }
 }
 export function findAllPages() {
@@ -3695,7 +3971,7 @@ export function clearAllWitchBookPages() {
         }
     }
     catch (e) {
-        wblog("clearAllWitchBookPages err: " + e);
+        error("clearAllWitchBookPages err: " + e);
     }
 }
 export function findWitchBookUi() {
@@ -3721,12 +3997,12 @@ export function clearBookViaVanilla() {
     try {
         var ui = findWitchBookUi();
         if (!ui) {
-            wblog("clearBook: WitchBookUi 未找到");
+            warn("clearBook: WitchBookUi 未找到");
             return;
         }
         var mi = A.cgm(wbCls.witchBookUi, Memory.allocUtf8String("ClearState"), 1);
         if (!mi || mi.isNull()) {
-            wblog("clearBook: ClearState NOT FOUND");
+            warn("clearBook: ClearState NOT FOUND");
             return;
         }
         for (var c = 0; c <= 4; c++) { // Clue=0 Profile=1 Map=2 Rule=3 Note=4
@@ -3737,7 +4013,7 @@ export function clearBookViaVanilla() {
         wblog("clearBook: WitchBookUi.ClearState 全部 5 分类已调用");
     }
     catch (e) {
-        wblog("clearBook err: " + e);
+        error("clearBook err: " + e);
     }
 }
 
@@ -3783,7 +4059,7 @@ export function initCatStateMaps() {
 ✄
 // ============ WitchBook 纹理域: PNG → Texture2D → AddressablesManager._loadedAssets ============
 // 缩略图 + @spawn ClueItem 共用; 镜像 Windows ModTextureHelper
-import { A, fieldOffset, findAllObjectOfType, findClassAcrossImages, getSystemClass, invokeOk, makeS, nv, readStr, wblog } from "../utils.js";
+import { A, fieldOffset, findAllObjectOfType, findClassAcrossImages, getSystemClass, invokeOk, makeS, nv, readStr, wblog, dbg, error, warn } from "../utils.js";
 import { fileReadBytes } from "../io.js";
 import { wbCls, wbData } from "./state.js";
 import { currentModIds, wbCats } from "./data.js";
@@ -3797,7 +4073,7 @@ export function loadModTexture(id) {
     try {
         var fb = fileReadBytes(path);
         if (!fb || fb.size <= 0) {
-            wblog("读取纹理失败 '" + id + "'");
+            warn("读取纹理失败 '" + id + "'");
             return null;
         }
         var byteCls = getSystemClass("Byte");
@@ -3814,20 +4090,20 @@ export function loadModTexture(id) {
             invokeOk(ctorMi, tex, [wbuf, hbuf]);
         var liMi = A.cgm(wbCls.imageConversion, Memory.allocUtf8String("LoadImage"), 2);
         if (!liMi || liMi.isNull()) {
-            wblog("ImageConversion.LoadImage NOT FOUND");
+            warn("ImageConversion.LoadImage NOT FOUND");
             return null;
         }
         var r = invokeOk(liMi, ptr(0), [tex, barr]); // 静态
         if (!r.ok) {
-            wblog("LoadImage 失败 '" + id + "'");
+            warn("LoadImage 失败 '" + id + "'");
             return null;
         }
         wbData.texCache[id] = tex;
-        wblog("纹理加载 '" + id + "' -> " + tex);
+        dbg("纹理加载 '" + id + "' -> " + tex);
         return tex;
     }
     catch (e) {
-        wblog("loadModTexture err '" + id + "': " + e);
+        error("loadModTexture err '" + id + "': " + e);
         return null;
     }
 }
@@ -3874,19 +4150,19 @@ export function registerTexturesInto(managerPtr) {
         if (!managerPtr || managerPtr.isNull())
             managerPtr = findAddressablesManager();
         if (!managerPtr || managerPtr.isNull()) {
-            wblog("AddressablesManager 未找到");
+            warn("AddressablesManager 未找到");
             return;
         }
         var mgrCls = A.ogc(managerPtr);
         var dict = managerPtr.add(fieldOffset(mgrCls, "_loadedAssets", 0x18)).readPointer();
         if (dict.isNull()) {
-            wblog("AddressablesManager._loadedAssets 为 null");
+            warn("AddressablesManager._loadedAssets 为 null");
             return;
         }
         var dictCls = A.ogc(dict);
         var addMi = A.cgm(dictCls, Memory.allocUtf8String("Add"), 2);
         if (!addMi || addMi.isNull()) {
-            wblog("Dict.Add NOT FOUND");
+            warn("Dict.Add NOT FOUND");
             return;
         }
         // 收集当前 mod 所有带纹理的条目 (clue/profile)
@@ -3923,7 +4199,7 @@ export function registerTexturesInto(managerPtr) {
             wblog("Addressables 注册 " + count + " 张纹理");
     }
     catch (e) {
-        wblog("registerTexturesInto err: " + e);
+        error("registerTexturesInto err: " + e);
     }
 }
 export function dictContainsKey(dict, key) {

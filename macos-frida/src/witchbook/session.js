@@ -1,6 +1,6 @@
 // ============ WitchBook 会话隔离域: mod 切换检测 / 整页重建 / 状态清理 / 面板默认值 ============
 // 镜像 Windows ModClueLoader + ModWitchBookPatch: mod 切换/回标题时从原版基座重建, 防残留继承
-import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, findFirstObjectOfType, findSvc, getGenericArgClass, getSystemClass, invoke, invokeOk, listContainsId, makeS, readStr, wblog } from "../utils.js";
+import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, findFirstObjectOfType, findSvc, getGenericArgClass, getSystemClass, invoke, invokeOk, listContainsId, makeS, readStr, wblog, error, warn } from "../utils.js";
 import { wbCats, currentModSet, localeValue, makeIdVersionPair, unionLocaleKeys } from "./data.js";
 import { initCatStateMaps, setWbCurrentMod, setWbDefaultsCaptured, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbDefaultsCaptured, wbPageDefaults, wbVanillaMap } from "./state.js";
 import { getFirstDictValue } from "./pages.js";
@@ -95,7 +95,7 @@ export function restorePageFromData(page, pageCls, cat) {
     try {
         var snap = wbVanillaMap[cat.name];
         var ptrs = snap ? snap.items : null;
-        if (!ptrs || !ptrs.length) { wblog(cat.name + " 整页重建跳过 (快照未捕获)"); return; }
+        if (!ptrs || !ptrs.length) { warn(cat.name + " 整页重建跳过 (快照未捕获)"); return; }
         var mapList = page.add(fieldOffset(pageCls, "_loadedDataItemMap", 0x88)).readPointer();
         if (mapList.isNull()) return;
         var mapListCls = A.ogc(mapList);
@@ -126,7 +126,7 @@ export function restorePageFromData(page, pageCls, cat) {
             }
         } catch (e2) {}
         wblog(cat.name + " 整页重建: " + added + " 条 (原版基座)");
-    } catch (e) { wblog("restorePageFromData err: " + e); }
+    } catch (e) { error("restorePageFromData err: " + e); }
 }
 // 对所有分类页面做整页重建 (mod 切换/回标题时调用)
 export function rebuildAllPages() {
@@ -144,7 +144,7 @@ export function rebuildAllPages() {
                 } catch (e) {}
             }
         }
-    } catch (e) { wblog("rebuildAllPages err: " + e); }
+    } catch (e) { error("rebuildAllPages err: " + e); }
 }
 // 为恢复的原版条目构建 _localizedTextData 字典项
 export function restoreVanillaDict(page, pageCls, cat, vi, vItemCls) {
@@ -186,7 +186,7 @@ export function restoreVanillaDict(page, pageCls, cat, vi, vItemCls) {
         }
         var addOuter = A.cgm(outerCls, Memory.allocUtf8String("Add"), 2);
         if (addOuter && !addOuter.isNull()) invokeOk(addOuter, outer, [ivp, inner]);
-    } catch (e) { wblog("restoreVanillaDict err: " + e); }
+    } catch (e) { error("restoreVanillaDict err: " + e); }
 }
 // 读 LocalizedText[] (LocalizedText: _locale@0x10 int, _text@0x18 string) → {localeTag: text}
 export function readLocalizedArray(arrPtr, off) {
@@ -284,7 +284,7 @@ export function clearModItemsFromPage(page, pageCls, idSet) {
             page.add(curOff).writePointer(makeS(""));
         } catch (e) {}
         if (removed > 0) wblog("清除旧 mod 条目 " + removed + " 条");
-    } catch (e) { wblog("clearModItemsFromPage err: " + e); }
+    } catch (e) { error("clearModItemsFromPage err: " + e); }
 }
 // 从 _state._list 移除指定 id 的状态 (IdVersionPair.Id @+0x10)
 export function removeStateEntries(page, pageCls, idSet) {
@@ -311,7 +311,7 @@ export function removeStateEntries(page, pageCls, idSet) {
             var sb = Memory.alloc(4); sb.writeS32(sidxs[sr]);
             invokeOk(rmMi, stList, [sb]);
         }
-    } catch (e) { wblog("removeStateEntries err: " + e); }
+    } catch (e) { error("removeStateEntries err: " + e); }
 }
 // 清空页面 _state (仅保留 keepSet; keepSet=null 清空全部)
 export function clearPageState(page, keepSet) {
@@ -338,7 +338,7 @@ export function clearPageState(page, keepSet) {
             invokeOk(rmMi, stList, [ib]);
         }
         if (idxs.length) wblog("清空 " + A.cgn(A.ogc(page)).readCString() + " 状态 " + idxs.length + " 条");
-    } catch (e) { wblog("clearPageState err: " + e); }
+    } catch (e) { error("clearPageState err: " + e); }
 }
 // 面板默认值捕获/恢复: 页面首次出现(未被 mod 触碰)时读取原版默认文本+默认图,
 // 清空时恢复 → 空图鉴显示原版默认态 (占位图+默认文字), 而不是纯白空白
@@ -387,7 +387,7 @@ export function capturePageDefaults(page) {
         } catch (e) {}
         wbPageDefaults[key] = d;
         wblog("已捕获 " + clsName + " 面板默认值 (" + Object.keys(d.labels).length + " 标签)");
-    } catch (e) { wblog("capturePageDefaults err: " + e); }
+    } catch (e) { error("capturePageDefaults err: " + e); }
 }
 export function restorePageDefaults(page) {
     try {
@@ -429,7 +429,7 @@ export function restorePageDefaults(page) {
         } catch (e) {}
         try { page.add(0xA0).writePointer(makeS("")); } catch (e) {}   // _currentItemId 不恢复, 始终清空
         wblog("已恢复 " + clsName + " 面板默认值");
-    } catch (e) { wblog("restorePageDefaults err: " + e); }
+    } catch (e) { error("restorePageDefaults err: " + e); }
 }
 export function findAllPages() {
     // 用具体页面类遍历 (基类 WitchBookPageBase 有泛型/非泛型两个, FindObjectsOfType 不稳定)
@@ -486,7 +486,7 @@ export function clearAllWitchBookPages() {
                 restorePageDefaults(pages[i]);
             } catch (e) {}
         }
-    } catch (e) { wblog("clearAllWitchBookPages err: " + e); }
+    } catch (e) { error("clearAllWitchBookPages err: " + e); }
 }
 export function findWitchBookUi() {
     try { var s = findSvc("WitchBookUi"); if (s) return s; } catch (e) {}
@@ -503,13 +503,13 @@ export function findWitchBookUi() {
 export function clearBookViaVanilla() {
     try {
         var ui = findWitchBookUi();
-        if (!ui) { wblog("clearBook: WitchBookUi 未找到"); return; }
+        if (!ui) { warn("clearBook: WitchBookUi 未找到"); return; }
         var mi = A.cgm(wbCls.witchBookUi, Memory.allocUtf8String("ClearState"), 1);
-        if (!mi || mi.isNull()) { wblog("clearBook: ClearState NOT FOUND"); return; }
+        if (!mi || mi.isNull()) { warn("clearBook: ClearState NOT FOUND"); return; }
         for (var c = 0; c <= 4; c++) {   // Clue=0 Profile=1 Map=2 Rule=3 Note=4
             var cb = Memory.alloc(4); cb.writeS32(c);
             invokeOk(mi, ui, [cb]);
         }
         wblog("clearBook: WitchBookUi.ClearState 全部 5 分类已调用");
-    } catch (e) { wblog("clearBook err: " + e); }
+    } catch (e) { error("clearBook err: " + e); }
 }

@@ -268,3 +268,50 @@ RVA 0x3404d4 完全一致; 不加载任何 mod 也会发生, 加载 mod 后概�
   `il2cpp_codegen_register` 非导出符号)。
 - 探针/诊断脚本 (probe_*.js) 必须作为**独立** `create_script` 附加 —
   📦 bundle 的 fragment 是模块资产, 不被 import 就不会执行。
+
+## 八、日志系统 (2026-08-10 引入)
+
+**动机**: 游戏进程崩溃时 Frida 脚本跟着死, console 缓冲丢失, macOS 系统日志经常
+什么都没有 —— 排查全靠「用户描述 → 加探针 → 烧 token」。日志系统把日志当第一公民:
+终端彩色 + 游戏根 `modlog.txt` 文件 + 崩溃前 flush。
+
+**级别与颜色** (src/log.js): ERROR=红 / WARN=黄 / INFO=青 / DEBUG=灰, 行前缀
+`[v3][HH:MM:SS.mmm][LEVEL] `。`error/warn/info` 无条件输出; `debug` 内部再门控
+`MOD_DEBUG` (双保险)。默认量不变: wblog=INFO 可见, dbg=DEBUG 归 MOD_DEBUG。
+
+**调用点分级** (2026-08-10 审计, 用户确认): 29 处真实失败 → `error()` (类解析失败、
+ensureItemIdsString 重建失败、catch 分支); 34 处软失败 → `warn()` (NOT FOUND/未找到/
+为空/失败/跳过, 含 `无 mod WitchBook 数据`); 13 处过程噪音 → `dbg()` (`>>> @update 忽略`、
+`>>> WitchBook 触发`、`_itemIds off=0x` 字段状态、预填/纹理加载等); 其余保持 INFO
+(hooks 就绪 / 注入完成 / mod 切换 / `_itemIds → String[] 重建` / `>>> @update 拦截` /
+`+N 纯新 ID` / 状态应用 N 条 / 面板默认值捕获恢复)。消息**文案**未改, grep
+`[v3]` (统一前缀) 与 `[WitchBook]` (wblog 前缀) 仍命中。
+
+**文件写入**: libc `open(O_WRONLY|O_CREAT|O_TRUNC)` + 逐行同步 `write` (src/io.js),
+崩溃不丢已写行; 每运行截断重开 = 一份干净 modlog.txt。文件明文无 ANSI, 消息内换行
+续行缩进 4 格。路径: 默认 `<游戏根>/modlog.txt` (从主模块可执行路径上溯 4 级),
+`MOD_LOG=<path> ./run_mod.sh` 覆盖; 文件不可用 (如 REPL 直跑) 则 console-only 不崩。
+
+**终端彩色与剥色**: 关键事实 (2026-08-10 实证) — 本 setup 中 bundle 的 `console.log`
+**不经 frida 消息桥** (on_msg 收不到), 由 V8 runtime 直接写到游戏进程的 stdout 副本
+(spawn 时 frida 保留的父进程 fd, 即终端或重定向目标)。因此剥色在 **JS 侧**: run_mod.sh
+的 Python 检测 `sys.stdout.isatty()`, 非 TTY (重定向/管道) 或 `MOD_NO_COLOR=1` 时注入
+`var MOD_NO_COLOR=true` fragment → log.js 输出明文; TTY 时注入 false → 终端彩色。
+on_msg 只兜底 frida 错误消息等 (不含 bundle 日志)。探针 (probe_*.js) 独立脚本、输出
+只在终端不进 modlog.txt; 全量捕获 (含探针) 用 `MOD_NO_COLOR=1 ./run_mod.sh > all.log`。
+
+**崩溃前 flush**: `Process.setExceptionHandler` 回调只做同步文件 `write` + `fsync`
+追加 `[FATAL] !!! CRASH signal=... address=...`, 然后 `return false` 放行 (崩溃行为
+不变)。回调内**禁 console/RPC** (异常上下文死锁风险)。API 不可用则 fallback hook
+`abort` / `__pthread_kill`(SIGABRT)。即使 handler 未触发, 同步逐行写已保证已写行不丢,
+仅丢崩溃尾部标记。
+
+**Unity/Naninovel 提醒**: 全量钩 `UnityEngine.Debug` Log/LogError/LogWarning/LogException
+(永远开, 不受 MOD_DEBUG 影响), 按级别路由: LogError/LogException→ERROR(红)、
+LogWarning→WARN(黄)、Log→INFO(青) —— 功能等价于 Windows BepInEx 的 Naninovel Log,
+给剧本作者的提醒 (缺翻译 `Missing translation for 'zh-Hans/...'`、剧本解析错) 进终端
+也进 modlog.txt。
+
+**约束**: 所有日志调用必须在 `initLog` 之后 (entry.js 顶层先 initLog 再装 crash
+handler, 早于首个 wblog)。文件体积第一版不做轮转, `MOD_DEBUG=1` 时 dumpObj FULL 栈
+涨得快, 文档注明。

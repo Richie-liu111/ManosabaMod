@@ -1,6 +1,6 @@
 // ============ WitchBook 角色域: 立绘 provider 注册 + CharacterData/AuthorData 注入 + Profile 姓名覆写 ============
 // 镜像 Windows AddRichCharacter/AddSimpleCharacter + TryInjectCharacterData + TryInjectAuthorData + ProfilePageRefreshContent_Patch
-import { A, dbg, fieldOffset, findClassAcrossImages, findFirstObjectOfType, findSvc, invoke, invokeOk, listContainsId, makeLocalResourceProvider, makeS, populateConvertersDict, readStr, wblog } from "../utils.js";
+import { A, dbg, fieldOffset, findClassAcrossImages, findFirstObjectOfType, findSvc, invoke, invokeOk, listContainsId, makeLocalResourceProvider, makeS, populateConvertersDict, readStr, wblog, error, warn } from "../utils.js";
 import { wbCls, wbCurrentMod, wbData } from "./state.js";
 import { buildLocalizedTextArray, localeValue, pickLocaleText, resolveLocale, unionLocaleKeys } from "./data.js";
 
@@ -164,9 +164,9 @@ function makeListString(cls, elems) {
 export function injectCharacterData() {
     try {
         if (Object.keys(wbData.characters).length === 0) return;
-        if (!wbCls.characterData || wbCls.characterData.isNull()) { wblog("CharacterData 类未解析"); return; }
+        if (!wbCls.characterData || wbCls.characterData.isNull()) { warn("CharacterData 类未解析"); return; }
         var inst = findFirstObjectOfType(wbCls.characterData);
-        if (!inst) { wblog("CharacterData 实例未找到 (可能未加载)"); return; }
+        if (!inst) { warn("CharacterData 实例未找到 (可能未加载)"); return; }
         var items = inst.add(fieldOffset(wbCls.characterData, "_items", 0x18)).readPointer();
         if (items.isNull()) return;
         var listCls = A.ogc(items);
@@ -184,7 +184,7 @@ export function injectCharacterData() {
             var famArr = buildLocalizedTextArray(cc.familyName);
             if (ctorMi && !ctorMi.isNull()) {
                 var r = invokeOk(ctorMi, item, [makeS(ids[i]), nameArr, famArr, makeS(cc.age), makeS(cc.height), makeS(cc.weight)]);
-                if (!r.ok) { wblog("CharacterDataItem.ctor 失败 '" + ids[i] + "'"); continue; }
+                if (!r.ok) { warn("CharacterDataItem.ctor 失败 '" + ids[i] + "'"); continue; }
             } else {
                 item.add(0x10).writePointer(makeS(ids[i]));
                 item.add(0x18).writePointer(nameArr);
@@ -196,7 +196,7 @@ export function injectCharacterData() {
             if (invokeOk(addMi, items, [item]).ok) added++;
         }
         if (added) wblog("CharacterData 注入 " + added + " 个角色");
-    } catch (e) { wblog("injectCharacterData err: " + e); }
+    } catch (e) { error("injectCharacterData err: " + e); }
 }
 // ProfilePage.RefreshPageContent onLeave: 覆写 mod 新角色的姓名标签 (_authorLabel @0xB8)
 // 镜像 Windows ProfilePageRefreshContent_Patch: 原版对不在角色系统中的 id 显示 ID,
@@ -206,7 +206,7 @@ export function hookProfileName() {
         var cls = wbCls.pages.profile;
         if (!cls || cls.isNull()) return;
         var mi = A.cgm(cls, Memory.allocUtf8String("RefreshPageContent"), 1);
-        if (!mi || mi.isNull()) { wblog("ProfilePage.RefreshPageContent NOT FOUND"); return; }
+        if (!mi || mi.isNull()) { warn("ProfilePage.RefreshPageContent NOT FOUND"); return; }
         Interceptor.attach(mi.readPointer(), {
             onEnter: function (a) {
                 try {
@@ -233,7 +233,7 @@ export function hookProfileName() {
             }
         });
         wblog("ProfilePage 姓名覆写 hook 就绪");
-    } catch (e) { wblog("hookProfileName err: " + e); }
+    } catch (e) { error("hookProfileName err: " + e); }
 }
 // 生成 AuthorData 模板 (镜像 Windows AuthorTaggedTextGenerator.BuildFullName: 姓首字大号带色 + 名首字次大号)
 export function buildAuthorTemplate(cc, localeTag) {
@@ -262,9 +262,9 @@ export function buildAuthorTemplate(cc, localeTag) {
 export function injectAuthorData() {
     try {
         if (Object.keys(wbData.characters).length === 0) return;
-        if (!wbCls.authorData || wbCls.authorData.isNull()) { wblog("AuthorData 类未解析"); return; }
+        if (!wbCls.authorData || wbCls.authorData.isNull()) { warn("AuthorData 类未解析"); return; }
         var inst = findFirstObjectOfType(wbCls.authorData);
-        if (!inst) { wblog("AuthorData 实例未找到 (可能未加载)"); return; }
+        if (!inst) { warn("AuthorData 实例未找到 (可能未加载)"); return; }
         var items = inst.add(fieldOffset(wbCls.authorData, "_items", 0x18)).readPointer();
         if (items.isNull()) return;
         var listCls = A.ogc(items);
@@ -288,10 +288,10 @@ export function injectAuthorData() {
             }
             var item = A.on(itemCls);
             if (ctorMi && !ctorMi.isNull()) {
-                if (!invokeOk(ctorMi, item, [makeS(ids[i]), arr]).ok) { wblog("AuthorDataItem.ctor 失败 '" + ids[i] + "'"); continue; }
+                if (!invokeOk(ctorMi, item, [makeS(ids[i]), arr]).ok) { warn("AuthorDataItem.ctor 失败 '" + ids[i] + "'"); continue; }
             } else { item.add(0x10).writePointer(makeS(ids[i])); item.add(0x18).writePointer(arr); }
             if (invokeOk(addMi, items, [item]).ok) added++;
         }
         if (added) wblog("AuthorData 注入 " + added + " 个角色模板");
-    } catch (e) { wblog("injectAuthorData err: " + e); }
+    } catch (e) { error("injectAuthorData err: " + e); }
 }

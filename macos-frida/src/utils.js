@@ -11,10 +11,15 @@ export var allImgs = [];
 // GotoModified 类 (entry.js 解析, menu.js 的 hookStartGame 使用)
 export var gotoModifiedCls = null;
 
+// 日志输出统一走 log.js: console 彩色 (ERROR红/WARN黄/INFO青/DEBUG灰) + 文件明文 modlog.txt
+// wblog=INFO 默认显示; dbg=DEBUG 归 MOD_DEBUG (默认关)。导出名/签名不变 → 调用点零改动。
+import { debug as logDebug, info as logInfo, warn as logWarn, error as logError } from "./log.js";
 // 日志开关: 全局 MOD_DEBUG (run_mod.sh 可注入), 默认关
 export var MOD_DEBUG = (typeof globalThis !== "undefined" && globalThis.MOD_DEBUG) ? true : false;
-export function dbg() { if (MOD_DEBUG) console.log.apply(console, arguments); }
-export function wblog(msg) { console.log("[v3][WitchBook] " + msg); }
+export function dbg() { if (MOD_DEBUG) logDebug.apply(null, arguments); }
+export function wblog(msg) { logInfo("[WitchBook] " + msg); }
+export function warn() { logWarn.apply(null, arguments); }
+export function error() { logError.apply(null, arguments); }
 
 // setter (ES modules import 绑定只读, 赋值必须在模块内; entry.js 初始化时调用)
 export function setImageHandles(nvImg, csImg, gigaImg) { nv = nvImg; cs = csImg; giga = gigaImg; }
@@ -131,7 +136,7 @@ export function populateConvertersDict(lrp, convClassName, targetClsFn, tag) {
 export function findSvc(name) {
     try {
         var el = A.cfn(nv, Memory.allocUtf8String("Naninovel"), Memory.allocUtf8String("Engine"));
-        if (!el || el.isNull()) { wblog("[v3] findSvc('" + name + "') FAIL: Engine class NOT FOUND (nv=" + nv + ", allImgs=" + allImgs.length + ")"); return null; }
+        if (!el || el.isNull()) { warn("[v3] findSvc('" + name + "') FAIL: Engine class NOT FOUND (nv=" + nv + ", allImgs=" + allImgs.length + ")"); return null; }
         var f = A.gf(el, Memory.allocUtf8String("services"));
         var l = A.sdf(el).add(A.fo(f)).readPointer();
         var its = l.add(0x10).readPointer(); var sz = l.add(0x18).readS32();
@@ -140,9 +145,9 @@ export function findSvc(name) {
             var cn = A.cgn(A.ogc(ep)).readCString();
             if (cn === name) return ep;
         }
-        wblog("[v3] findSvc('" + name + "') NOT FOUND in " + sz + " services (nv=" + nv + ")");
+        warn("[v3] findSvc('" + name + "') NOT FOUND in " + sz + " services (nv=" + nv + ")");
         return null;
-    } catch (e) { wblog("[v3] findSvc('" + name + "') err: " + e + " (nv=" + nv + ", allImgs=" + allImgs.length + ")"); return null; }
+    } catch (e) { error("[v3] findSvc('" + name + "') err: " + e + " (nv=" + nv + ", allImgs=" + allImgs.length + ")"); return null; }
 }
 
 // 找 System 类型 (mscorlib 等)
@@ -201,12 +206,21 @@ export function fieldIsStringArray(obj, cls, name) {
 export function ensureItemIdsString(page, cls) {
     try {
         var f = A.gf(cls, Memory.allocUtf8String("_itemIds"));
-        if (!f || f.isNull()) return false;
+        if (!f || f.isNull()) { warn(A.cgn(cls).readCString() + "._itemIds 字段未找到"); return false; }
         var off = A.fo(f);
         var arr = page.add(off).readPointer();
-        if (!arr || arr.isNull()) return false;
-        var cn = A.cgn(A.ogc(arr)).readCString();
+        // 防御: arr 可能不是合法对象 (页面重建后字段偏移读到字符串数据), A.ogc 会原生访问违例。
+        // 用 isReadable 预检 + try 包裹, 拿到真实类型/实例类用于诊断。
+        var cn = "null";
+        if (arr && !arr.isNull()) {
+            try { cn = A.cgn(A.ogc(arr)).readCString(); }
+            catch (e0) { cn = "?不可读@0x" + arr; }
+        }
+        var instCls = "";
+        try { instCls = A.cgn(A.ogc(page)).readCString(); } catch (e1) { instCls = "?"; }
+        dbg(A.cgn(cls).readCString() + "._itemIds off=0x" + off.toString(16) + " val=" + arr + " type=" + cn + " 实例=" + instCls);
         if (cn.indexOf("String[") >= 0) return true;   // 已是 string[], 无需换
+        // off=0x98 经各页面交叉验证是对的; val 悬空/垃圾正是要修的 → 一律用合法 String[] 覆盖
         var ids = [];
         // 首选: _loadedDataItemMap 的 id 集合 (游戏 Windows 语义: 已知条目集合)
         try {
@@ -228,8 +242,8 @@ export function ensureItemIdsString(page, cls) {
                 }
             }
         } catch (e1) { ids = []; }
-        // 回退: 从数组元素提取 (string 元素直接读; 对象元素读 _id 字段)
-        if (!ids.length) {
+        // 回退: 从数组元素提取 (string 元素直接读; 对象元素读 _id 字段) — 仅当数组可读时
+        if (!ids.length && arr && !arr.isNull() && Memory.isReadable(arr)) {
             var len = arr.add(0x18).readS32();
             if (len > 0 && len < 100000) {
                 var elemCls = ptr(0), elemIsStr = false, idOff = 0x10;
@@ -248,15 +262,16 @@ export function ensureItemIdsString(page, cls) {
                 }
             }
         }
-        if (!ids.length) { wblog(A.cgn(cls).readCString() + "._itemIds " + cn + " 内容为空, 跳过重建"); return false; }
+        // 兜底: map/数组都取不到也写合法 String[] (可能为空) — 空数组同样让游戏 Contains 安全返回 false,
+        // 不会再在 null/Graphic[] 上崩 (宁可空数组不显示, 也不留崩溃窗口)
         var strCls = getSystemClass("String");
-        if (!strCls || strCls.isNull()) return false;
+        if (!strCls || strCls.isNull()) { error(A.cgn(cls).readCString() + "._itemIds String 类未找到"); return false; }
         var na = A.an(strCls, ids.length);
         for (var i = 0; i < ids.length; i++) na.add(0x20 + i * 8).writePointer(makeS(ids[i]));
         page.add(off).writePointer(na);
         wblog(A.cgn(cls).readCString() + "._itemIds " + cn + " → String[] 重建 (" + ids.length + " 条)");
         return true;
-    } catch (e) { return false; }
+    } catch (e) { error("ensureItemIdsString err(" + A.cgn(cls).readCString() + "): " + e); return false; }
 }
 // Object.FindObjectsOfType(Type) → Object[] → 非空实例数组
 export function findAllObjectOfType(cls) {
@@ -291,7 +306,7 @@ export function findAllObjectOfType(cls) {
             if (e && !e.isNull()) out.push(e);
         }
         return out;
-    } catch (e) { wblog("findAllObjectOfType err: " + e); return []; }
+    } catch (e) { error("findAllObjectOfType err: " + e); return []; }
 }
 export function findFirstObjectOfType(cls) { var a = findAllObjectOfType(cls); return a.length ? a[0] : null; }
 // List<T> 里是否已有 id。List 布局: _items(T[])@+0x10, _size(int)@+0x18, _version@+0x1C

@@ -11,7 +11,7 @@
 //   3. 显示: Interceptor.replace CluePage.RefreshPageContent / SetupItemButton —— mod 线索直接设
 //      _subjectLabel/_descriptionLabel/_thumbnail (绕开 _localizedTextData 的 KeyNotFoundException)。
 // 数据来源: 运行时读 <MOD_ROOT>/<modKey>/info.json 的 Clues 字段 + 扫 WitchBook/Clues/*.png。
-import { A, dbg, ensureItemIdsString, fieldOffset, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, wblog } from "../utils.js";
+import { A, dbg, ensureItemIdsString, fieldOffset, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, wblog, error, warn } from "../utils.js";
 import { initCatStateMaps, setWbCls, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbPrevMod } from "./state.js";
 import { isCurrentModItem, loadWitchBookData, wbCatByIdx, wbCats } from "./data.js";
 import { clearAllWitchBookPages, clearBookViaVanilla, detectCurrentMod, findAllPages, rebuildAllPages } from "./session.js";
@@ -53,11 +53,11 @@ export function setupWitchBookHooks() {
         loadWitchBookData();
         var total = 0, catNames = Object.keys(wbCats);
         for (var i = 0; i < catNames.length; i++) total += Object.keys(wbData[wbCats[catNames[i]].name]).length;
-        if (total === 0) { wblog("无 mod WitchBook 数据, 跳过"); return; }
+        if (total === 0) { warn("无 mod WitchBook 数据, 跳过"); return; }
         setWbCls(resolveWitchBookClasses());
         if (!wbCls.pages.clue || wbCls.pages.clue.isNull() ||
             !wbCls.witchBookScreen || wbCls.witchBookScreen.isNull() || !wbCls.versionedState || wbCls.versionedState.isNull()) {
-            wblog("类解析失败 (pages/screen/versionedState)"); return;
+            error("类解析失败 (pages/screen/versionedState)"); return;
         }
         // @update 入口
         ["WitchBookUi", "WitchBookScreen"].forEach(function (cn) {
@@ -94,7 +94,7 @@ export function setupWitchBookHooks() {
                     }
                 } catch (e) {}
             }
-        } catch (e) { wblog("page UpdateVersion hook err: " + e); }
+        } catch (e) { error("page UpdateVersion hook err: " + e); }
         // Profile 姓名覆写 (mod 新角色显示格式化名字而非 ID)
         hookProfileName();
         // WitchBook 打开/翻页重建 → 强制重注入
@@ -102,7 +102,7 @@ export function setupWitchBookHooks() {
             try {
                 var mi = A.cgm(wbCls.witchBookScreen, Memory.allocUtf8String(mn), 0);
                 if (mi && !mi.isNull()) Interceptor.attach(mi.readPointer(), { onEnter: function () {
-                    wblog(">>> WitchBook " + mn + " 触发");
+                    dbg(">>> WitchBook " + mn + " 触发");
                     tryInjectWitchBook();   // 内部处理 mod 切换清理 (状态+面板) + 注入
                 }});
             } catch (e) {}
@@ -117,7 +117,7 @@ export function setupWitchBookHooks() {
                         try {
                             var cid = readStr(this._self.add(0x80).readPointer());  // _clueId @0x80
                             if (cid && wbData.clue[cid]) {
-                                wblog(">>> SpawnableClue mod 线索: '" + cid + "', 注册纹理");
+                                dbg(">>> SpawnableClue mod 线索: '" + cid + "', 注册纹理");
                                 registerTexturesInto(null);   // 用全局 AddressablesManager
                             }
                         } catch (e) {}
@@ -138,7 +138,7 @@ export function setupWitchBookHooks() {
             }
         } catch (e) {}
         wblog("hooks 就绪");
-    } catch (e) { wblog("setupWitchBookHooks err: " + e + " | " + (e && e.stack ? e.stack.split("\n").slice(0,3).join(" | ") : "")); }
+    } catch (e) { error("setupWitchBookHooks err: " + e + " | " + (e && e.stack ? e.stack.split("\n").slice(0,3).join(" | ") : "")); }
 }
 export function tryInjectWitchBook() {
     try {
@@ -167,7 +167,8 @@ export function tryInjectWitchBook() {
         registerTexturesInto(null);
         var pages2 = findAllPages();
         if (pages2.length) registerTexturesInto(pages2[0].add(fieldOffset(A.ogc(pages2[0]), "_addressableAssetLoader", 0x50)).readPointer());
-    } catch (e) { wblog("tryInjectWitchBook err: " + e); }
+        wblog("tryInjectWitchBook 完成");
+    } catch (e) { error("tryInjectWitchBook err: " + e); }
 }
 // MAE 诊断: 打印页面关键字段的运行时类型 (仅第一次 @update 时; 原版基座污染检查)
 // 背景: 崩溃 = WitchBookPageBase.UpdateVersion 内 Enumerable.Contains(source=Graphic[], value=string)
@@ -194,10 +195,10 @@ function dumpPageFieldTypes() {
                         parts.push(fields[fi] + "@0x" + off.toString(16) + "=" + vcn);
                     } catch (e2) { parts.push(fields[fi] + "=err"); }
                 }
-                wblog("  [页面] " + pcn + " " + parts.join(" "));
+                dbg("  [页面] " + pcn + " " + parts.join(" "));
             } catch (e3) {}
         }
-    } catch (e) { wblog("dumpPageFieldTypes err: " + e); }
+    } catch (e) { error("dumpPageFieldTypes err: " + e); }
 }
 // @update 拦截: 按 WitchBookCategory 路由 (Clue=0 Profile=1 Map=2 Rule=3 Note=4)
 export function onWitchBookUpdate(args) {
@@ -206,11 +207,12 @@ export function onWitchBookUpdate(args) {
         var cat = wbCatByIdx(idx);
         if (!cat || idx === 2) return;   // Map 分类暂不处理
         dumpPageFieldTypes();            // MAE 诊断: @update 时刻页面字段类型
-        if (!id || !isCurrentModItem(cat, id)) { wblog(">>> @update 忽略: category=" + (cat?cat.name:idx) + " id='" + id + "' (非当前 mod 条目)"); return; }
+        if (!id || !isCurrentModItem(cat, id)) { dbg(">>> @update 忽略: category=" + (cat?cat.name:idx) + " id='" + id + "' (非当前 mod 条目)"); return; }
         if (!wbData.states[cat.name]) wbData.states[cat.name] = {};
         if (wbData.states[cat.name][id] === ver) return;
         wbData.states[cat.name][id] = ver;
         wblog(">>> @update 拦截: category=" + cat.name + " id='" + id + "' version=" + ver);
         tryInjectWitchBook();
-    } catch (e) { wblog("onWitchBookUpdate err: " + e); }
+        dbg(">>> onWitchBookUpdate 返回");
+    } catch (e) { error("onWitchBookUpdate err: " + e); }
 }

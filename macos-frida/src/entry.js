@@ -6,7 +6,7 @@
 //   * GotoModified 在 GigaCreation.NaninovelExtender.Common, 必须动态解析 (Windows RVA 不跨平台)
 // 流程:
 //   init: Steam 绕过 + thread_attach + 绑定 API + 找 image
-//   TitleUi.Activate: 找 StartGame 下的 GotoModified → Path.SetValue("TaffyStart") → 注册菜单
+//   TitleUi.Activate: 找 StartGame 下的 GotoModified → Path.SetValue("ModStart") → 注册菜单
 //   菜单经 Script.FromText 构建, 经 AddLoadedResource 注册
 // 日志分层: 机制日志走 dbg (MOD_DEBUG, 默认关); 游戏侧 Unity.LogError 全量 dump (dumpObj 原样 console.log)
 'use strict';
@@ -19,6 +19,16 @@ import { resetWitchBookSession } from "./witchbook/session.js";
 import { setupWitchBookHooks } from "./witchbook/index.js";
 import { registerTexturesInto } from "./witchbook/textures.js";
 import { wbCls } from "./witchbook/state.js";
+import { initLog, installCrashHandler, logLevel } from "./log.js";
+import { printStartupBanner } from "./banner.js";
+
+// ============ 日志系统初始化 (顶层最先: 覆盖整个 init, 含 GameAssembly 加载失败) ============
+// MOD_LOG/MOD_NO_COLOR 由 run_mod.sh 的 fragment 注入全局; initLog 早于首个 wblog (doInit)
+initLog((typeof MOD_LOG !== "undefined" && MOD_LOG) ? MOD_LOG : null,
+        typeof MOD_NO_COLOR !== "undefined" && MOD_NO_COLOR);
+installCrashHandler();
+// MOD 初始化横幅: 角色 ASCII 艺术 + 项目声明 (打印时文件已开, 终端彩色 / modlog.txt 明文)
+printStartupBanner();
 
 // ============ Steam 绕过 (Phase 1) ============
 try { var dl = Module.findGlobalExportByName("dlopen"); if (dl) { var h = false; Interceptor.attach(dl, { onEnter: function (a) { this.p = a[0].readCString(); }, onLeave: function (r) { if (h || r.isNull() || !this.p || this.p.indexOf("libsteam_api") === -1) return; var r2 = Module.findGlobalExportByName("SteamAPI_RestartAppIfNecessary"); if (r2) Interceptor.replace(r2, new NativeCallback(function () { return 0; }, 'bool', ['uint32'])); var i2 = Module.findGlobalExportByName("SteamInternal_SteamAPI_Init"); if (i2) Interceptor.replace(i2, new NativeCallback(function () { return 2; }, 'int', [])); h = true; } }); } } catch (e) { }
@@ -329,18 +339,20 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
 
         // ===== 捕获 Unity 错误日志 =====
         // dumpObj 输出游戏侧错误详情 — 全量保留 (不随 MOD_DEBUG 开关), 是最高优先级信息 (ARCHIVE 教训 2)
-        function dumpObj(obj, tag) {
-            if (!obj || obj.isNull()) { console.log("[v3] " + tag + ": <null>"); return; }
+        // 级别路由: LogError/LogException→ERROR(红), LogWarning→WARN(黄), Log→INFO(青); 进终端+文件
+        function dumpObj(obj, tag, level) {
+            if (level === undefined) level = 0;   // 默认按错误处理
+            if (!obj || obj.isNull()) { logLevel(level, "[v3] " + tag + ": <null>"); return; }
             try {
                 var cls = A.ogc(obj);
                 var cn = cls ? A.cgn(cls).readCString() : "?";
-                console.log("[v3] " + tag + " obj=" + obj + " class=" + cn);
+                logLevel(level, "[v3] " + tag + " obj=" + obj + " class=" + cn);
                 // hexdump 前 48 字节
                 var hex = "";
                 for (var i = 0; i < 48; i++) {
                     hex += obj.add(i).readU8().toString(16).padStart(2, "0") + (i % 16 === 15 ? " " : "");
                 }
-                console.log("[v3] " + tag + " hex: " + hex);
+                logLevel(level, "[v3] " + tag + " hex: " + hex);
                 // 从 +0x14 走 UTF-16 到 null, 取完整字符串 (忽略可疑长度字段)
                 // 长读 2000: 崩溃同款异常的完整 C# 栈 (MethodAccessException 调用方) 会被截断
                 // 代理项跳过: 孤立 surrogate 会让 python print 抛 UnicodeEncodeError 打断日志流
@@ -356,16 +368,16 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                 }
                 try {
                     var full = collectUtf16(0x14, 2000);
-                    if (full) console.log("[v3] " + tag + " FULL: " + full);
+                    if (full) logLevel(level, "[v3] " + tag + " FULL: " + full);
                 } catch (e) {}
                 // 从多个起点走 UTF-16 到 null
                 [0x08, 0x10, 0x14, 0x18, 0x0C].forEach(function (so) {
                     try {
                         var s = collectUtf16(so, 2000);
-                        if (s) console.log("[v3] " + tag + " +0x" + so.toString(16) + " utf16='" + s + "'");
+                        if (s) logLevel(level, "[v3] " + tag + " +0x" + so.toString(16) + " utf16='" + s + "'");
                     } catch (e) {}
                 });
-            } catch (e3) { console.log("[v3] " + tag + " dump err: " + e3); }
+            } catch (e3) { logLevel(level, "[v3] " + tag + " dump err: " + e3); }
         }
         try {
             var ueImg = null;
@@ -376,18 +388,22 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
             if (ueImg) {
                 var dbgCls = A.cfn(ueImg, Memory.allocUtf8String("UnityEngine"), Memory.allocUtf8String("Debug"));
                 if (dbgCls && !dbgCls.isNull()) {
+                    // 级别映射: LogError/LogException→ERROR(红), LogWarning→WARN(黄), Log→INFO(青)
+                    // → Naninovel 剧本提醒 (缺翻译/解析错等) 自动带级别/颜色/入文件
                     ["LogError", "LogException", "Log", "LogWarning"].forEach(function (mn) {
+                        var lv = (mn === "LogError" || mn === "LogException") ? 0
+                               : (mn === "LogWarning") ? 1 : 2;
                         for (var ac = 1; ac <= 2; ac++) {
                             var m = A.cgm(dbgCls, Memory.allocUtf8String(mn), ac);
                             if (m && !m.isNull()) {
-                                (function (mn2, ac2) {
+                                (function (mn2, ac2, lv2) {
                                     Interceptor.attach(m.readPointer(), {
                                         onEnter: function (a) {
                                             // Debug.LogError 等是静态方法 → 第一个参数在 a[0]
-                                            dumpObj(a[0], "Unity." + mn2 + "(" + ac2 + ")");
+                                            dumpObj(a[0], "Unity." + mn2 + "(" + ac2 + ")", lv2);
                                         }
                                     });
-                                })(mn, ac);
+                                })(mn, ac, lv);
                             }
                         }
                     });

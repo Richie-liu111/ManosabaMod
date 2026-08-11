@@ -2,8 +2,8 @@
 // 镜像 Windows AddModStartMenu (ModResourceLoader.cs) + HookStartGame
 import { A, dbg, findClassAcrossImages, findSvc, findUnityImg, gotoModifiedCls, invoke, invokeOk, makeLocalResourceProvider, makeNamedStringCtor, makeS, makeUnityObject, readStr } from "./utils.js";
 
-var modScriptPrefix = "TaffyModLoader";
-var modMenuScript = "TaffyStart";
+var modScriptPrefix = "ModLoader";
+var modMenuScript = "ModStart";
 
 // ============ 菜单文本 (镜像 Windows AddModStartMenu, 简化) ============
 // buildMenuText 采用 16h 版 (含翻页): 每页 perPage 条, # ChoiceList_<页> 标签, 上一页/下一页 + @Stop
@@ -246,7 +246,7 @@ export function hookStartGame() {
                 var cmdCls = A.ogc(cmd);
                 if (gotoModifiedCls && !gotoModifiedCls.isNull() && cmdCls.equals(gotoModifiedCls)) {
                     dbg("[v3] 找到 StartGame 下的 GotoModified @ line " + i + ", cmd=" + cmd);
-                    // Path.SetValue(NamedString(value="TaffyStart", name=""))
+                    // Path.SetValue(NamedString(value="ModStart", name=""))
                     var pathObj = cmd.add(0x30).readPointer();
                     var nspCls = A.ogc(pathObj);
                     var svMi = A.cgm(nspCls, Memory.allocUtf8String("SetValue"), 1);

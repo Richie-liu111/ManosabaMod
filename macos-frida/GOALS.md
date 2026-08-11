@@ -1,12 +1,12 @@
 # ManosabaMod macOS 移植 — 目标与差距文档
 
-> 活的文档，随代码演进更新。最后更新：2026-08-03（多文件重构）。
+> 活的文档，随代码演进更新。最后更新：2026-08-10（日志系统）。
 
 ## 目标
 
 在 macOS ARM 原生游戏（魔法少女的魔女审判/manosaba）上，用 **Frida 运行时注入**（IL2CPP C API 动态解析，无静态地址依赖）实现与 Windows 版 ManosabaLoader（BepInEx + Il2CppInterop + Harmony）**功能对齐**的 MOD 加载器：加载 mod 的剧本/本地化/语音/音频/背景/立绘/视频，并注入魔女图鉴（WitchBook 全分类）数据与审判环节自定义。实现方式是镜像 Windows 模块的机制，不依赖任何 Windows RVA。
 
-架构现状：`src/` 多文件 ES modules 工程，`frida-compile` 打包单 bundle 注入（`dist/manosabamod.js`）。机制日志走 `MOD_DEBUG` 开关（默认关），游戏侧 `Unity.LogError` 全量抓取为最高优先级信号（ARCHIVE 教训 2/3）。
+架构现状：`src/` 多文件 ES modules 工程，`frida-compile` 打包单 bundle 注入（`dist/manosabamod.js`）。日志分层（2026-08-10 起）：终端彩色（ERROR 红/WARN 黄/INFO 青/DEBUG 灰）+ 游戏根 `modlog.txt` 文件 + 崩溃前 flush（详见 ARCHITECTURE.md 八节）；机制日志走 `MOD_DEBUG` 开关（默认关），游戏侧 `Unity.LogError` 全量抓取为最高优先级信号（ARCHIVE 教训 2/3）。
 
 ## Windows vs macOS 功能对照
 

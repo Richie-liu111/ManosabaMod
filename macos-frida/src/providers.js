@@ -1,6 +1,6 @@
 // ============ provider 管线注册 (镜像 Windows AddModLoader, inflated 泛型版) ============
 // 含: 剧本/本地化/voice/audio/背景 provider 注入; 立绘注册在 witchbook/characters.js
-import { A, dbg, findClassAcrossImages, findSvc, getGenericArgClass, invoke, invokeOk, makeLocalResourceProvider, makeS, populateConvertersDict, wblog } from "./utils.js";
+import { A, dbg, findClassAcrossImages, findSvc, getGenericArgClass, invoke, invokeOk, makeLocalResourceProvider, makeS, populateConvertersDict, wblog, error, warn } from "./utils.js";
 import { addCharacterProviders } from "./witchbook/characters.js";
 
 // 把 provision source 插入 ResourceLoader 的 ProvisionSources
@@ -65,36 +65,36 @@ export function addAudioProviders(root, prefix) {
 export function addBackgroundProviders(root, prefix) {
     try {
         var bm = findSvc("BackgroundManagerExtended");
-        if (!bm) { wblog("[v3] addBackgroundProviders: BackgroundManagerExtended NOT FOUND"); return; }
+        if (!bm) { warn("[v3] addBackgroundProviders: BackgroundManagerExtended NOT FOUND"); return; }
         var galMi = A.cgm(A.ogc(bm), Memory.allocUtf8String("GetAppearanceLoader"), 1);
-        if (!galMi || galMi.isNull()) { wblog("[v3] addBackgroundProviders: GetAppearanceLoader NOT FOUND"); return; }
+        if (!galMi || galMi.isNull()) { warn("[v3] addBackgroundProviders: GetAppearanceLoader NOT FOUND"); return; }
         var texFn = function () { return findClassAcrossImages("UnityEngine", "Texture2D"); };
         var backIds = ["MainBackground", "Stills", "Tricks"];
         for (var i = 0; i < backIds.length; i++) {
             try {
                 var loader = invoke(galMi, bm, [makeS(backIds[i])]);
-                if (!loader || loader.isNull()) { wblog("[v3] 背景 loader '" + backIds[i] + "' 为空"); continue; }
+                if (!loader || loader.isNull()) { warn("[v3] 背景 loader '" + backIds[i] + "' 为空"); continue; }
                 var lrp = makeLocalResourceProvider(root);
-                if (lrp.isNull()) { wblog("[v3] 背景 LRP 创建失败 ('" + backIds[i] + "')"); continue; }
-                if (!populateConvertersDict(lrp, "JpgOrPngToTextureConverter", texFn, "Backgrounds/" + backIds[i])) { wblog("[v3] 背景 converters 填充失败 ('" + backIds[i] + "')"); continue; }
+                if (lrp.isNull()) { warn("[v3] 背景 LRP 创建失败 ('" + backIds[i] + "')"); continue; }
+                if (!populateConvertersDict(lrp, "JpgOrPngToTextureConverter", texFn, "Backgrounds/" + backIds[i])) { warn("[v3] 背景 converters 填充失败 ('" + backIds[i] + "')"); continue; }
                 insertProvisionSource(loader, lrp, prefix + "/Backgrounds/" + backIds[i], "Backgrounds/" + backIds[i]);
-            } catch (e) { wblog("[v3] 背景 '" + backIds[i] + "' 注入 err: " + e); }
+            } catch (e) { error("[v3] 背景 '" + backIds[i] + "' 注入 err: " + e); }
         }
         wblog("[v3] addBackgroundProviders 完成 (" + backIds.join("/") + ")");
-    } catch (e) { wblog("[v3] addBackgroundProviders err: " + e); }
+    } catch (e) { error("[v3] addBackgroundProviders err: " + e); }
 }
 export function addModLoader(root, prefix) {
     try {
         var sm = findSvc("ScriptManager");
-        if (!sm) { wblog("[v3] addModLoader: ScriptManager NOT FOUND (prefix='" + prefix + "')"); return; }
+        if (!sm) { error("[v3] addModLoader: ScriptManager NOT FOUND (prefix='" + prefix + "')"); return; }
         var rl = sm.add(0x28).readPointer();
-        if (rl.isNull()) { wblog("[v3] addModLoader: scriptLoader NULL (prefix='" + prefix + "')"); return; }
+        if (rl.isNull()) { error("[v3] addModLoader: scriptLoader NULL (prefix='" + prefix + "')"); return; }
 
         // 剧本 provider: LRP(MOD_ROOT) + NaniToScriptAssetConverter + ProvisionSource(prefix/Scripts)
         var lrp = makeLocalResourceProvider(root);
-        if (lrp.isNull()) { wblog("[v3] addModLoader: LRP 创建失败 (root='" + root + "')"); return; }
+        if (lrp.isNull()) { error("[v3] addModLoader: LRP 创建失败 (root='" + root + "')"); return; }
         var scriptFn = function () { return findClassAcrossImages("Naninovel", "Script"); };
-        if (!populateConvertersDict(lrp, "NaniToScriptAssetConverter", scriptFn, "Script")) { wblog("[v3] addModLoader: Script converters 失败 ('" + prefix + "')"); return; }
+        if (!populateConvertersDict(lrp, "NaniToScriptAssetConverter", scriptFn, "Script")) { error("[v3] addModLoader: Script converters 失败 ('" + prefix + "')"); return; }
         insertProvisionSource(rl, lrp, prefix + "/Scripts", "addModLoader(Script)");
 
         // 本地化 provider: LRP(MOD_ROOT) + TxtToTextAssetConverter + ProvisionSource(prefix/Text)
@@ -108,5 +108,5 @@ export function addModLoader(root, prefix) {
 
         // 立绘 provider (Characters/SimpleCharacters → ActorMetadata 注册)
         addCharacterProviders(root, prefix);
-    } catch (e) { wblog("[v3] addModLoader err: " + e); }
+    } catch (e) { error("[v3] addModLoader err: " + e); }
 }

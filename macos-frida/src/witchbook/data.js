@@ -1,5 +1,5 @@
 // ============ WitchBook 数据域: 分类表 / 数据加载 / 版本项构建 / 本地化工具 ============
-import { A, dbg, fieldOffset, findClassAcrossImages, getGenericArgClass, invokeOk, makeS, wblog } from "../utils.js";
+import { A, dbg, fieldOffset, findClassAcrossImages, getGenericArgClass, invokeOk, makeS, wblog, error, warn } from "../utils.js";
 import { fileExists, readJSONFile } from "../io.js";
 import { setWbReady, wbData, wbCurrentMod, wbReady, wbCls } from "./state.js";
 import { registerLocalizedDict } from "./pages.js";
@@ -46,7 +46,7 @@ export function loadWitchBookData() {
     for (var mi = 0; mi < modList.length; mi++) {
         var key = modList[mi].key;
         var info = readJSONFile(root + "/" + key + "/info.json");
-        if (!info) { wblog("  " + key + ": info.json 读取/解析失败"); continue; }
+        if (!info) { warn("  " + key + ": info.json 读取/解析失败"); continue; }
         // 角色数据 (Profile 关联 + 立绘注册: Characters 完整角色 / SimpleCharacters 简单角色)
         if (info.Characters) {
             for (var ch = 0; ch < info.Characters.length; ch++) {
@@ -66,15 +66,15 @@ export function loadWitchBookData() {
         var catNames = Object.keys(wbCats);
         for (var cn = 0; cn < catNames.length; cn++) {
             var cat = wbCats[catNames[cn]];
-            if (!cat || !cat.name) { wblog("  cat 配置异常: key=" + catNames[cn]); continue; }
-            if (!wbData[cat.name]) { wblog("  wbData 缺分类 '" + cat.name + "', wbData 键=" + Object.keys(wbData).join(",")); return; }
+            if (!cat || !cat.name) { warn("  cat 配置异常: key=" + catNames[cn]); continue; }
+            if (!wbData[cat.name]) { warn("  wbData 缺分类 '" + cat.name + "', wbData 键=" + Object.keys(wbData).join(",")); return; }
             var groups = info[cat.field];
             if (!groups) continue;
             var texDir = cat.texDir ? (root + "/" + key + "/WitchBook/" + cat.texDir) : null;
             for (var g = 0; g < groups.length; g++) {
                 var grp = groups[g];
                 if (!grp.Id || !grp.Items || !grp.Items.length) continue;
-                if (wbData[cat.name][grp.Id]) { wblog("重复 " + cat.name + " ID '" + grp.Id + "' 跳过 (首个 mod 优先)"); continue; }
+                if (wbData[cat.name][grp.Id]) { warn("重复 " + cat.name + " ID '" + grp.Id + "' 跳过 (首个 mod 优先)"); continue; }
                 var rec = { key: key, versions: {}, path: null };
                 for (var v = 0; v < grp.Items.length; v++) {
                     var it = grp.Items[v];
@@ -137,7 +137,7 @@ export function buildLocalizedTextArray(locObj) {
         var tags = Object.keys(locObj);
         if (!tags.length) { locObj = { "zh-Hans": "" }; tags = ["zh-Hans"]; }
         var arr = A.an(wbCls.localizedText, tags.length);
-        if (!arr || arr.isNull()) { wblog("LocalizedText[] 创建失败"); return ptr(0); }
+        if (!arr || arr.isNull()) { warn("LocalizedText[] 创建失败"); return ptr(0); }
         var ctorMi = A.cgm(wbCls.localizedText, Memory.allocUtf8String(".ctor"), 2);
         for (var i = 0; i < tags.length; i++) {
             var lt = A.on(wbCls.localizedText);
@@ -147,7 +147,7 @@ export function buildLocalizedTextArray(locObj) {
             arr.add(0x20 + i * Process.pointerSize).writePointer(lt);
         }
         return arr;
-    } catch (e) { wblog("buildLocalizedTextArray err: " + e); return ptr(0); }
+    } catch (e) { error("buildLocalizedTextArray err: " + e); return ptr(0); }
 }
 // 构建 IdVersionPair (作为 _localizedTextData 的键, 与 VersionedItem._idVersionPair 同一实例)
 export function makeIdVersionPair(id, ver) {
@@ -197,7 +197,7 @@ export function buildVersionedItemFor(cat, vItemCls, id, ver, rec) {
         var ivp = makeIdVersionPair(id, ver);
         vi.add(fieldOffset(vItemCls, "_idVersionPair", 0x28)).writePointer(ivp);
         return { vi: vi, ivp: ivp, id: id, ver: ver, cat: cat };
-    } catch (e) { wblog("buildVersionedItemFor err '" + id + "': " + e); return null; }
+    } catch (e) { error("buildVersionedItemFor err '" + id + "': " + e); return null; }
 }
 // 向 List<VersionedItem<...>> 注入某分类某条目的所有版本; page 给定则预填 _localizedTextData
 export function injectVersions(list, addMi, vItemCls, cat, id, rec, page) {
@@ -205,7 +205,7 @@ export function injectVersions(list, addMi, vItemCls, cat, id, rec, page) {
     for (var i = 0; i < keys.length; i++) {
         var b = buildVersionedItemFor(cat, vItemCls, id, parseInt(keys[i], 10), rec);
         if (!b || !b.vi || b.vi.isNull()) continue;
-        if (!invokeOk(addMi, list, [b.vi]).ok) { wblog("List.Add 失败 '" + id + " v" + keys[i] + "'"); continue; }
+        if (!invokeOk(addMi, list, [b.vi]).ok) { warn("List.Add 失败 '" + id + " v" + keys[i] + "'"); continue; }
         added++;
         if (page) registerLocalizedDict(page, b);
     }

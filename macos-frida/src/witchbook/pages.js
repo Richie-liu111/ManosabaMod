@@ -1,5 +1,5 @@
 // ============ WitchBook 页面注入域: 注入 Page._loadedDataItemMap + _itemIds + _state + 本地化字典预填 ============
-import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, getGenericArgClass, getSystemClass, invokeOk, listContainsId, makeS, readStr, wblog } from "../utils.js";
+import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, getGenericArgClass, getSystemClass, invokeOk, listContainsId, makeS, readStr, wblog, dbg, error, warn } from "../utils.js";
 import { wbCls, wbData, wbOverrides } from "./state.js";
 import { currentModIds, injectVersions, localeValue, resolveLocale, unionLocaleKeys } from "./data.js";
 import { clearModItemsFromPage, isVanillaId } from "./session.js";
@@ -43,14 +43,14 @@ export function injectPage(cat) {
         appendItemIds(page, cat);
         applyStates(page, cat);
         return true;
-    } catch (e) { wblog("injectPage err(" + cat.name + "): " + e); return false; }
+    } catch (e) { error("injectPage err(" + cat.name + "): " + e); return false; }
 }
 // 向 _itemIds (string[]) 追加纯新 mod ID (原版 UpdateVersion 检查 Contains)
 export function appendItemIds(page, cat) {
     try {
         var pageCls = wbCls.pages[cat.name];
         // macOS 守卫: _itemIds 运行时可能是 Graphic[]/Canvas[] (泛型共享实例化差异), 非 String[] 绝不写入
-        if (!fieldIsStringArray(page, pageCls, "_itemIds")) { wblog(cat.name + "Page._itemIds 非 String[] (macOS 泛型共享), 跳过追加"); return; }
+        if (!fieldIsStringArray(page, pageCls, "_itemIds")) { warn(cat.name + "Page._itemIds 非 String[] (macOS 泛型共享), 跳过追加"); return; }
         var idsField = fieldOffset(pageCls, "_itemIds", 0x98);
         var old = page.add(idsField).readPointer();
         var newIds = [];
@@ -71,7 +71,7 @@ export function appendItemIds(page, cat) {
         for (var i = 0; i < newIds.length; i++) arr.add(0x20 + i * 8).writePointer(makeS(newIds[i]));
         page.add(idsField).writePointer(arr);
         wblog(cat.name + "Page._itemIds: +" + appended + " 纯新 ID, 共 " + newIds.length);
-    } catch (e) { wblog("appendItemIds err: " + e); }
+    } catch (e) { error("appendItemIds err: " + e); }
 }
 // 3) 状态: _state.SetVersion (各 State 都是 VersionedState 子类, 同步方法可 runtime_invoke)
 export function applyStates(page, cat) {
@@ -96,7 +96,7 @@ export function applyStates(page, cat) {
         }
         wbData.pendingStates[cat.name] = {};
         wblog(cat.name + "Page 状态应用 " + applied + " 条");
-    } catch (e) { wblog("applyStates err: " + e); }
+    } catch (e) { error("applyStates err: " + e); }
 }
 
 // 显示层: 预填 CluePage._localizedTextData (IReadOnlyDictionary<IdVersionPair, IReadOnlyDictionary<LocaleKind, LocalizedTexts>>)
@@ -122,19 +122,19 @@ export function registerLocalizedDict(page, b) {
     try {
         var dictField = fieldOffset(pageCls, "_localizedTextData", cat.locOff);
         var outer = page.add(dictField).readPointer();
-        if (outer.isNull()) { wblog(cat.name + "._localizedTextData 为 null, 跳过 '" + b.id + "'"); return; }
+        if (outer.isNull()) { warn(cat.name + "._localizedTextData 为 null, 跳过 '" + b.id + "'"); return; }
         var outerCls = A.ogc(outer);
         // 从现有值偷内层字典的具体实现类 (不能用泛型参数: 那是 IReadOnlyDictionary 接口, object_new 会崩)
         var sample = getFirstDictValue(outer);
-        if (!sample) { wblog(cat.name + "._localizedTextData 无现有值, 跳过 '" + b.id + "'"); return; }
+        if (!sample) { warn(cat.name + "._localizedTextData 无现有值, 跳过 '" + b.id + "'"); return; }
         var innerCls = A.ogc(sample);
         var innerName = A.cgn(innerCls).readCString();
         var addInner = A.cgm(innerCls, Memory.allocUtf8String("Add"), 2);
-        if (!addInner || addInner.isNull()) { wblog("内层字典无 Add (" + innerName + "), 跳过 '" + b.id + "'"); return; }
+        if (!addInner || addInner.isNull()) { warn("内层字典无 Add (" + innerName + "), 跳过 '" + b.id + "'"); return; }
         var vrec = wbData[cat.name][b.id].versions[String(b.ver)];
         if (!vrec) return;
         var inner = A.on(innerCls);
-        if (!invokeOk(A.cgm(innerCls, Memory.allocUtf8String(".ctor"), 0), inner, []).ok) { wblog("内层字典 ctor 失败 '" + b.id + "'"); return; }
+        if (!invokeOk(A.cgm(innerCls, Memory.allocUtf8String(".ctor"), 0), inner, []).ok) { warn("内层字典 ctor 失败 '" + b.id + "'"); return; }
         if (cat.locKind === "str") {
             // Profile: Dictionary<LocaleKind, string> — 值 = 描述字符串
             var descTags = unionLocaleKeys(vrec.desc);
@@ -149,7 +149,7 @@ export function registerLocalizedDict(page, b) {
                 try { var ifaceCls = getGenericArgClass(outerCls, 1); if (!ifaceCls.isNull()) ltsCls = getGenericArgClass(ifaceCls, 1); } catch (e) {}
             }
             var ltsCtor = (ltsCls && !ltsCls.isNull()) ? A.cgm(ltsCls, Memory.allocUtf8String(".ctor"), 2) : null;
-            if (!ltsCls || ltsCls.isNull() || !ltsCtor || ltsCtor.isNull()) { wblog(cat.name + ".LocalizedTexts 类/ctor 未找到, 跳过 '" + b.id + "'"); return; }
+            if (!ltsCls || ltsCls.isNull() || !ltsCtor || ltsCtor.isNull()) { warn(cat.name + ".LocalizedTexts 类/ctor 未找到, 跳过 '" + b.id + "'"); return; }
             var f1 = null, f2 = null;
             if (cat.name === "clue") { f1 = vrec.name; f2 = vrec.desc; }         // (Name, Description)
             else if (cat.name === "rule") { f1 = vrec.subtitle; f2 = vrec.desc; } // (Subtitle, Description)
@@ -176,6 +176,6 @@ export function registerLocalizedDict(page, b) {
                 }
             } catch (e) {}
         }
-        wblog(cat.name + "._localizedTextData 预填 '" + b.id + "' v" + b.ver + " (" + innerName + ")");
-    } catch (e) { wblog("registerLocalizedDict err '" + b.id + "': " + e); }
+        dbg(cat.name + "._localizedTextData 预填 '" + b.id + "' v" + b.ver + " (" + innerName + ")");
+    } catch (e) { error("registerLocalizedDict err '" + b.id + "': " + e); }
 }

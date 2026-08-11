@@ -13,7 +13,7 @@ mod 剧本 / 本地化 / voice / audio 已通过 provider 管线加载。
 ├── dist/manosabamod.js              ← 主 Frida 脚本 (frida-compile 构建产物, 部署到这里)
 └── ManosabaMod/                     ← mod 目录 (首次运行 run_mod.sh 自动创建)
     ├── 1919180/                     ← 你的 mod (含 info.json + Scripts/...)
-    └── TaffyModLoader/Scripts/      ← 启动时自动生成 (菜单剧本)
+    └── ModLoader/Scripts/           ← 启动时自动生成 (菜单剧本)
 
 仓库 — 脚本源 (clone 到任何位置, 只用于部署/更新脚本)
 ManosabaMod/
