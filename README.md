@@ -2,7 +2,7 @@
 
 《魔法少女的魔女审判》(manosaba) 的 MOD 加载器:在游戏基础上加载自制剧本、本地化、语音、音频、视频、背景、立绘,注入魔女图鉴数据,并在审判环节支持自定义面板与论破动画。
 
-提供两个版本:
+目前有两个版本:
 
 - **Windows (BepInEx)** — [ManosabaLoader/](ManosabaLoader/),原版 C# 加载器
 - **macOS (Frida)** — [macos-frida/](macos-frida/),用 Frida 注入 IL2CPP 的 Apple Silicon 移植,不依赖 BepInEx
@@ -25,7 +25,7 @@
 | mod 选择菜单(含翻页,每页 4 个) | ✅ |
 | mod 剧本 (.nani) | ✅ |
 | 本地化 (.txt) / 语音 | ✅ |
-| 音频 (.wav) | ✅ |
+| 音频 (.wav, 限 PCM16/44100Hz/立体声) | ✅ |
 | 音频 (.ogg) | ❌ 不支持,用 ffmpeg 转 wav(原因见下方已知限制) |
 | 视频 (.mp4/.webm/.ogv,URL 流式播放) | ✅ |
 | 背景 (`@back`) / 立绘 (`@char`) | ✅ |
@@ -133,7 +133,7 @@ macOS 版的剧本结构与 Windows 版类似。
 ## 已知限制
 
 - **macOS 进程行为**:`ctrl+c` 终止启动脚本并一并收掉游戏(SIGTERM→SIGKILL);或直接退出游戏,脚本自动收尾。2026-08-12 起:游戏存活检测 + frida-helper 主动清理,不再残留孤儿进程。注意:程序坞退出游戏或者游戏内退出表现为"未响应",需强制退出。手动退出游戏时 macOS 可能弹出崩溃报告 (SIGSEGV at `__cxa_throw`,IL2CPP 退出期异常路径),与 mod 运行期功能无关
-- **音频解析** 只支持wav, ogg 不支持(原装 `WavToAudioClipConverter` 的 Representations 仅 `.wav` 且只解 PCM16,`.ogg` 文件无法被资源定位;已调研,结论见 macos-frida/GOALS.md)。如果 voice 有 ogg 格式的音频,先用 ffmpeg 转成 wav 格式。
+- **音频解析** 走游戏原装 `WavToAudioClipConverter`,只支持 **PCM16 / 44100Hz / 立体声 wav**:`.ogg` 无法被资源定位;48kHz 等非标采样率/位深/声道的 wav 会播放失败或音高偏移(Windows 版 #5 修复的就是这个问题)。非标音频统一转码:`ffmpeg -i in.ogg -ar 44100 -ac 2 -sample_fmt s16 out.wav`(ogg 与任意 wav 都适用;根因与 Windows 侧对照见 macos-frida/GOALS.md)。
 - @char SubId:"Middle" + 自定义角色 可能会导致角色立绘在退出剧本时不被清除，建议不要加SubId:"Middle"参数。
 
 ## 文档
@@ -148,6 +148,8 @@ macOS 版的剧本结构与 Windows 版类似。
 
 - [BepInEx](https://github.com/BepInEx/BepInEx) — Windows 版加载器运行框架
 - [frida](https://frida.re/) — macOS 版注入框架
+- [Claude Code](https://github.com/anthropics/claude-code) — 开发协助 (AI 编程助手,Anthropic)
+- [IrisuM/ManosabaMod](https://github.com/IrisuM/ManosabaMod) — Windows 版加载器上游项目(贡献者:Asa-Chiri / zyf722 / dogdie233;v2.0.0+ 功能含 OGG 音频、@choice handler、@gosubCutIn、本地化)
 - 雪莉苹果汁的 mod 文档与样例 [雪莉的剧本编辑器](https://manosabamoddoc.fuyumi.xyz/docs/)
 
 ## 许可证

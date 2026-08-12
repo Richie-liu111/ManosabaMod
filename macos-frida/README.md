@@ -98,8 +98,8 @@ GAME=/path/to/manosaba ./run_mod.sh # 游戏不在 Steam 默认位置时
 | mod 菜单 (含翻页, 每页 4 个) | ✅ |
 | mod 剧本 (.nani) | ✅ |
 | 本地化 (.txt) / voice | ✅ |
-| 音频 (.wav) | ✅ |
-| 音频 (.ogg) | ❌ 不支持, 用 ffmpeg 转 wav |
+| 音频 (.wav, 限 PCM16/44100Hz/立体声) | ✅ |
+| 音频 (.ogg) | ❌ 不支持, 用 ffmpeg 转 wav (`ffmpeg -i in.ogg -ar 44100 -ac 2 -sample_fmt s16 out.wav`; 原因见 GOALS.md) |
 | Movie (.mp4/.webm/.ogv) | ✅ |
 | 背景 (@back) / 立绘 (@char) | ✅ |
 | 角色名富文本 (姓/名分级字号+颜色) | ✅ |

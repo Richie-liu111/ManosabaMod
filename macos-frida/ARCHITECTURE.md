@@ -189,7 +189,7 @@ ManosabaMod/<ModName>/
 ├── info.json              ← 同一 schema (Name/Enter/Clues/$schemaVersion)
 ├── Scripts/*.nani         ← Naninovel 剧本语言, 游戏自己的 ScriptParser 解析
 ├── Text/Scripts/*.txt     ← 本地化文档
-├── Audio/  Voice/         ← 音频 (wav 等)
+├── Audio/  Voice/         ← 音频 (限 PCM16/44100Hz/立体声 wav; ogg 需转码, 见 GOALS.md)
 ├── Backgrounds/ Characters/ ← 贴图
 └── Movie/  WitchBook/     ← 视频 / 线索
 ```
@@ -204,8 +204,8 @@ ManosabaMod/<ModName>/
 | mod 菜单 (标题画面) | ✅ |
 | mod 剧本 (.nani) | ✅ |
 | 本地化文档 (.txt) | ✅ |
-| voice / audio (.wav) | ✅ |
-| 音频 (.ogg) | ❌ 不支持 (用 ffmpeg 转 wav; 根因与调研决策见 GOALS.md 已知开放项) |
+| voice / audio (.wav, 限 PCM16/44100Hz/立体声) | ✅ |
+| 音频 (.ogg) | ❌ 不支持 (ffmpeg 转 wav; 根因与 wav 限制见 GOALS.md 已知开放项) |
 | WitchBook 全 4 分类 (Clue/Profile/Rule/Note) + 新角色 | ✅ (数据注入 + 状态 + 纹理 + 姓名) |
 | WitchBook 会话隔离 (整页重建 + override 可逆) | ✅ |
 | 背景 (Backgrounds/MainBackground|Stills|Tricks) | ✅ (JpgOrPngToTextureConverter provider) |
