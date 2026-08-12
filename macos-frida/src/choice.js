@@ -180,7 +180,7 @@ function chSwapPortrait(clone, sprite) {
             if (setSprMi && !setSprMi.isNull()) invoke(setSprMi, best, [sprite]);
             var snsMi = A.cgm(chCls.image, Memory.allocUtf8String("SetNativeSize"), 0);
             if (snsMi && !snsMi.isNull()) invoke(snsMi, best, []);
-            info("[Choice] 换立绘 OK '" + chObjName(clone) + "' (score=" + bestScore + ")");
+            info("[Choice] 立绘替换完成: '" + chObjName(clone) + "'");
             return true;
         }
         warn("[Choice] 未找到 portrait Image (len=" + len + ")");
@@ -233,7 +233,7 @@ function chStealResourceGOClass() {
                 }
             } catch (e2) {}
         });
-        if (out) { chData.resGOClass = out; info("[Choice] 偷到 Resource<GameObject> klass=" + A.cgn(out).readCString() + " (from " + (chData.resGOClass ? "loaded cache" : "cache") + ")"); }
+        if (out) { chData.resGOClass = out; dbg("[Choice] 捕获 Resource<GameObject> klass=" + A.cgn(out).readCString() + " (from " + (chData.resGOClass ? "loaded cache" : "cache") + ")"); }
         return out;
     } catch (e) { dbg("[Choice] chStealResourceGOClass err: " + e); return null; }
 }
@@ -305,7 +305,7 @@ function chEnsureVrp() {
     if (!resDict || resDict.isNull()) { warn("[Choice] VRP.Resources 为空 — 地基坏, 中止"); return null; }
     chData.vrp = vrp;
     chData.vrpDict = resDict;
-    info("[Choice] R1: VRP 构造 OK vrp=" + vrp + " Resources=" + resDict + " (" + A.cgn(A.ogc(resDict)).readCString() + ")");
+    dbg("[Choice] R1: VRP 构造成功 vrp=" + vrp + " Resources=" + resDict + " (" + A.cgn(A.ogc(resDict)).readCString() + ")");
     return vrp;
 }
 // R2: 真 Resource`1<GameObject> 构造 (2参ctor invoke; 探针实证读回 path/object 正确)
@@ -318,7 +318,7 @@ function chMakeResourceGO(path, obj) {
     if (!r.ok) { warn("[Choice] Resource ctor FAIL '" + path + "'"); return null; }
     var pback = readStr(res.add(0x10).readPointer());
     if (pback !== path) { warn("[Choice] Resource 读回 path 不符 '" + pback + "' vs '" + path + "'"); return null; }
-    dbg("[Choice] R2: Resource<GameObject> '" + path + "' 构造 OK res=" + res + " obj=" + res.add(0x18).readPointer());
+    dbg("[Choice] R2: Resource<GameObject> '" + path + "' 构造成功 res=" + res + " obj=" + res.add(0x18).readPointer());
     return res;
 }
 // R3: Resources.Add + ContainsKey 自验证 (探针实证全通; 内容哈希 → makeS key 即真实 key)
@@ -333,7 +333,7 @@ function chServeResource(path, res) {
     var ck = invokeOk(ckMi, dict, [makeS(path)]);
     var ck2 = invokeOk(ckMi, dict, [makeS(path + "__NOPE__")]);
     var ok = chBool(ck) && !chBool(ck2);
-    info("[Choice] R3: Resources.Add('" + path + "') OK ContainsKey=" + chBool(ck) + " 对照组=" + chBool(ck2) + " → " + (ok ? "✓" : "✗"));
+    dbg("[Choice] R3: Resources.Add('" + path + "') 成功 ContainsKey=" + chBool(ck) + " 对照组=" + chBool(ck2) + " 结果=" + (ok ? "正常" : "异常"));
     return ok;
 }
 // R4: meta 构造 + AddRecord + ContainsId 验证 (Implementation 从 vanilla Trial meta 逐字节复制)
@@ -389,7 +389,7 @@ function chRegisterMeta(hd) {
                         var lsz = list.add(0x18).readS32();
                         var lit = list.add(0x10).readPointer();
                         var l0 = (lsz > 0 && lit && !lit.isNull() && lit.add(0x18).readS32() > 0) ? readStr(lit.add(0x20).readPointer()) : null;
-                        info("[Choice] ProviderTypes 读回: size=" + lsz + " [0]='" + (l0 || "?") + "'");
+                        dbg("[Choice] ProviderTypes 读回: size=" + lsz + " [0]='" + (l0 || "?") + "'");
                         if (lsz !== 1 || l0 !== chData.providerKey)
                             warn("[Choice] ProviderTypes 内容异常! 游戏 GetProviders 将拿不到 '" + chData.providerKey + "' (疑似根因)");
                     } catch (e) { warn("[Choice] ProviderTypes 读回 err: " + e); }
@@ -402,7 +402,7 @@ function chRegisterMeta(hd) {
         var implBack = readStr(meta.add(fieldOffset(chCls.choiceHandlerMeta, "Implementation", 0x10)).readPointer());
         var ldrBack = meta.add(fieldOffset(chCls.choiceHandlerMeta, "Loader", 0x18)).readPointer();
         var pfxBack = readStr(loader.add(fieldOffset(chCls.resourceLoaderConfig, "PathPrefix", 0x10)).readPointer());
-        info("[Choice] meta 读回: id='" + hd.id + "' Impl='" + (implBack || "") + "' Loader=" + (ldrBack && !ldrBack.isNull() ? "0x" + ldrBack.toString() : "NULL") + " PathPrefix='" + (pfxBack || "") + "'");
+        dbg("[Choice] meta 读回: id='" + hd.id + "' Impl='" + (implBack || "") + "' Loader=" + (ldrBack && !ldrBack.isNull() ? "0x" + ldrBack.toString() : "NULL") + " PathPrefix='" + (pfxBack || "") + "'");
         // AddRecord + ContainsId 自验证 (探针实证: 装箱 bool 必须 chBool 读)
         var arMi = A.cgm(A.ogc(metaMap), Memory.allocUtf8String("AddRecord"), 2);
         if (!arMi || arMi.isNull()) { warn("[Choice] AddRecord NOT FOUND"); return false; }
@@ -412,7 +412,7 @@ function chRegisterMeta(hd) {
         var hv = hasMi && !hasMi.isNull() ? invokeOk(hasMi, metaMap, [makeS(hd.id)]) : { ok: false };
         if (!chBool(hv)) { warn("[Choice] AddRecord 后 ContainsId('" + hd.id + "') = false — 未生效"); return false; }
         chData.registeredIds[hd.id] = true;
-        info("[Choice] R4: AddRecord('" + hd.id + "') + ContainsId ✓");
+        dbg("[Choice] R4: AddRecord('" + hd.id + "') + ContainsId 通过");
         return true;
     } catch (e) { warn("[Choice] chRegisterMeta err: " + e); return false; }
 }
@@ -426,7 +426,7 @@ function chRegisterProvider() {
         var addMi = A.cgm(A.ogc(pm), Memory.allocUtf8String("Add"), 2);
         if (addMi && !addMi.isNull()) {
             var ar = invokeOk(addMi, pm, [makeS(chData.providerKey), chData.vrp]);
-            if (ar.ok) info("[Choice] providersMap.Add('" + chData.providerKey + "', vrp) OK");
+            if (ar.ok) dbg("[Choice] providersMap.Add('" + chData.providerKey + "', vrp) 成功");
             else { warn("[Choice] providersMap.Add FAIL (invoke 异常)"); return false; }
         }
         // GetProvider 在 ResourceProviderManager 上 (不在 providersMap 字典上)
@@ -435,7 +435,7 @@ function chRegisterProvider() {
             if (gpMi && !gpMi.isNull()) {
                 var gpr = invokeOk(gpMi, rpm, [makeS(chData.providerKey)]);
                 var gret = gpr.ok ? gpr.ret : ptr(0);
-                if (gret && !gret.isNull() && gret.equals(chData.vrp)) info("[Choice] GetProvider('" + chData.providerKey + "') ✓ 就是我们的 vrp");
+                if (gret && !gret.isNull() && gret.equals(chData.vrp)) dbg("[Choice] GetProvider('" + chData.providerKey + "') 返回 vrp 一致");
                 else { warn("[Choice] GetProvider 返回 " + (gret && !gret.isNull() ? cn(gret) : "null") + " ≠ vrp — providersMap 未生效"); return false; }
             } else warn("[Choice] rpm.GetProvider NOT FOUND");
         } catch (e) { warn("[Choice] GetProvider 验证 err: " + e); return false; }
@@ -480,7 +480,7 @@ function tryFinalizeChoiceHandlers() {
                 else if (nm.indexOf("@Hiro") >= 0 && !srcHiro) srcHiro = panels[p];
             }
             if (!srcEma && !srcHiro) { dbg("[Choice] 源面板未出现 (TrialChoiceHandlerPanel=" + panels.length + "), 稍后重试"); return; }
-            info("[Choice] 源面板: Ema=" + (srcEma ? chObjName(srcEma) : "无") + " Hiro=" + (srcHiro ? chObjName(srcHiro) : "无"));
+            dbg("[Choice] 源面板: Ema=" + (srcEma ? chObjName(srcEma) : "无") + " Hiro=" + (srcHiro ? chObjName(srcHiro) : "无"));
             // 3. Resource<GameObject> 类
             if (!chData.resGOClass || chData.resGOClass.isNull()) {
                 chStealResourceGOClass();
@@ -544,7 +544,7 @@ function tryFinalizeChoiceHandlers() {
             }
             if (allOk) {
                 chData.registered = true;
-                info("[Choice] ===== 注册完成: " + chData.handlers.length + " 个 handler, vrp=" + chData.vrp + " =====");
+                info("[Choice] choice handler 注册完成: " + chData.handlers.length + " 个");
                 chDumpMethods(chCls.vrp, "VRP");
                 if (chData.rlKlass && !chData.rlKlass.isNull()) chDumpMethods(chData.rlKlass, "RL");
                 chHookDictTryGetValue();
@@ -593,7 +593,7 @@ function chHookDictTryGetValue() {
                                 (chData.vrpDict && self.equals(chData.vrpDict))) {
                                 var selfCls = "";
                                 try { selfCls = A.cgn(A.ogc(self)).readCString(); } catch (e) {}
-                                info("[Choice] " + mnm2 + " self=" + self + " (" + selfCls + ") key='" + key + "'" +
+                                dbg("[Choice] " + mnm2 + " self=" + self + " (" + selfCls + ") key='" + key + "'" +
                                     (chData.vrpDict && self.equals(chData.vrpDict) ? " ←我们的 dict" : ""));
                             }
                         } catch (e) {}
@@ -643,7 +643,7 @@ function chHookClassMethods(cls, tag, all) {
                                 if (mnm === "Load" && tag === "RL-P") {
                                     try {
                                         var ps = chReadProvisionSources(self);
-                                        dbg("[Choice] RL-P.Load ProvisionSources(" + ps.cnt + "): " + ps.desc + (ps.hasVrp ? " ✓ 含我们的 vrp" : " ✗ 无 vrp — 游戏从不调我们的 provider"));
+                                        dbg("[Choice] RL-P.Load ProvisionSources(" + ps.cnt + "): " + ps.desc + (ps.hasVrp ? " 含 vrp" : " 无 vrp"));
                                     } catch (e3) { dbg("[Choice] ProvisionSources 诊断 err: " + e3); }
                                 }
                                 // RL-P.Load 的加载入口 backtrace (run14: 游戏拿到 vrp 后内部调用全盲区)
@@ -863,7 +863,7 @@ function chHookRl() {
                                             var ckMi = A.cgm(A.ogc(chData.vrpDict), Memory.allocUtf8String("ContainsKey"), 1);
                                             var ckr = ckMi && !ckMi.isNull() ? invokeOk(ckMi, chData.vrpDict, [makeS(full)]) : { ok: false };
                                             var ck = ckr.ok ? chBool(ckr) : "?";
-                                            info("[Choice] 自验证 vrp.Resources.ContainsKey('" + full + "') = " + ck + " (游戏 Load 即将查询的 fullPath)");
+                                            dbg("[Choice] 自验证 vrp.Resources.ContainsKey('" + full + "') = " + ck + " (游戏 Load 即将查询的 fullPath)");
                                             this._pre = chDictPhysCount(chData.vrpDict);
                                             var ks = chDictPhysKeys(chData.vrpDict);
                                             dbg("[Choice] vrp.Resources 物理 count=" + this._pre + " keys(" + ks.length + "): " + ks.slice(0, 8).join(", ") + (ks.length > 8 ? " ..." : ""));
@@ -890,7 +890,7 @@ function chHookRl() {
                                                         var goCls = ptr(0);
                                                         try { goCls = findClassAcrossImages("UnityEngine", "GameObject"); } catch (e2) {}
                                                         var goName = goCls && !goCls.isNull() ? A.cgn(goCls).readCString() : "?";
-                                                        dbg("[Choice] Resource.Object klass=" + objName + " vs GameObject klass=" + goName + (objCls.equals(goCls) ? " — 匹配 ✓" : " — 不匹配!!"));
+                                                        dbg("[Choice] Resource.Object klass=" + objName + " vs GameObject klass=" + goName + (objCls.equals(goCls) ? " — 匹配" : " — 不匹配"));
                                                     }
                                                 }
                                             } catch (e2) { dbg("[Choice] Object klass 检查 err: " + e2); }
@@ -1031,7 +1031,7 @@ function chKeepAlive() {
             var addMi = A.cgm(A.ogc(pm), Memory.allocUtf8String("Add"), 2);
             if (addMi && !addMi.isNull()) {
                 var ar = invokeOk(addMi, pm, [makeS(chData.providerKey), chData.vrp]);
-                info("[Choice] 保活: providersMap 丢失 '" + chData.providerKey + "', 重新 Add " + (ar.ok ? "OK" : "FAIL(可能已存在/异常)"));
+                info("[Choice] 检测到 providersMap 缺失 '" + chData.providerKey + "', 已重新注册 " + (ar.ok ? "成功" : "失败(可能已存在/异常)"));
             }
         }
     } catch (e) { dbg("[Choice] chKeepAlive err: " + e); }
@@ -1054,7 +1054,7 @@ function installDiagHooks() {
                             var self = a[0];
                             var id = "";
                             try { var idMi = A.cgm(A.ogc(self), Memory.allocUtf8String("get_Id"), 0); if (idMi && !idMi.isNull()) id = readStr(invoke(idMi, self, [])); } catch (e) {}
-                            if (id && id.indexOf("Trial") !== 0) info("[Choice] 游戏构造 UIChoiceHandler '" + id + "' (Initialize)");
+                            if (id && id.indexOf("Trial") !== 0) dbg("[Choice] 游戏构造 UIChoiceHandler '" + id + "' (Initialize)");
                         } catch (e) {}
                     }
                 });
@@ -1073,7 +1073,7 @@ function installDiagHooks() {
                         onEnter: function (a) {
                             try {
                                 var id = readStr(a[1]);
-                                if (id && id.indexOf("Trial") !== 0) info("[Choice] 游戏 GetOrAddActor('" + id + "')");
+                                if (id && id.indexOf("Trial") !== 0) dbg("[Choice] 游戏 GetOrAddActor('" + id + "')");
                             } catch (e) {}
                         }
                     });
@@ -1115,7 +1115,7 @@ function installDiagHooks() {
                                 var rc = (rp && !rp.isNull()) ? A.cgn(A.ogc(rp)).readCString() : "null";
                                 var ours = chData.vrp && rp && !rp.isNull() && rp.equals(chData.vrp);
                                 if (k === chData.providerKey)
-                                    dbg("[Choice] 游戏 GetProvider('" + k + "') → " + rc + (ours ? " ✓ 我们的 vrp" : " ✗ 不是/丢失"));
+                                    dbg("[Choice] 游戏 GetProvider('" + k + "') → " + rc + (ours ? " 是 vrp" : " 不是/丢失"));
                             } catch (e) {}
                         }
                     });

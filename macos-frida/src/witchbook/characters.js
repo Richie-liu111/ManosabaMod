@@ -47,7 +47,7 @@ export function addCharacterProviders(root, prefix) {
                     if (!already) {
                         var addMi = A.cgm(pmCls, Memory.allocUtf8String("Add"), 2);
                         if (addMi && !addMi.isNull() && invokeOk(addMi, pm, [makeS(prefix), lrp]).ok)
-                            dbg("[v3] providersMap.Add('" + prefix + "') OK");
+                            dbg("[v3] providersMap.Add('" + prefix + "') 成功");
                         else
                             dbg("[v3] providersMap.Add('" + prefix + "') 失败/已存在");
                     }

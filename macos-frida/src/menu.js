@@ -93,7 +93,7 @@ export function registerMenuText() {
                 }
             }
         } catch (e2) { dbg("[v3] text class-steal err: " + e2); }
-        if (!resClass || !lrClass) { dbg("[v3] 无法偷 TextAsset 类"); return; }
+        if (!resClass || !lrClass) { dbg("[v3] 无法获取 TextAsset 类"); return; }
 
         // new TextAsset()
         var ueImg = findUnityImg();
@@ -151,7 +151,7 @@ export function registerMenu(modList) {
         if (!ftMi || ftMi.isNull()) { dbg("[v3] Script.FromText NOT FOUND"); return; }
         var script = invoke(ftMi, ptr(0), [makeS(modMenuScript), makeS(text), ptr(0)]);
         if (script.isNull()) { dbg("[v3] FromText returned null"); return; }
-        dbg("[v3] FromText OK, script=" + script);
+        dbg("[v3] FromText 成功, script=" + script);
 
         var sm = findSvc("ScriptManager");
         if (!sm) { dbg("[v3] ScriptManager NOT FOUND"); return; }
@@ -177,7 +177,7 @@ export function registerMenu(modList) {
                 }
             }
         } catch (e2) { dbg("[v3] class-steal err: " + e2); }
-        if (!resClass || !lrClass) { dbg("[v3] 无法偷类指针"); return; }
+        if (!resClass || !lrClass) { dbg("[v3] 无法获取类指针"); return; }
 
         var resPath = modScriptPrefix + "/Scripts/" + modMenuScript;
         var ourRes = A.on(resClass);

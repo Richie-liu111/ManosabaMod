@@ -161,7 +161,7 @@ export function populateConvertersDict(lrp, convClassName, targetClsFn, tag) {
         if (targetCls.isNull()) { dbg("[v3] 目标类型类 NULL (" + tag + ")"); return false; }
         var typeObj = A.tgo(A.cgt(targetCls));               // typeof(target)
         if (!invokeOk(A.cgm(dictCls, Memory.allocUtf8String("Add"), 2), dict, [typeObj, listObj]).ok) { dbg("[v3] Dict.Add 失败 (" + tag + ")"); return false; }
-        dbg("[v3] converters 填充 OK (" + convClassName + " → " + tag + ")");
+        dbg("[v3] converters 填充成功 (" + convClassName + " → " + tag + ")");
         return true;
     } catch (e) { dbg("[v3] populateConverters err (" + tag + "): " + e); return false; }
 }

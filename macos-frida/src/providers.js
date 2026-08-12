@@ -19,7 +19,7 @@ export function insertProvisionSource(rl, lrp, prefix, tag) {
         if (!insMi || insMi.isNull()) { dbg("[v3] " + tag + ": List.Insert NOT FOUND"); return false; }
         var idxBuf = Memory.alloc(4); idxBuf.writeS32(0);
         var r = invokeOk(insMi, psList, [idxBuf, psMem]);
-        dbg("[v3] " + tag + ": Insert(" + prefix + ") → " + (r.ok ? "OK" : "FAIL") + " 条数=" + psList.add(0x18).readS32());
+        dbg("[v3] " + tag + ": Insert(" + prefix + ") → " + (r.ok ? "成功" : "失败") + " 条数=" + psList.add(0x18).readS32());
         return r.ok;
     } catch (e) { dbg("[v3] insertProvisionSource err (" + tag + "): " + e); return false; }
 }
