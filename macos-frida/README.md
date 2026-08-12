@@ -1,7 +1,7 @@
 # ManosabaMod macOS 移植 (Frida)
 
 用 **Frida** 在 macOS (Apple Silicon) 上加载 ManosabaMod,不依赖 BepInEx。
-mod 剧本 / 本地化 / voice / audio 已通过 provider 管线加载。
+mod 剧本 / 本地化 / voice / audio / movie / 背景 / 立绘 已通过 provider 管线加载。
 
 ## 结构总览
 
@@ -82,8 +82,7 @@ cd "$GAME"
 
 1. **已部署**:本脚本在 `manosaba.app` 旁边 → 直接用当前目录
 2. Steam 默认位置:`~/Library/Application Support/Steam/steamapps/common/manosaba_game`
-3. 仓库在工作区副本 `manosaba_game_mac` 旁(仅本地开发场景)
-4. 环境变量 `GAME`(手动指定)
+3. 环境变量 `GAME`(手动指定)
 
 ### 其他用法
 
@@ -103,6 +102,7 @@ GAME=/path/to/manosaba ./run_mod.sh # 游戏不在 Steam 默认位置时
 | WitchBook 全 4 分类 (线索/人物/规定/记录) + 新角色 | ✅ |
 | WitchBook 会话隔离 (整页重建, override 可逆) | ✅ |
 | 背景 (@back) / 立绘 (@char) | ✅ |
-| 审判 mod (@choice handler:"<modId>"，自定义论破等) | ❌ 未实现 |
+| 审判自定义面板 (@choice handler:"<modId>") | ✅ |
+| 自定义论破动画 (@gosubCutIn) | ✅ |
 
 架构、工作原理、与 Windows 版差异、mod 格式兼容性详见 [ARCHITECTURE.md](ARCHITECTURE.md)。

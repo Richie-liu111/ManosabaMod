@@ -112,7 +112,7 @@ ScriptPlaylist.LoadResources
 (`Play`/`HoldResources`/`LoadMovieClip`)不能直接 runtime_invoke,但**入口/返回值
 用 Interceptor 拦**没问题。
 
-### 6. WitchBook 全 4 分类 — 数据注入 + 会话隔离 (镜像 Windows ModClueLoader + ModProfileLoader + ModRuleNoteLoader)
+### 6. WitchBook 4 分类 — 数据注入 + 会话（资源）隔离 (镜像 Windows ModClueLoader + ModProfileLoader + ModRuleNoteLoader)
 
 `@update` 链路: `UpdateWitchBook.Execute` → `WitchBookUi.UpdateVersion` → `WitchBookScreen.UpdateVersion`
 → `XxxPage.UpdateVersion` → `_state.SetVersion`。原版对 `_itemIds` 之外的 id 不处理,
@@ -135,13 +135,15 @@ ScriptPlaylist.LoadResources
   `AddressablesManager._loadedAssets`,`@spawn "Clue"` 弹窗和缩略图共用。
 - **当前 mod 识别**: 钩 `ScriptLoader.Load` 匹配 `modList` 的 `Enter` 路径
   (Windows 读 `modKey` 自定义变量, 思路一致)。
-- **会话隔离 — 整页重建** (防止跨剧本/跨会话继承):
+- **会话（资源）隔离 — 整页重建** (防止跨剧本/跨会话继承):
   - **只注入当前 mod** 的条目。
   - **override** (mod id == 原版 id, 如 `Hiro`): 注入时移除原版同 id 条目 + 注入 mod 版。
   - **整页重建**: 页面首次出现时捕获原版 `_loadedDataItemMap` 快照 (按页面实例);
     mod 切换/回标题时 **清空 map → 从快照重添全部原版条目** → 重建 `_itemIds` →
     补缺失 dict 项 → 注入当前 mod。每次会话从原版基座开始, override 完全可逆 (含 v1)。
   - 面板恢复捕获的原版默认文本/占位图 (`_defaultTexture`),空态非纯白。
+
+隔离只隔离剧本资源，如果剧本scripts文件夹有 'System/System_title.nani' 之类的，还是会正常生效（替换游戏原主菜单）
 
 ### 7. 背景 + 立绘 (镜像 Windows AddModLoader 背景块 + AddRichCharacter/AddSimpleCharacter)
 
@@ -208,8 +210,8 @@ ManosabaMod/<ModName>/
 | 背景 (Backgrounds/MainBackground|Stills|Tricks) | ✅ (JpgOrPngToTextureConverter provider) |
 | 立绘 (@char Characters/SimpleCharacters) | ✅ (ActorMetadata 注册 + providersMap) |
 | Movie (.mp4/.webm/.ogv) | ✅ (URL 流式) |
-| @choice handler:"<modId>" | ❌ 未实现 |
-| CutIn (论破) | ❌ 未实现 |
+| @choice handler:"<modId>" | ✅ |
+| CutIn (论破) | ✅ |
 
 ## 七、macOS 已知坑与修复
 
@@ -234,14 +236,13 @@ RVA 0x3404d4 完全一致; 不加载任何 mod 也会发生, 加载 mod 后概�
 
 **修复 a — 写入守卫** (`utils.fieldIsStringArray`): 所有 `_itemIds` 写入点
 (`appendItemIds` / `rebuildItemIdsFromMap` / `clearModItemsFromPage` 第 3 段)
-先验证运行时类型, 非 `String[]` 绝不写入 (防内存破坏)。
+先验证运行时类型, 非 `String[]` 不写入 (防内存破坏)。
 
 **修复 b — 换数组根治** (`utils.ensureItemIdsString`, 2026-08-04):
 - hook 各页面类 + `WitchBookPageBase` 的 `UpdateVersion` (1-3 参, methodPointer 去重)
   `onEnter` → 若 `_itemIds` 非 `String[]`, 从 `_loadedDataItemMap` 提取全部 id
   **重建真 `string[]` 写回** (内容 = Windows 语义的 id 集合) → 游戏原逻辑
-  (Contains 门 + SetVersion) 完整执行 → MAE 无源, **崩溃与黑屏同时消灭**,
-  原版审判状态设置恢复正常。
+  (Contains 门 + SetVersion) 完整执行 → MAE 无源,原版审判状态设置恢复正常。
 - 所有加载器写入点也先 `ensureItemIdsString` 再写 (CluePage 的追加逻辑随之恢复)。
 
 **风险/遗留**: 换数组后游戏其它读 `_itemIds` 的位置 (若有) 语义未验证 ——
@@ -251,9 +252,9 @@ RVA 0x3404d4 完全一致; 不加载任何 mod 也会发生, 加载 mod 后概�
 
 **已确认事实**: `@char SubId:"Middle" <char>.<appearance>` (如 BoneWingEma 的
 `SubId:"Middle" gyEma-Ch2.8`) 显示的立绘在回标题后**不被清除**;
-无 SubId 用法的 mod (Rewind) 无残留 → SubId 是差异因素 (A/B 确认)。
+无 SubId 用法的 mod (Rewind) 无残留 → SubId 是差异因素。
 
-**机制 (推断, 未引擎级实锤)**: SubId 是 Naninovel 的**槽位参数** — 带 SubId 时 actor
+**机制 (推断, 未验证)**: SubId 是 Naninovel 的**槽位参数** — 带 SubId 时 actor
 实例注册为复合 key `{charId}-{SubId}` (同屏可显示同一角色多实例); 回标题时引擎的
 舞台清理按角色 id 遍历移除, 复合 key 的 SubId 实例找不到 → 留在舞台上 → 残留。
 
@@ -287,13 +288,13 @@ RVA 0x3404d4 完全一致; 不加载任何 mod 也会发生, 加载 mod 后概�
 - **不适用**: Vector2/Rect 是 HFA (s0-s3 多寄存器返回, NativeFunction 只能取 s0) →
   仍走 invoke 缓冲, 但调用点必须加**归一化守卫** (值域检查, 失效回落安全默认;
   cutin 用 [0,1] 回落 0.5, 语义 = C# 蓝本 rect 无效时回落 0.5)。
-- **排查口诀**: 新写代码读 float/bool 一律 directCall; 读 Vector2/Rect 必须守卫;
+- **排查经验**: 新写代码读 float/bool 一律 directCall; 读 Vector2/Rect 必须守卫;
   怀疑此类问题时先 grep `readFloat`/`readS32` 检查返回值来源。
 
 ## 八、日志系统 (2026-08-10 引入)
 
 **动机**: 游戏进程崩溃时 Frida 脚本跟着死, console 缓冲丢失, macOS 系统日志经常
-什么都没有 —— 排查全靠「用户描述 → 加探针 → 烧 token」。日志系统把日志当第一公民:
+什么都没有。
 终端彩色 + 游戏根 `modlog.txt` 文件 + 崩溃前 flush。
 
 **级别与颜色** (src/log.js): ERROR=红 / WARN=黄 / INFO=青 / DEBUG=灰, 行前缀
@@ -309,8 +310,7 @@ ensureItemIdsString 重建失败、catch 分支); 34 处软失败 → `warn()` (
 `[v3]` (统一前缀) 与 `[WitchBook]` (wblog 前缀) 仍命中。
 
 **文件写入**: libc `open(O_WRONLY|O_CREAT|O_TRUNC)` + 逐行同步 `write` (src/io.js),
-崩溃不丢已写行; 每运行截断重开 = 一份干净 modlog.txt。文件明文无 ANSI, 消息内换行
-续行缩进 4 格。路径: 默认 `<游戏根>/modlog.txt` (从主模块可执行路径上溯 4 级),
+崩溃不丢已写行; 每运行截断重开 = 一份干净 modlog.txt。路径: 默认 `<游戏根>/modlog.txt` ,
 `MOD_LOG=<path> ./run_mod.sh` 覆盖; 文件不可用 (如 REPL 直跑) 则 console-only 不崩。
 
 **终端彩色与剥色**: 关键事实 (2026-08-10 实证) — 本 setup 中 bundle 的 `console.log`
