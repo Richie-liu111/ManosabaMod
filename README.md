@@ -125,7 +125,7 @@ ManosabaMod/
         └── 任意名字.nani
 ```
 
-**剧本语法**:使用游戏原生的 Naninovel 语法(`@char`、`@back`、对话、分支……),具体可以参照原作者雪莉苹果汁的教程网站（https://manosabamoddoc.fuyumi.xyz/docs/）。
+**剧本语法**:使用游戏原生的 Naninovel 语法(`@char`、`@back`、对话、分支……),具体可以参照原作者雪莉苹果汁的教程网站[雪莉的剧本编辑器](https://manosabamoddoc.fuyumi.xyz/docs/)
 
 macOS 版的剧本结构与 Windows 版类似。
 理论上能在 Windows 版 ManosabaMod 中的运行的剧本,无需更改就能在 macOS 版中工作。
@@ -148,7 +148,7 @@ macOS 版的剧本结构与 Windows 版类似。
 
 - [BepInEx](https://github.com/BepInEx/BepInEx) — Windows 版加载器运行框架
 - [frida](https://frida.re/) — macOS 版注入框架
-- 雪莉苹果汁的 mod 文档与样例  https://manosabamoddoc.fuyumi.xyz/docs/
+- 雪莉苹果汁的 mod 文档与样例 [雪莉的剧本编辑器](https://manosabamoddoc.fuyumi.xyz/docs/)
 
 ## 许可证
 
