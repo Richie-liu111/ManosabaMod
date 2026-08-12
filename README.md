@@ -24,14 +24,18 @@
 |------|------|
 | mod 选择菜单(含翻页,每页 4 个) | ✅ |
 | mod 剧本 (.nani) | ✅ |
-| 本地化 (.txt) / 语音 / 音频 (.wav) | ✅ |
+| 本地化 (.txt) / 语音 | ✅ |
+| 音频 (.wav) | ✅ |
+| 音频 (.ogg) | ❌ 不支持,用 ffmpeg 转 wav(原因见下方已知限制) |
 | 视频 (.mp4/.webm/.ogv,URL 流式播放) | ✅ |
 | 背景 (`@back`) / 立绘 (`@char`) | ✅ |
+| 角色名富文本(姓/名分级字号+颜色) | ✅ |
 | 魔女图鉴 (WitchBook 全 4 分类:线索/人物/规定/记录 + 新角色) | ✅ |
 | 魔女图鉴会话隔离(整页重建,override 可逆) | ✅ |
-| 审判自定义面板 (`@choice handler:"<modId>"`) | ✅ |
+| 审判自定义面板 (`@choice handler:"<Id>"`) | ✅ |
 | 自定义论破动画 (`@gosubCutIn`) | ✅ |
 | 存档章节名 (info.json `ChapterNames`) | ✅ |
+| 调试工具 | ❌ 未实现(macOS 用 probe_*.js 探针替代) |
 
 Windows 版与 macOS 版的功能差距(调试工具等)见 [GOALS.md](macos-frida/GOALS.md)。
 
@@ -99,6 +103,8 @@ cd "$GAME"
 3. 扫描 `ManosabaMod/*/info.json` → 生成 mod 选择菜单(每页 4 个,可翻页)
 4. 启动游戏并注入 `dist/manosabamod.js`
 
+**退出游戏**：程序坞退出时游戏，或者游戏内退出表现为: "未响应"不退出，需强制退出，或在启动游戏的终端 ctrl+c 终止。
+
 **日志**:机制日志默认关闭(运行噪音小),`MOD_DEBUG=1 ./run_mod.sh` 开启;游戏侧 `Unity.LogError` 始终全量输出。日志同时写入游戏目录 `modlog.txt`。更多用法(指定 mod 根目录、非默认游戏位置)见 [macos-frida/README.md](macos-frida/README.md)。
 
 **开发 (源码版)**:改 `src/` 后在仓库里直接运行 `./run_mod.sh` 即自动重新构建;或手动 `cd macos-frida && npx frida-compile src/entry.js -o dist/manosabamod.js`(首次需 `npm install`)。
@@ -126,8 +132,8 @@ macOS 版的剧本结构与 Windows 版类似。
 
 ## 已知限制
 
-- **macOS 进程行为**:`ctrl+c` 只终止启动脚本,游戏本体是独立进程需手动关闭;手动退出游戏时 macOS 可能弹出崩溃报告 (SIGSEGV at `__cxa_throw`,IL2CPP 退出期异常路径),与 mod 运行期功能无关
-- **音频解析** 目前只测试了wav, ogg目前还未支持，其他格式未测试。如果voice有ogg格式的音频，建议先用ffmpeg转成wav格式。
+- **macOS 进程行为**:`ctrl+c` 终止启动脚本并一并收掉游戏(SIGTERM→SIGKILL);或直接退出游戏,脚本自动收尾。2026-08-12 起:游戏存活检测 + frida-helper 主动清理,不再残留孤儿进程。注意:程序坞退出游戏或者游戏内退出表现为"未响应",需强制退出。手动退出游戏时 macOS 可能弹出崩溃报告 (SIGSEGV at `__cxa_throw`,IL2CPP 退出期异常路径),与 mod 运行期功能无关
+- **音频解析** 只支持wav, ogg 不支持(原装 `WavToAudioClipConverter` 的 Representations 仅 `.wav` 且只解 PCM16,`.ogg` 文件无法被资源定位;已调研,结论见 macos-frida/GOALS.md)。如果 voice 有 ogg 格式的音频,先用 ffmpeg 转成 wav 格式。
 - @char SubId:"Middle" + 自定义角色 可能会导致角色立绘在退出剧本时不被清除，建议不要加SubId:"Middle"参数。
 
 ## 文档

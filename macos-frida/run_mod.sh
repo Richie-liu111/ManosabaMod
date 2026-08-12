@@ -234,6 +234,15 @@ else:
 
 # 启动
 device = frida.get_local_device()
+# spawn 前基线: 记录已存在的 frida-helper, 收尾时只清本次新增的 (不误杀并行会话的 helper)
+import subprocess
+def _helper_pids():
+    try:
+        out = subprocess.run(['pgrep', '-x', 'frida-helper'], capture_output=True, text=True)
+        return set(out.stdout.split())
+    except Exception:
+        return set()
+helper_base = _helper_pids()
 pid = device.spawn([GAME])
 session = device.attach(pid)
 # runtime="v8": frida-compile 17 的 📦 asset bundle 需要 V8 runtime 编译 (QuickJS 默认不支持)
@@ -257,12 +266,46 @@ if PROBE and os.path.isfile(PROBE):
     print('>>> 已附加探针: %s (%d 字节)' % (PROBE, len(probe_code.encode('utf-8'))))
 device.resume(pid)
 print(f'>>> 游戏已启动 (PID={pid}) | Ctrl+C 停止')
+# 收尾: detach + 清理本次运行新增的 frida-helper。
+# 实测 (2026-08-12): 游戏/客户端退出后 frida 的 helper 服务进程不自动退出
+# (PPID=1 孤儿, 每次运行残留 1 个) → 收尾时按基线 diff 主动 kill。
+def cleanup():
+    try:
+        session.detach()
+    except Exception:
+        pass
+    for pid_s in (_helper_pids() - helper_base):
+        try:
+            os.kill(int(pid_s), 9)
+            print(f'>>> 清理残留 frida-helper: {pid_s}')
+        except Exception:
+            pass
+# 游戏退出感知: os.kill(pid, 0) 探测存活; 游戏没了(程序坞退出/崩溃/被 kill) → 自动收尾。
+# 否则 python 死循环 + bash 等待 → 每次运行残留一个孤儿 bash (实测累计 10 个)。
 try:
-    while True: time.sleep(1)
+    while True:
+        time.sleep(1)
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            print(f'>>> 游戏进程已退出 (PID={pid}), 自动停止')
+            break
 except KeyboardInterrupt:
-    session.detach()
-    print('\n>>> 已停止')
-    print('>>> Mod 日志: %s (MOD_DEBUG=%s)' % (MOD_LOG or '<游戏根>/modlog.txt', MOD_DEBUG))
-    if PLAYER_LOG and os.path.isfile(PLAYER_LOG):
-        print('>>> Unity 日志: %s' % PLAYER_LOG)
+    print('\n>>> 已停止 (ctrl+c: 脚本与游戏一并收尾)')
+    # 游戏是 frida spawn 的独立进程, 不会随 ctrl+c 退出; 若不收掉, 之后游戏退出时
+    # 无人收尾 → frida-helper 残留。先 SIGTERM 优雅退出, 3 秒后仍活着则 SIGKILL。
+    try:
+        os.kill(pid, 15)
+        time.sleep(3)
+        try:
+            os.kill(pid, 0)  # 还活着?
+            os.kill(pid, 9)  # 强制
+        except OSError:
+            pass  # 已优雅退出
+    except OSError:
+        pass  # 游戏已退出
+cleanup()
+print('>>> Mod 日志: %s (MOD_DEBUG=%s)' % (MOD_LOG or '<游戏根>/modlog.txt', MOD_DEBUG))
+if PLAYER_LOG and os.path.isfile(PLAYER_LOG):
+    print('>>> Unity 日志: %s' % PLAYER_LOG)
 ENDPY

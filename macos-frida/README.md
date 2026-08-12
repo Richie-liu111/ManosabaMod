@@ -97,13 +97,17 @@ GAME=/path/to/manosaba ./run_mod.sh # 游戏不在 Steam 默认位置时
 |------|------|
 | mod 菜单 (含翻页, 每页 4 个) | ✅ |
 | mod 剧本 (.nani) | ✅ |
-| 本地化 (.txt) / voice / audio (.wav) | ✅ |
+| 本地化 (.txt) / voice | ✅ |
+| 音频 (.wav) | ✅ |
+| 音频 (.ogg) | ❌ 不支持, 用 ffmpeg 转 wav |
 | Movie (.mp4/.webm/.ogv) | ✅ |
+| 背景 (@back) / 立绘 (@char) | ✅ |
+| 角色名富文本 (姓/名分级字号+颜色) | ✅ |
 | WitchBook 全 4 分类 (线索/人物/规定/记录) + 新角色 | ✅ |
 | WitchBook 会话隔离 (整页重建, override 可逆) | ✅ |
-| 背景 (@back) / 立绘 (@char) | ✅ |
-| 审判自定义面板 (@choice handler:"<modId>") | ✅ |
+| 审判自定义面板 (@choice handler:"<Id>") | ✅ |
 | 自定义论破动画 (@gosubCutIn) | ✅ |
 | 存档章节名 (info.json ChapterNames) | ✅ |
+| 调试工具 | ❌ 未实现 (用 probe_*.js 探针替代) |
 
 架构、工作原理、与 Windows 版差异、mod 格式兼容性详见 [ARCHITECTURE.md](ARCHITECTURE.md)。

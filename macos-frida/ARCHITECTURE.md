@@ -205,13 +205,16 @@ ManosabaMod/<ModName>/
 | mod 剧本 (.nani) | ✅ |
 | 本地化文档 (.txt) | ✅ |
 | voice / audio (.wav) | ✅ |
+| 音频 (.ogg) | ❌ 不支持 (用 ffmpeg 转 wav; 根因与调研决策见 GOALS.md 已知开放项) |
 | WitchBook 全 4 分类 (Clue/Profile/Rule/Note) + 新角色 | ✅ (数据注入 + 状态 + 纹理 + 姓名) |
 | WitchBook 会话隔离 (整页重建 + override 可逆) | ✅ |
 | 背景 (Backgrounds/MainBackground|Stills|Tricks) | ✅ (JpgOrPngToTextureConverter provider) |
 | 立绘 (@char Characters/SimpleCharacters) | ✅ (ActorMetadata 注册 + providersMap) |
 | Movie (.mp4/.webm/.ogv) | ✅ (URL 流式) |
-| @choice handler:"<modId>" | ✅ |
+| @choice handler:"<Id>" | ✅ |
 | CutIn (论破) | ✅ |
+| 角色名富文本 (AuthorTaggedTextGenerator) | ✅ |
+| 调试工具 | ❌ 未实现 (macOS 用 probe_*.js 探针替代) |
 
 ## 七、macOS 已知坑与修复
 

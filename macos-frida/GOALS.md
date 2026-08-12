@@ -21,7 +21,7 @@
 | ModMovieLoader | 视频 URL 流式播放 | ✅ 已实现 |
 | Utils/ModTextureHelper | PNG → Texture2D → Addressables 注册 | ✅ 已实现 |
 | Utils/AuthorTaggedTextGenerator | 角色名富文本（姓/名分级字号+颜色） | ✅ 已实现（buildAuthorTemplate） |
-| ModAudioPatch | WavToAudioClipConverter 补丁 | ✅ 等价（populateConvertersDict 直填 converters） |
+| ModAudioPatch | WavToAudioClipConverter 补丁 | ⚠️ 部分（wav 注册等价；ogg 未支持，2026-08-12 调研后决策：ffmpeg 转 wav，见已知开放项） |
 | ModMetadataGenerator | 角色/背景/剧本元数据默认类型 | ⚠️ 部分（macOS 手写 CharacterMetadata 字段，无独立模块） |
 | ModChapterDisplay | 存档画面自定义章节名 | ✅ 已实现 |
 | ModDebugTools | 调试工具（RenderTexture 截图等） | ❌ 未实现（macOS 用 probe_*.js 探针替代） |
@@ -45,9 +45,15 @@
 
 ## 已知开放项（非阻断）
 
-- **进程生命周期**（2026-08-12 用户观察，不影响功能）：
-  - `ctrl+c` 只杀 run_mod.sh 启动器（python/frida session），游戏是 frida-helper spawn 的独立进程，不会跟着退出 → 需手动关游戏。
-  - 手动退出游戏时生成 `~/Library/Logs/DiagnosticReports/manosaba-*.ips`：SIGSEGV at `__cxa_throw`（IL2CPP 退出期 C++ 异常路径），两个样本栈一致，属 frida 注入进程退出的已知摩擦，与 mod 运行期功能无关。（其实只要先手动退出游戏，然后在终端ctrl+c终止脚本进程就好了）
+- **音频 ogg 支持**（2026-08-12 调研后决策：不做，ogg 用 ffmpeg 转 wav）：
+  - 根因（probe_audio.js P1/P2 实证）：原装 `WavToAudioClipConverter` ① `<Representations>k__BackingField` 仅含 `(".wav","audio/wav")` → `.ogg` 文件过不了资源定位（LocalResourceLocator 按 Representation.Extension 匹配扩展名）；② 解码仅 `Pcm16ToFloatArray`（PCM16），OggS 数据必然失败。带 ogg 的 mod 实测报 `Failed to load '114514/L01' resource of type 'UnityEngine.AudioClip'`。
+  - 调研结论：C# 蓝本 = Harmony patch（ModAudioPatch.cs 注入 Representations + 接管 ConvertBlocking）+ NVorbis 解码；macOS 若要实现需注入 Representations（`A.an` 构造 struct 数组写 backing field，探针已验证可行）+ 接管 ConvertBlocking（UnityPlayer.dylib 导出 `FMOD_ov_*` 可复用，arm64 上 callbacks 结构在 x5 第 6 参）。成本高于收益 → 决策：ffmpeg 转 wav（README 已有此指导）。
+- **进程生命周期**（2026-08-12 修复，不影响功能）：
+  - `ctrl+c` ：杀启动器 + 收掉游戏（SIGTERM → 3s → SIGKILL）+ 清理本次 frida-helper。
+  - 游戏存活检测（`os.kill(pid, 0)` 每秒探测）：游戏退出（程序坞/崩溃/kill）→ 脚本自动 detach 收尾，不再残留孤儿 bash（此前 python 死循环不监控游戏，每次运行残留 1 个 bash，实测累计 10 个）。
+  - frida-helper 服务进程在游戏/客户端退出后不自动退出（PPID=1 孤儿，每次运行残留 1 个，历史累计 127 个）→ 收尾时按 spawn 前基线 diff 主动 kill 本次新增的 helper。
+  - 注意：程序坞退出时游戏，或者游戏内退出表现为: "未响应"不退出（退出流程卡住，可能与 frida 注入有关），需强制退出或 ctrl+c；os.kill 检测只认进程消亡，不认未响应状态。
+  - 手动退出游戏时生成 `~/Library/Logs/DiagnosticReports/manosaba-*.ips`：SIGSEGV at `__cxa_throw`（IL2CPP 退出期 C++ 异常路径），属 frida 注入进程退出的已知摩擦，与 mod 运行期功能无关。
 
 ## 参考
 
