@@ -1,6 +1,8 @@
 # ManosabaMod macOS 移植 — 目标与差距文档
 
-> 活的文档，随代码演进更新。最后更新：2026-08-10（日志系统）。
+> 随代码演进更新。最后更新：2026-08-12（ChoiceHandler + CutIn 闭环）。
+
+> **蓝本勘定（2026-08-11/12）**：Windows 对照的蓝本是 **ManosabaMod1 群文件版 ManosabaLoader.dll**（254KB，md5 ea00a666，ilspycmd 反编译 `/tmp/manosaba1_decomp.cs`，10232 行）——唯一包含 `ModChoiceHandlerLoader` + `ModObjectionCutInLoader` 的版本。GitHub 源码仓库 `ManosabaMod-2.0.0`（csproj v1.0.0）**没有**这两个类；GitHub release 的 ManosabaMod2 DLL（221KB）与 `ManosabaMod`（221KB，md5 86d623ab）同源，也都没有。C# 侧参考路径：`DoomsGuardians/Project-Cannon-and-Candle`（Packages/com.elringus.naninovel/，与 dump.cs 签名完全匹配）。
 
 ## 目标
 
@@ -27,11 +29,23 @@
 
 ## 差距 / 未闭环清单
 
-1. **mod 自定义 ChoiceHandler（魔女裁判环节的 mod 面板）** — ❌ 未闭环
-   - 场景：mod 剧本用 `@choice handler:"<modId>"` 指定 mod 的立绘。
-2. **CutIn** — ❌ 未实现（参考：Windows 版 objectionCutInSpawnPath 改写 + sprite 替换思路）
+1. **mod 自定义 ChoiceHandler（魔女裁判环节的 mod 面板）** — ✅ 2026-08-11/12 已闭环
+   - 镜像 C# 蓝本 `ModChoiceHandlerLoader` 四步：真 VirtualResourceProvider + `AddResource<GameObject>`（真 Resource，path 含 `ModChoiceHandlers/{Id}` prefix）+ ChoiceHandlerMetadata（Implementation 从原版 Trial meta 逐字节复制）+ `providersMap.Add("ModChoiceHandlers", vrp)`。actor 由游戏自己构造（克隆 BasePanel 原版面板 + mod 立绘替换）。
+   - **两个最终根因**：① 往 Resource 塞组件而非 GameObject（ResourceExistsBlocking<T> 双条件，必须精确匹配）→ Instantiate 后 `get_gameObject`；② Resource.path 必须含 prefix（LoadedResource.ctor 的 BuildLocalPath 校验）。
+   - 验证：run35 Load 成功 + TestTrial 黑屏根除；2026-08-12 用户确认 @choice handler 显示正常、原版审判（handler:"Trial"）无异常。
+2. **CutIn** — ✅ 2026-08-12 已闭环
+   - 机制：SetVariableValue postfix 把 objectionCutInSpawnPath 改写为 Hiro（insideRewrite 守卫）+ pendingEntry；SetSpawnParameters postfix → BuildInstanceCache（GetComponentsInChildren<Image/SpriteRenderer>(true)，23 渲染器）→ SwapSpritesFromCache（按 sprite 名匹配 6 key）→ 动画不覆盖替换（1s 后 re-dump 验证）。
+   - **最终根因（替换成功但不可见）**：`invoke()` 经 `il2cpp_runtime_invoke` 读 ≤8B 值类型返回（float/bool）读到垃圾——`get_pixelsPerUnit` 读回 1.77e-18（真值 37.8）→ `Sprite.Create` 以近零 ppu 创建 → sprite 无限放大不可见。修复：`directCall()`（utils.js）直读 MethodInfo 首字段 methodPointer，按正确返回类型（'float'）读 s0；Vector2/Rect 是 HFA（s0-s3）仍走缓冲 + 归一化守卫（[0,1] 回落 0.5）。详见 ARCHITECTURE.md 的 directCall 节。
+   - 验证：6 sprite 全部显示（ppu=37.82/75.76/65.91/72.96 原版真实值），shader 分布与原版一致，动画不覆盖。
 3. **ModChapterDisplay（存档章节名）** — ❌ 未实现（镜像参考：Windows ModChapterDisplay.cs，GameStateSlotExtended.SetNonEmptyState）
 4. **菜单翻页** — ✅ 2026-08-03 已回迁（perPage=4，`ChoiceList_<页>` 方案，镜像 Windows AddModStartMenu）并通过回归验证（TestWitchBook 位于第 3 页，翻页进入正常）。
+
+## 已知开放项（非阻断）
+
+- **macOS 侧原版审判（handler:"Trial"）**：2026-08-12 用户实测无异常（此前标记"未验证"）。
+- **进程生命周期怪癖**（2026-08-12 用户观察，不影响功能）：
+  - `ctrl+c` 只杀 run_mod.sh 启动器（python/frida session），游戏是 frida-helper spawn 的独立进程，不会跟着退出 → 需手动关游戏。
+  - 手动退出游戏时生成 `~/Library/Logs/DiagnosticReports/manosaba-*.ips`：SIGSEGV at `__cxa_throw`（IL2CPP 退出期 C++ 异常路径），两个样本栈一致，属 frida 注入进程退出的已知摩擦，与 mod 运行期功能无关。
 
 ## 参考
 

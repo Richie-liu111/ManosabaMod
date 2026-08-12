@@ -70,8 +70,12 @@ echo ">>> 游戏: $GAME"
 echo ">>> 脚本: $SCRIPT"
 echo ">>> Mod 日志: $MOD_LOG (MOD_DEBUG=${MOD_DEBUG:-0})"
 
+# 探针: PROBE=<文件路径> ./run_mod.sh — 附加独立探针脚本 (不走 📦 bundle, 与 bundle 并行)
+# 用于托管链验证 (probe_choice_real.js) 等诊断; 默认空 = 不附加。
+PROBE="${PROBE:-}"
+
 # 导出环境变量给 Python (heredoc 用带引号形式, 避免转义被 shell 处理)
-export GAME SCRIPT MOD_ROOT MOD_DEBUG MOD_LOG MOD_NO_COLOR PLAYER_LOG
+export GAME SCRIPT MOD_ROOT MOD_DEBUG MOD_LOG MOD_NO_COLOR PLAYER_LOG PROBE
 $PY << 'ENDPY'
 import frida, time, json, os, re, sys
 
@@ -82,6 +86,7 @@ MOD_DEBUG = os.environ.get('MOD_DEBUG') == '1'
 MOD_LOG = os.environ.get('MOD_LOG') or ''
 MOD_NO_COLOR = os.environ.get('MOD_NO_COLOR') == '1'
 PLAYER_LOG = os.environ.get('PLAYER_LOG') or ''
+PROBE = os.environ.get('PROBE') or ''
 IS_TTY = sys.stdout.isatty()
 # 关键事实 (2026-08-10 实证): 本 setup 中 bundle 的 console.log 不经 frida 消息桥,
 # 由 V8 runtime 直接写到游戏进程的 stdout 副本 (spawn 保留的父进程 fd) → 剥色必须在 JS 侧:
@@ -227,12 +232,14 @@ def on_msg(m, d):
 script = session.create_script(FULL_JS, runtime="v8")
 script.on('message', on_msg)
 script.load()
-# if os.path.isfile(_probe_path):
-#     probe_code = open(_probe_path, encoding='utf-8').read()
-#     pscript = session.create_script(probe_code, runtime="v8")
-#     pscript.on('message', on_msg)
-#     pscript.load()
-#     print('>>> 已附加探针 (probe_embed.js, %d 字节, 独立脚本; 删除该文件可撤销)' % len(probe_code.encode('utf-8')))
+# PROBE=<文件路径>: 附加独立探针脚本 (不走 📦 包, 与 bundle 并行; 消息经消息桥 send → 此回调 print)
+# 例: PROBE="$PWD/probe_choice_real.js" ./run_mod.sh
+if PROBE and os.path.isfile(PROBE):
+    probe_code = open(PROBE, encoding='utf-8').read()
+    pscript = session.create_script(probe_code, runtime="v8")
+    pscript.on('message', on_msg)
+    pscript.load()
+    print('>>> 已附加探针: %s (%d 字节)' % (PROBE, len(probe_code.encode('utf-8'))))
 device.resume(pid)
 print(f'>>> 游戏已启动 (PID={pid}) | Ctrl+C 停止')
 try:

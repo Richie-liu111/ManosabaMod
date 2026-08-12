@@ -12,6 +12,8 @@
 'use strict';
 
 import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, wblog } from "./utils.js";
+import { clearCutInCaches, setupCutInHooks } from "./cutin.js";
+import { initChoiceHandlers, setupChoiceHandlerHooks } from "./choice.js";
 import { setupMovieHooks } from "./movie.js";
 import { addModLoader } from "./providers.js";
 import { hookStartGame, registerMenu, registerMenuText } from "./menu.js";
@@ -59,6 +61,14 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         A.ign = new NativeFunction(E.il2cpp_image_get_name, 'pointer', ['pointer']);
         A.cfn = new NativeFunction(E.il2cpp_class_from_name, 'pointer', ['pointer', 'pointer', 'pointer']);
         A.cgm = new NativeFunction(E.il2cpp_class_get_method_from_name, 'pointer', ['pointer', 'pointer', 'int']);
+        // 遍历全部方法 (含泛型方法定义; get_method_from_name 不含泛型 → dump/hook 泛型方法必须用它)
+        A.cgmAll = E.il2cpp_class_get_methods ? new NativeFunction(E.il2cpp_class_get_methods, 'pointer', ['pointer', 'pointer']) : null;
+        // MethodInfo 布局不可靠 → 用官方 API 读名字/参数数 (不猜偏移)
+        A.mgn = E.il2cpp_method_get_name ? new NativeFunction(E.il2cpp_method_get_name, 'pointer', ['pointer']) : null;
+        A.mpc = E.il2cpp_method_get_param_count ? new NativeFunction(E.il2cpp_method_get_param_count, 'int', ['pointer']) : null;
+        A.mig = E.il2cpp_method_is_generic ? new NativeFunction(E.il2cpp_method_is_generic, 'bool', ['pointer']) : null;
+        A.mii = E.il2cpp_method_is_inflated ? new NativeFunction(E.il2cpp_method_is_inflated, 'bool', ['pointer']) : null;
+        A.cgp = E.il2cpp_class_get_parent ? new NativeFunction(E.il2cpp_class_get_parent, 'pointer', ['pointer']) : null;
         A.sn  = new NativeFunction(E.il2cpp_string_new, 'pointer', ['pointer']);
         A.ri  = new NativeFunction(E.il2cpp_runtime_invoke, 'pointer', ['pointer', 'pointer', 'pointer', 'pointer']);
         A.ogc = new NativeFunction(E.il2cpp_object_get_class, 'pointer', ['pointer']);
@@ -419,6 +429,12 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         // Movie 支持钩子 (URL 流式)
         setupMovieHooks();
 
+        // CutIn 支持 (异议/伪证切入 sprite 替换, 镜像 Windows ModObjectionCutInLoader 精简版)
+        setupCutInHooks();
+
+        // @choice handler 支持 (自定义选项面板, 镜像 Windows ModChoiceHandlerLoader 精简核心)
+        setupChoiceHandlerHooks();
+
         // WitchBook 线索支持
         setupWitchBookHooks();
 
@@ -433,6 +449,8 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                         dbg("[v3] TitleUi.Activate 触发");
                         // 回到标题 → 重置 WitchBook 会话 (防止上一 mod 的线索/状态被继承)
                         try { resetWitchBookSession(); } catch (e) {}
+                        // 回标题 → 清 CutIn 实例缓存 (旧实例指针可能失效)
+                        try { clearCutInCaches(); } catch (e) {}
                         if (typeof modList !== "undefined" && modList && modList.length) registerMenu(modList);
                         else registerMenu([]);
                         registerMenuText();
@@ -446,6 +464,8 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                                 }
                             }
                         } catch (e2) { dbg("[v3] addModLoader 循环 err: " + e2); }
+                        // ChoiceHandler: 预加载立绘 + 触发源面板 (镜像 Windows LoadModData + TryTriggerSourcePanelLoad)
+                        try { initChoiceHandlers(); } catch (e4) { dbg("[v3] choice handler init err: " + e4); }
                         // WitchBook 纹理尽早注册 (Title 后场景加载即有)
                         try { if (wbCls) registerTexturesInto(null); } catch (e3) {}
                         // 重定向放到队列, 避免在 hook 回调里做托管调用

@@ -422,3 +422,6 @@ CLAUDE.md
 .claude/*
 # macOS
 .DS_Store
+# 备份与探针 (不进仓库)
+backup_*.js
+probe_*.js

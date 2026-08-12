@@ -37,6 +37,40 @@ export function readStr(p) {
     } catch (e) { return null; }
 }
 export function makeS(v) { return A.sn(Memory.allocUtf8String(v || "")); }
+// 从 PNG 文件字节读宽高 (IHDR 16-23 字节大端) — 绕开 Texture2D get_width/get_height 的 runtime_invoke 问题
+// 供 cutin.js / choice.js 共用 (原 v3 单文件内各有一份)
+export function pngDims(fb) {
+    try {
+        if (!fb || fb.size < 24) return null;
+        var b = fb.buf;
+        if (b.readU8() !== 0x89 || b.add(1).readU8() !== 0x50) return null;
+        var w = (b.add(16).readU8() << 24) | (b.add(17).readU8() << 16) | (b.add(18).readU8() << 8) | b.add(19).readU8();
+        var h = (b.add(20).readU8() << 24) | (b.add(21).readU8() << 16) | (b.add(22).readU8() << 8) | b.add(23).readU8();
+        return (w > 0 && h > 0) ? { w: w, h: h } : null;
+    } catch (e) { return null; }
+}
+// ============ 值类型返回值直调 (2026-08-12) ============
+// 根因: invoke() 经 il2cpp_runtime_invoke 对 ≤8B 值类型返回值 (float/bool) 的
+// 返回缓冲会被复用/失效 → 读到垃圾 (实测 ppu=1.77e-18 而非 100 → Sprite.Create
+// 以近零 ppu 创建 → sprite 无限放大不可见 = cutin 替换成功但看不见的根因)。
+// 修复: 直调 MethodInfo 首字段 methodPointer (offset 0), 用正确返回类型 NativeFunction。
+// 适用范围: float/bool/int 等单寄存器返回 (s0/x0)。Vector2/Rect 是 HFA (s0-s3) 不走
+// 此法 → 仍走 invoke 缓冲 + 调用点归一化守卫。
+var dcCache = {};
+export function directCall(mi, retType, args) {
+    if (!mi || mi.isNull()) throw new Error("directCall: null MethodInfo");
+    var mp = mi.readPointer();
+    if (mp.isNull()) throw new Error("directCall: null methodPointer");
+    var key = mp.toString() + "|" + retType;
+    var fn = dcCache[key];
+    if (!fn) {
+        var argTypes = [];
+        for (var i = 0; i < args.length; i++) argTypes.push("pointer");
+        fn = new NativeFunction(mp, retType, argTypes);
+        dcCache[key] = fn;
+    }
+    return fn.apply(null, args);
+}
 export function invoke(mi, obj, args) {
     var params = args.length ? Memory.alloc(Process.pointerSize * args.length) : ptr(0);
     for (var i = 0; i < args.length; i++) params.add(i * Process.pointerSize).writePointer(args[i]);

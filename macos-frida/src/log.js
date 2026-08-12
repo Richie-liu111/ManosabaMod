@@ -9,7 +9,7 @@ export var LEVELS = { ERROR: 0, WARN: 1, INFO: 2, DEBUG: 3 };
 var LEVEL_TAG = ["ERROR", "WARN", "INFO", "DEBUG"];
 var LEVEL_COLOR = ["31", "33", "36", "90"];   // 红 / 黄 / 青 / 灰
 
-var _fd = -1, _path = null, _noColor = false, _initDone = false;
+var _fd = -1, _path = null, _noColor = false, _initDone = false, _handlerFired = false;
 
 function isDbg() { return typeof MOD_DEBUG !== "undefined" && MOD_DEBUG; }
 function ts() {
@@ -85,19 +85,66 @@ export function logBanner(art) {
 // ===== 崩溃前 flush =====
 // 进程将崩溃时 (SIGSEGV/SIGABRT 等) 追加一条尾部标记到文件。回调运行在异常上下文,
 // 禁 console/RPC (死锁风险), 只做同步文件 write + fsync; 返回 false 放行 → 游戏崩溃行为不变。
-function crashLine(type, addr) {
+// 若 Frida 提供了 CPU 上下文 (details.context), 顺带写原生回溯 — 定位 invoke 内访问违例的决定性手段。
+function crashLine(details) {
     if (_fd < 0) return;
     try {
+        var type = details && details.type, addr = details && details.address;
         var line = "[v3][" + ts() + "][FATAL] !!! CRASH signal=" + (type || "?") + " address=" + (addr ? addr.toString() : "0x0") + "\n";
         writeString(_fd, line);
+        if (details && details.context) {
+            try {
+                // 寄存器转储 — macOS .ips 不生成时 (异常被 handler 接过) 也能拿到崩溃上下文
+                var c = details.context;
+                var regs = [];
+                for (var ri = 0; ri <= 28; ri++) {
+                    try { var rn = c["x" + ri]; regs.push("x" + ri + "=0x" + rn.toString(16)); } catch (e) {}
+                }
+                try { regs.push("fp=0x" + c.fp.toString(16)); } catch (e) {}
+                try { regs.push("lr=0x" + c.lr.toString(16)); } catch (e) {}
+                try { regs.push("sp=0x" + c.sp.toString(16)); } catch (e) {}
+                try { regs.push("pc=0x" + c.pc.toString(16)); } catch (e) {}
+                writeString(_fd, "    regs: " + regs.join(" ") + "\n");
+            } catch (e) {}
+            try {
+                var frames = Thread.backtrace(details.context, Backtracer.ACCURATE).slice(0, 24);
+                for (var i = 0; i < frames.length; i++) {
+                    var sym = "";
+                    try { var d = DebugSymbol.fromAddress(frames[i]); sym = d ? d.name : ""; } catch (e) {}
+                    writeString(_fd, "    #" + i + " 0x" + frames[i].toString(16) + (sym ? "  " + sym : "") + "\n");
+                }
+            } catch (e) {}
+        }
         fileSync(_fd);
     } catch (e) {}
 }
+// 通用崩溃兜底: 模块可注册一个 fixer, 在异常上下文中先尝试修复再决定放行/恢复。
+// fixer(details) 返回 true = 已处理 (已改 details.context, 让 Frida return true 恢复执行);
+// 返回 false/undefined = 未处理 → 照常写 CRASH 行 + 放行崩溃。
+// 约束: fixer 运行在异常上下文, 禁 console/RPC/分配 — 只读预缓存 + 改 context 寄存器。
+var _crashFixer = null;
+export function setCrashFixer(fn) { _crashFixer = fn; }
 export function installCrashHandler() {
     if (typeof Process === "undefined" || !Process.setExceptionHandler) { installCrashHandlerFallback(); return; }
     try {
         Process.setExceptionHandler(function (details) {
-            try { crashLine(details && details.type, details && details.address); } catch (e) {}
+            // 落盘标记 (capture-once, 文件直写不走 console — 异常上下文安全) — 判断 handler 是否真正触发
+            try {
+                if (!_handlerFired) {
+                    _handlerFired = true;
+                    var _fa = (details && details.address) ? details.address.toString() : "?";
+                    writeString(_fd, "[v3][FATAL][handler] setExceptionHandler FIRED address=" + _fa + "\n");
+                }
+            } catch (e) {}
+            if (_crashFixer) {
+                try {
+                    if (_crashFixer(details)) {
+                        try { writeString(_fd, "[v3][FATAL][handler] fixer HANDLED address=" + ((details && details.address) ? details.address.toString() : "?") + "\n"); } catch (e) {}
+                        return true;
+                    }
+                } catch (e) {}
+            }
+            try { crashLine(details); } catch (e) {}
             return false;   // 不链式转发 (返回语义未承诺), 直接放行崩溃
         });
     } catch (e) { installCrashHandlerFallback(); }

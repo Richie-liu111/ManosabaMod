@@ -269,6 +269,27 @@ RVA 0x3404d4 完全一致; 不加载任何 mod 也会发生, 加载 mod 后概�
 - 探针/诊断脚本 (probe_*.js) 必须作为**独立** `create_script` 附加 —
   📦 bundle 的 fragment 是模块资产, 不被 import 就不会执行。
 
+### 7.4 invoke() 读值类型返回值 (float/bool) 读到垃圾 — 必须 directCall (2026-08-12, cutin 不可见根因)
+
+**现象**: CutIn 替换成功 (6/6 key 命中、sprite 已 set) 但画面不可见。日志显示
+`Sprite.Create ... ppu=1.7662258224252766e-18` (真值 37.8) → ppu≈0 →
+`Sprite.Create` 的 sprite 显示尺寸 = 像素/ppu = 天文数字 → 无限放大 → 不可见。
+
+**根因**: `invoke()` 把 `il2cpp_runtime_invoke` 声明为返回 'pointer', 对 ≤8B 值类型
+返回值 (float/bool) 的返回缓冲会失效/被复用 → `ret.readFloat()` 读到垃圾
+(实证: `get_pixelsPerUnit` → 1.77e-18; `get_enabled`(bool) → 恒定 0x19A9E290)。
+引用类型返回 (对象/字符串) 不受影响 — 这是"对象全正常、数值全垃圾"的鉴别信号。
+
+**修复 — `directCall(mi, retType, args)`** (utils.js):
+- 直读 `MethodInfo` **首字段 methodPointer** (offset 0), 用**正确返回类型**的
+  NativeFunction (如 `'float'`) 直调 → float 从 s0 寄存器正确读出 (ppu=37.82 实测)。
+- 调用点须在已 attach il2cpp 的线程 (与 invoke 同上下文即可, 都是游戏主线程 hook 内)。
+- **不适用**: Vector2/Rect 是 HFA (s0-s3 多寄存器返回, NativeFunction 只能取 s0) →
+  仍走 invoke 缓冲, 但调用点必须加**归一化守卫** (值域检查, 失效回落安全默认;
+  cutin 用 [0,1] 回落 0.5, 语义 = C# 蓝本 rect 无效时回落 0.5)。
+- **排查口诀**: 新写代码读 float/bool 一律 directCall; 读 Vector2/Rect 必须守卫;
+  怀疑此类问题时先 grep `readFloat`/`readS32` 检查返回值来源。
+
 ## 八、日志系统 (2026-08-10 引入)
 
 **动机**: 游戏进程崩溃时 Frida 脚本跟着死, console 缓冲丢失, macOS 系统日志经常
