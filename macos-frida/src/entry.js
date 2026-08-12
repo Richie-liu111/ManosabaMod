@@ -14,6 +14,7 @@
 import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, wblog } from "./utils.js";
 import { clearCutInCaches, setupCutInHooks } from "./cutin.js";
 import { initChoiceHandlers, setupChoiceHandlerHooks } from "./choice.js";
+import { setupChapterDisplayHooks } from "./chapterdisplay.js";
 import { setupMovieHooks } from "./movie.js";
 import { addModLoader } from "./providers.js";
 import { hookStartGame, registerMenu, registerMenuText } from "./menu.js";
@@ -76,6 +77,7 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         A.on  = new NativeFunction(E.il2cpp_object_new, 'pointer', ['pointer']);
         A.gf  = new NativeFunction(E.il2cpp_class_get_field_from_name, 'pointer', ['pointer', 'pointer']);
         A.fo  = new NativeFunction(E.il2cpp_field_get_offset, 'uint32', ['pointer']);
+        A.fgt = E.il2cpp_field_get_type ? new NativeFunction(E.il2cpp_field_get_type, 'pointer', ['pointer']) : null;
         A.sdf = new NativeFunction(E.il2cpp_class_get_static_field_data, 'pointer', ['pointer']);
         A.ta  = new NativeFunction(E.il2cpp_thread_attach, 'pointer', ['pointer']);
         A.ots = E.il2cpp_object_to_string ? new NativeFunction(E.il2cpp_object_to_string, 'pointer', ['pointer']) : null;
@@ -434,6 +436,9 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
 
         // @choice handler 支持 (自定义选项面板, 镜像 Windows ModChoiceHandlerLoader 精简核心)
         setupChoiceHandlerHooks();
+
+        // 存档章节名支持 (镜像 Windows ModChapterDisplay)
+        setupChapterDisplayHooks();
 
         // WitchBook 线索支持
         setupWitchBookHooks();

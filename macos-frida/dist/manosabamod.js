@@ -1,6 +1,7 @@
 📦
-33904 /src/entry.js
+34190 /src/entry.js
 1938 /src/banner.js
+5070 /src/chapterdisplay.js
 80880 /src/choice.js
 21467 /src/cutin.js
 4173 /src/io.js
@@ -20,6 +21,7 @@
 import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, wblog } from "./utils.js";
 import { clearCutInCaches, setupCutInHooks } from "./cutin.js";
 import { initChoiceHandlers, setupChoiceHandlerHooks } from "./choice.js";
+import { setupChapterDisplayHooks } from "./chapterdisplay.js";
 import { setupMovieHooks } from "./movie.js";
 import { addModLoader } from "./providers.js";
 import { hookStartGame, registerMenu, registerMenuText } from "./menu.js";
@@ -89,6 +91,7 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         A.on = new NativeFunction(E.il2cpp_object_new, 'pointer', ['pointer']);
         A.gf = new NativeFunction(E.il2cpp_class_get_field_from_name, 'pointer', ['pointer', 'pointer']);
         A.fo = new NativeFunction(E.il2cpp_field_get_offset, 'uint32', ['pointer']);
+        A.fgt = E.il2cpp_field_get_type ? new NativeFunction(E.il2cpp_field_get_type, 'pointer', ['pointer']) : null;
         A.sdf = new NativeFunction(E.il2cpp_class_get_static_field_data, 'pointer', ['pointer']);
         A.ta = new NativeFunction(E.il2cpp_thread_attach, 'pointer', ['pointer']);
         A.ots = E.il2cpp_object_to_string ? new NativeFunction(E.il2cpp_object_to_string, 'pointer', ['pointer']) : null;
@@ -521,6 +524,8 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         setupCutInHooks();
         // @choice handler 支持 (自定义选项面板, 镜像 Windows ModChoiceHandlerLoader 精简核心)
         setupChoiceHandlerHooks();
+        // 存档章节名支持 (镜像 Windows ModChapterDisplay)
+        setupChapterDisplayHooks();
         // WitchBook 线索支持
         setupWitchBookHooks();
         // Hook TitleUi.Activate → 重定向 + 注册菜单
@@ -628,6 +633,143 @@ export function printStartupBanner() {
     logBanner(BANNER_ART);
     info("早期测试版本，本人能力有限，不保证全功能稳定，欢迎提 PR 、issue 共同维护");
     info("https://github.com/Richie-liu111/ManosabaMod");
+}
+
+✄
+import { A, dbg, directCall, findClassAcrossImages, makeS, readStr, wblog } from "./utils.js";
+var chapterMap = null;
+var offs = null; // {playbackSpot, scriptPath, subTitleLabel}
+var hooked = false;
+function resolveOffsets() {
+    try {
+        var o = {};
+        var gsm = findClassAcrossImages("Naninovel", "GameStateMap");
+        if (gsm.isNull())
+            return null;
+        var f = A.gf(gsm, Memory.allocUtf8String("playbackSpot"));
+        if (!f || f.isNull())
+            return null;
+        o.playbackSpot = A.fo(f);
+        o.scriptPath = 0; // 见头部注释: 实证固定 0
+        // _subTitleLabel 定义在基类 GameStateSlotExtended (实例偏移一致)
+        var gsse = findClassAcrossImages("GigaCreation.NaninovelExtender.Ui", "GameStateSlotExtended");
+        if (gsse.isNull())
+            return null;
+        var f3 = A.gf(gsse, Memory.allocUtf8String("_subTitleLabel"));
+        if (!f3 || f3.isNull())
+            return null;
+        o.subTitleLabel = A.fo(f3);
+        return o;
+    }
+    catch (e) {
+        dbg("[v3] chapterdisplay resolveOffsets err: " + e);
+        return null;
+    }
+}
+// 命中映射则覆写 _subTitleLabel; 未命中/指针非法时静默 (原版路径完全走原版行为)
+function applyChapterName(slotPtr, statePtr) {
+    if (!statePtr || statePtr.isNull() || !slotPtr || slotPtr.isNull())
+        return;
+    if (statePtr.toInt32() < 0x10000 || slotPtr.toInt32() < 0x10000)
+        return;
+    var spot = statePtr.add(offs.playbackSpot);
+    var sp = spot.add(offs.scriptPath).readPointer();
+    if (sp.isNull() || sp.toInt32() < 0x10000)
+        return;
+    var path = readStr(sp);
+    if (!path)
+        return;
+    var name = chapterMap[path];
+    if (!name)
+        return;
+    var lab = slotPtr.add(offs.subTitleLabel).readPointer();
+    if (lab.isNull() || lab.toInt32() < 0x10000)
+        return;
+    var labCls = null;
+    try {
+        labCls = A.ogc(lab);
+    }
+    catch (e) {
+        return;
+    }
+    if (!labCls || labCls.isNull())
+        return;
+    var rt = A.cgm(labCls, Memory.allocUtf8String("set_richText"), 1);
+    if (rt && !rt.isNull())
+        directCall(rt, 'void', [lab, ptr(1)]);
+    var st = A.cgm(labCls, Memory.allocUtf8String("set_text"), 1);
+    if (st && !st.isNull())
+        directCall(st, 'void', [lab, makeS(name)]);
+    wblog("存档槽章节名: " + path + " → " + name);
+}
+export function setupChapterDisplayHooks() {
+    try {
+        if (hooked)
+            return;
+        hooked = true;
+        if (typeof chapterNames === "undefined" || !chapterNames) {
+            dbg("[v3] chapterNames 未注入 (无 mod 声明 ChapterNames), 跳过章节名模块");
+            return;
+        }
+        var keys = Object.keys(chapterNames);
+        if (!keys.length) {
+            dbg("[v3] chapterNames 为空, 跳过章节名模块");
+            return;
+        }
+        chapterMap = chapterNames;
+        offs = resolveOffsets();
+        if (!offs) {
+            dbg("[v3] !! 章节名字段解析失败, 跳过");
+            return;
+        }
+        dbg("[v3] chapter: offsets playbackSpot=" + offs.playbackSpot +
+            " scriptPath=" + offs.scriptPath + " subTitleLabel=" + offs.subTitleLabel);
+        // 实际实例是 WitchTrialsGameStateSlot (子类), C# 蓝本 patch 基类 → 两个都 hook
+        var candidates = [
+            ["WitchTrials.Views", "WitchTrialsGameStateSlot"],
+            ["GigaCreation.NaninovelExtender.Ui", "GameStateSlotExtended"]
+        ];
+        var hookCount = 0;
+        candidates.forEach(function (c) {
+            var cls = findClassAcrossImages(c[0], c[1]);
+            if (cls.isNull())
+                return;
+            var mi = A.cgm(cls, Memory.allocUtf8String("SetNonEmptyState"), 2);
+            if (!mi || mi.isNull())
+                return;
+            Interceptor.attach(mi.readPointer(), {
+                onEnter: function (a) {
+                    // 实例方法: a[0]=this(slot), a[1]=slotNumber(int), a[2]=state(GameStateMap)
+                    this.self = a[0];
+                    this.state = a[2];
+                    try {
+                        applyChapterName(a[0], a[2]);
+                    }
+                    catch (e) {
+                        dbg("[v3] chapter onEnter err: " + e);
+                    }
+                },
+                onLeave: function () {
+                    try {
+                        applyChapterName(this.self, this.state);
+                    }
+                    catch (e) {
+                        dbg("[v3] chapter onLeave err: " + e);
+                    }
+                }
+            });
+            hookCount++;
+            dbg("[v3] chapter: hooked " + c[1] + ".SetNonEmptyState");
+        });
+        if (!hookCount) {
+            dbg("[v3] !! 存档槽 SetNonEmptyState(2) 均未找到, 跳过章节名模块");
+            return;
+        }
+        wblog("章节名模块已装载 (" + keys.length + " 个条目, " + hookCount + " 个 hook)");
+    }
+    catch (e) {
+        dbg("[v3] chapterdisplay init err: " + e);
+    }
 }
 
 ✄

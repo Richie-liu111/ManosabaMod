@@ -115,7 +115,15 @@ if os.path.isdir(MOD_ROOT):
         if os.path.isfile(ip):
             try:
                 info = json.load(open(ip, encoding='utf-8'))
-                mods.append({'Name': resolve_loc(info.get('Name')) or d, 'key': d, 'Enter': info.get('Enter', '')})
+                # ChapterNames: 脚本路径 → 章节名 (值可能是字符串或本地化 dict, 与 resolve_loc 同逻辑)
+                cn = {}
+                for k, v in (info.get('ChapterNames') or {}).items():
+                    if isinstance(v, dict):
+                        v = resolve_loc(v)
+                    if k and v:
+                        cn[k] = v
+                mods.append({'Name': resolve_loc(info.get('Name')) or d, 'key': d, 'Enter': info.get('Enter', ''),
+                             'ChapterNames': cn})
             except Exception as e:
                 print(f'  跳过 {ip}: {e}')
 
@@ -142,6 +150,13 @@ for m in mods:
     parts.append('{Name:' + name_json + ',key:"' + m['key'] + '",Enter:"' + m['Enter'] + '"}')
 mods_str = '[' + ','.join(parts) + ']'
 movie_map_json = json.dumps(movie_map, ensure_ascii=False)
+
+# 汇总全部 mod 的 ChapterNames → JS 全局 chapterNames (存档章节名映射)
+cn_all = {}
+for m in mods:
+    for k, v in m.get('ChapterNames', {}).items():
+        cn_all[k] = v
+chapter_names_json = json.dumps(cn_all, ensure_ascii=False)
 
 # 生成并写入菜单剧本文件 (菜单实际由 v3.js 的 Script.FromText 构造, 此文件仅作参考)
 def setline(var, val):
@@ -191,8 +206,8 @@ print(f'>>> 已写入菜单文件: {menu_path}')
 MOD_DEBUG_JS = 'var MOD_DEBUG=true;' if MOD_DEBUG else ''
 NO_UPDATE_JS = 'var NO_UPDATE_HOOK=true;' if os.environ.get('NO_UPDATE_HOOK') == '1' else ''
 # MOD_LOG/MOD_NO_COLOR 用 json.dumps (路径含空格/中文安全); 空 MOD_LOG → JS 端走默认兜底路径
-inject_code = ('var modList=%s;var MOD_ROOT=%s;var movieMap=%s;var MOD_LOG=%s;var MOD_NO_COLOR=%s;'
-               % (mods_str, json.dumps(MOD_ROOT), movie_map_json, json.dumps(MOD_LOG), json.dumps(JS_NO_COLOR))) \
+inject_code = ('var modList=%s;var MOD_ROOT=%s;var movieMap=%s;var chapterNames=%s;var MOD_LOG=%s;var MOD_NO_COLOR=%s;'
+               % (mods_str, json.dumps(MOD_ROOT), movie_map_json, chapter_names_json, json.dumps(MOD_LOG), json.dumps(JS_NO_COLOR))) \
               + MOD_DEBUG_JS + NO_UPDATE_JS
 inj = 'Script.evaluate("mod-vars", %s);' % json.dumps(inject_code)
 inj_frag = f"{len(inj.encode('utf-8'))} /frida/mod-vars.js\n✄\n{inj}"

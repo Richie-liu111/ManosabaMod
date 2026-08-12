@@ -23,7 +23,7 @@
 | Utils/AuthorTaggedTextGenerator | 角色名富文本（姓/名分级字号+颜色） | ✅ 已实现（buildAuthorTemplate） |
 | ModAudioPatch | WavToAudioClipConverter 补丁 | ✅ 等价（populateConvertersDict 直填 converters） |
 | ModMetadataGenerator | 角色/背景/剧本元数据默认类型 | ⚠️ 部分（macOS 手写 CharacterMetadata 字段，无独立模块） |
-| ModChapterDisplay | 存档画面自定义章节名 | ❌ 未实现 |
+| ModChapterDisplay | 存档画面自定义章节名 | ✅ 已实现 |
 | ModDebugTools | 调试工具（RenderTexture 截图等） | ❌ 未实现（macOS 用 probe_*.js 探针替代） |
 | ScriptWorkingManager / ModManager | 工作区/配置管理 | ⚠️ 由 run_mod.sh 命令行约定替代 |
 
@@ -36,7 +36,11 @@
    - 机制：SetVariableValue postfix 把 objectionCutInSpawnPath 改写为 Hiro（insideRewrite 守卫）+ pendingEntry；SetSpawnParameters postfix → BuildInstanceCache（GetComponentsInChildren<Image/SpriteRenderer>(true)，23 渲染器）→ SwapSpritesFromCache（按 sprite 名匹配 6 key）→ 动画不覆盖替换（1s 后 re-dump 验证）。
    - **最终根因（替换成功但不可见）**：`invoke()` 经 `il2cpp_runtime_invoke` 读 ≤8B 值类型返回（float/bool）读到垃圾——`get_pixelsPerUnit` 读回 1.77e-18（真值 37.8）→ `Sprite.Create` 以近零 ppu 创建 → sprite 无限放大不可见。修复：`directCall()`（utils.js）直读 MethodInfo 首字段 methodPointer，按正确返回类型（'float'）读 s0；Vector2/Rect 是 HFA（s0-s3）仍走缓冲 + 归一化守卫（[0,1] 回落 0.5）。详见 ARCHITECTURE.md 的 directCall 节。
    - 验证：6 sprite 全部显示（ppu=37.82/75.76/65.91/72.96 原版真实值），shader 分布与原版一致，动画不覆盖。
-3. **ModChapterDisplay（存档章节名）** — ❌ 未实现（镜像参考：Windows ModChapterDisplay.cs，GameStateSlotExtended.SetNonEmptyState）
+3. **ModChapterDisplay（存档章节名）** — ✅ 2026-08-12 已闭环
+   - hook `WitchTrialsGameStateSlot.SetNonEmptyState`（实际实例类；C# 蓝本 patch 基类 GameStateSlotExtended，macOS 双 hook 都覆盖）onEnter 预覆写 + onLeave 兜底覆写 `_subTitleLabel`。
+   - 数据：run_mod.sh 扫描 info.json 的 `ChapterNames`（值支持本地化 dict）注入全局 chapterNames（脚本路径 → 章节名）。
+   - 布局：`GameStateMap.playbackSpot` offset 运行时读；`PlaybackSpot.scriptPath` 固定 @0x0（按名查找与字段类型反查在 macOS 上都返回 scriptPath@0x10 的错类，被实例内存实证推翻）；`_subTitleLabel` offset 运行时读。
+   - **踩坑**：`set_richText`/`set_text` 经 `il2cpp_runtime_invoke` 调用 access violation at 0x1 → 改用 `directCall()` 直调 methodPointer（invoke 不可靠的又一样本）。空槽 `_subTitleLabel` 可能是非 null 垃圾指针，`A.ogc` 前必须做小地址守卫。
 4. **菜单翻页** — ✅ 2026-08-03 已回迁（perPage=4，`ChoiceList_<页>` 方案，镜像 Windows AddModStartMenu）并通过回归验证（TestWitchBook 位于第 3 页，翻页进入正常）。
 
 ## 已知开放项（非阻断）

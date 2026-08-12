@@ -31,8 +31,9 @@
 | 魔女图鉴会话隔离(整页重建,override 可逆) | ✅ |
 | 审判自定义面板 (`@choice handler:"<modId>"`) | ✅ |
 | 自定义论破动画 (`@gosubCutIn`) | ✅ |
+| 存档章节名 (info.json `ChapterNames`) | ✅ |
 
-Windows 版与 macOS 版的功能差距(章节名、调试工具等)见 [GOALS.md](macos-frida/GOALS.md)。
+Windows 版与 macOS 版的功能差距(调试工具等)见 [GOALS.md](macos-frida/GOALS.md)。
 
 ## 项目结构
 
@@ -49,6 +50,7 @@ ManosabaMod/
     │   ├── movie.js           # 视频 URL 流式播放
     │   ├── choice.js          # 审判 @choice handler
     │   ├── cutin.js           # 论破动画 @gosubCutIn
+    │   ├── chapterdisplay.js  # 存档章节名 (ChapterNames)
     │   ├── log.js             # 分级彩色日志 + modlog.txt
     │   └── witchbook/         # 魔女图鉴 (state/data/textures/pages/session/characters/index)
     ├── dist/manosabamod.js    # 打包产物 (frida-compile 构建, 随版本提交)
@@ -124,7 +126,6 @@ macOS 版的剧本结构与 Windows 版类似。
 
 ## 已知限制
 
-- **存档章节名** (ModChapterDisplay,存档画面显示自定义章节名) 未实现 — 见 [GOALS.md](macos-frida/GOALS.md)
 - **macOS 进程行为**:`ctrl+c` 只终止启动脚本,游戏本体是独立进程需手动关闭;手动退出游戏时 macOS 可能弹出崩溃报告 (SIGSEGV at `__cxa_throw`,IL2CPP 退出期异常路径),与 mod 运行期功能无关
 - **音频解析** 目前只测试了wav, ogg目前还未支持，其他格式未测试。如果voice有ogg格式的音频，建议先用ffmpeg转成wav格式。
 - @char SubId:"Middle" + 自定义角色 可能会导致角色立绘在退出剧本时不被清除，建议不要加SubId:"Middle"参数。
@@ -142,6 +143,7 @@ macOS 版的剧本结构与 Windows 版类似。
 - [BepInEx](https://github.com/BepInEx/BepInEx) — Windows 版加载器运行框架
 - [frida](https://frida.re/) — macOS 版注入框架
 - 雪莉苹果汁的 mod 文档与样例  https://manosabamoddoc.fuyumi.xyz/docs/
+
 ## 许可证
 
 [GNU LGPL 2.1](LICENSE)

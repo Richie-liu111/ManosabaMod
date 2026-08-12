@@ -25,7 +25,7 @@ ManosabaMod/
     ├── src/                         ← 源码 (多文件 ES modules, 唯一源码源)
     │   ├── entry.js                 ← 初始化编排 (API 绑定 / hook 挂载)
     │   ├── utils.js / io.js         ← 基础工具 + libc 文件 I/O
-    │   ├── menu.js / providers.js / movie.js
+    │   ├── menu.js / providers.js / movie.js / chapterdisplay.js
     │   └── witchbook/               ← WitchBook (state/data/textures/pages/session/characters/index)
     ├── package.json                 ← npm: frida-compile (devDependency, 仅改源码需要)
     ├── dist/manosabamod.js          ← 打包产物 (单 bundle, 仓库随版本提交, 安装直接用)
@@ -104,5 +104,6 @@ GAME=/path/to/manosaba ./run_mod.sh # 游戏不在 Steam 默认位置时
 | 背景 (@back) / 立绘 (@char) | ✅ |
 | 审判自定义面板 (@choice handler:"<modId>") | ✅ |
 | 自定义论破动画 (@gosubCutIn) | ✅ |
+| 存档章节名 (info.json ChapterNames) | ✅ |
 
 架构、工作原理、与 Windows 版差异、mod 格式兼容性详见 [ARCHITECTURE.md](ARCHITECTURE.md)。
