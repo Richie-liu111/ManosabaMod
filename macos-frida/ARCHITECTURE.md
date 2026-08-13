@@ -189,7 +189,8 @@ ManosabaMod/<ModName>/
 ├── info.json              ← 同一 schema (Name/Enter/Clues/$schemaVersion)
 ├── Scripts/*.nani         ← Naninovel 剧本语言, 游戏自己的 ScriptParser 解析
 ├── Text/Scripts/*.txt     ← 本地化文档
-├── Audio/  Voice/         ← 音频 (限 PCM16/44100Hz/立体声 wav; ogg 需转码, 见 GOALS.md)
+├── Audio/  Voice/         ← 音频 (限 PCM16/44100Hz/立体声 wav; ogg 需转码, 见 GOALS.md;
+                              run_mod.sh 可自动检测非标音频并询问转换 — 可选增强 normalize_audio.py)
 ├── Backgrounds/ Characters/ ← 贴图
 └── Movie/  WitchBook/     ← 视频 / 线索
 ```

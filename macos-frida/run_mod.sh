@@ -66,6 +66,30 @@ if ! $PY -c "import frida" 2>/dev/null; then
     fi
 fi
 
+# 音频规范化 (可选, 2026-08-13): 游戏启动前检测非标音频 (ogg/48kHz/32kHz/单声道 等)。
+# 检测是纯 Python 读文件头 (毫秒级全量扫描, 零依赖); 转换是"改文件"操作 (覆盖
+# 原 wav、删除 ogg 源), 必须用户确认: 发现非标 → 终端列清单 + 询问 y/N, 回车默认
+# 不转换照常启动 (不崩, 非标音频可能无声/音高偏移, ogg 剧本加载时报错)。
+# NORMALIZE_AUDIO: 0=关闭检测, force=不询问直接转换; 默认交互。非 TTY (重定向/脚本)
+# 时不询问, 只报告。脚本不在同目录时静默跳过。
+if [ -f "$PWD/normalize_audio.py" ] && [ "${NORMALIZE_AUDIO:-1}" != "0" ]; then
+    if ! "$PY" "$PWD/normalize_audio.py" --check "$MOD_ROOT"; then
+        DO_CONVERT=0
+        if [ "${NORMALIZE_AUDIO:-1}" = "force" ]; then
+            DO_CONVERT=1
+        elif [ -t 0 ]; then
+            read -r -p $'\033[33m>>> 是否现在用 ffmpeg 批量转换? (y/N) \033[0m' ANS
+            case "$ANS" in y|Y) DO_CONVERT=1;; esac
+        fi
+        if [ "$DO_CONVERT" = 1 ]; then
+            "$PY" "$PWD/normalize_audio.py" --apply "$MOD_ROOT" \
+                || echo ">>> 警告: 部分音频转换失败 (游戏照常启动, 失败文件可能无声/音高偏移)"
+        else
+            echo ">>> 已跳过转换。需要时手动执行: python3 normalize_audio.py --apply \"$MOD_ROOT\""
+        fi
+    fi
+fi
+
 echo ">>> 游戏: $GAME"
 echo ">>> 脚本: $SCRIPT"
 echo ">>> Mod 日志: $MOD_LOG (MOD_DEBUG=${MOD_DEBUG:-0})"

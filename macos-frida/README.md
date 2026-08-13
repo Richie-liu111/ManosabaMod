@@ -11,6 +11,7 @@ mod 剧本 / 本地化 / voice / audio / movie / 背景 / 立绘 已通过 provi
 ├── manosaba.app/                    ← 游戏本体 (Frida 注入目标)
 ├── run_mod.sh                       ← 启动脚本 (从仓库部署到这里)
 ├── dist/manosabamod.js              ← 主 Frida 脚本 (frida-compile 构建产物, 部署到这里)
+├── normalize_audio.py               ← 可选: 音频标准化 (不部署则跳过该功能, 见"音频标准化"节)
 └── ManosabaMod/                     ← mod 目录 (首次运行 run_mod.sh 自动创建)
     ├── 1919180/                     ← 你的 mod (含 info.json + Scripts/...)
     └── ModLoader/Scripts/           ← 启动时自动生成 (菜单剧本)
@@ -29,21 +30,24 @@ ManosabaMod/
     │   └── witchbook/               ← WitchBook (state/data/textures/pages/session/characters/index)
     ├── package.json                 ← npm: frida-compile (devDependency, 仅改源码需要)
     ├── dist/manosabamod.js          ← 打包产物 (单 bundle, 仓库随版本提交, 安装直接用)
-    └── run_mod.sh                   ← 启动脚本 (在仓库里运行会自动构建)
+    ├── run_mod.sh                   ← 启动脚本 (在仓库里运行会自动构建)
+    └── normalize_audio.py           ← 可选: 非标音频检测/转换 (run_mod.sh 启动前调用)
 ```
 
 ## 使用方法
 
 ### 打包版 vs 源码版
 
-- **打包版（普通安装）**：只需 `run_mod.sh` + `dist/manosabamod.js` 两个文件（仓库直接提供，
-  无需 Node.js/npm）。mod 目录放在游戏目录 `ManosabaMod/` 下即可。
+- **打包版（普通安装）**：必选 `run_mod.sh` + `dist/manosabamod.js` 两个文件（仓库直接提供，
+  无需 Node.js/npm）；`normalize_audio.py` 是**可选增强**（音频标准化,见"音频标准化"节,不部署则跳过）。
+  mod 目录放在游戏目录 `ManosabaMod/` 下即可。
 - **源码版（开发）**：改 `src/` 后需要 `npm install` + 重新构建（见下文"开发"）。
 
 ### 前置条件
 - macOS **Apple Silicon** (arm64)
 - `python3` + `frida`(`pip install frida-tools`)
 - 游戏装在 Steam 默认位置
+- `ffmpeg`(仅音频转换步骤需要;检测是纯 Python 零依赖,没有 ffmpeg 时转换步骤警告并跳过,非标音频播放受限)
 
 ### 部署 + 启动
 
@@ -51,9 +55,10 @@ ManosabaMod/
 # 1. 克隆仓库 (任何位置)
 git clone https://github.com/Richie-liu111/ManosabaMod.git
 
-# 2. 部署到游戏目录 (打包版: run_mod.sh 放游戏根, bundle 放 dist/ 子目录 — run_mod.sh 按此定位)
+# 2. 部署到游戏目录 (必选: run_mod.sh + dist/manosabamod.js 两个文件即可运行)
 GAME="$HOME/Library/Application Support/Steam/steamapps/common/manosaba_game"
 cp ManosabaMod/macos-frida/run_mod.sh "$GAME/"
+cp ManosabaMod/macos-frida/normalize_audio.py "$GAME/"   # 可选: 音频标准化 (不复制则跳过, 见下方"音频标准化"节)
 mkdir -p "$GAME/dist"
 cp ManosabaMod/macos-frida/dist/manosabamod.js "$GAME/dist/"
 
@@ -69,7 +74,24 @@ cd "$GAME"
 1. 定位游戏目录(见下方顺序)
 2. 若在仓库里运行且有 `src/`,先用 frida-compile 构建 `dist/manosabamod.js`(源码版)
 3. 扫描 `ManosabaMod/*/info.json` → 生成 mod 选择菜单 (含翻页, 每页 4 个)
-4. 启动游戏并注入 `dist/manosabamod.js`
+4. **音频规范化检测**(可选增强, 仅当同目录存在 `normalize_audio.py`, 2026-08-13 起): 调用
+   `normalize_audio.py --check`,纯 Python 读文件头扫描全部 mod 音频,判断是否
+   PCM16/44100Hz/立体声。发现非标音频 (ogg/48kHz/32kHz/单声道 等)
+   → 终端列出清单 + 删除警告 + 询问是否批量转成标准 wav (y/N,回车默认不转换,照常启动,非标音频可能无声/音高偏移);确认后才执行转换 (`--apply`)。`NORMALIZE_AUDIO=0`
+   关闭检测,`force` 不询问直接转;非 TTY(重定向/脚本)下只报告不询问。也可手动执行
+   `python3 normalize_audio.py --apply`。仅转换需要 `ffmpeg`(缺少时该步警告,不阻断游戏启动)。
+5. 启动游戏并注入 `dist/manosabamod.js`
+
+### 音频标准化(可选增强,非必装)
+
+`normalize_audio.py` 解决的是:游戏原装转换器只支持 PCM16/44100Hz/立体声 wav,非标音频
+(ogg/48kHz/32kHz/单声道 等)会无声或音高偏移。装了它,run_mod.sh 启动前检测到非标音频时
+会列出清单并询问是否批量转换。**它是"改文件"操作**:
+
+- 转换会覆盖同名 .wav、**删除 ogg 源文件**,建议先备份
+- 发现非标准音频时终端先列出清单并给出删除警告,再询问 y/N —— 回车默认不转换,照常启动
+  (只是音频无声/音高偏移,ogg 剧本加载时会报错)
+- 不部署该文件,run_mod.sh 自动跳过检测与转换,加载器本体完全不受影响
 
 **日志分层**: 机制日志默认关闭 (运行噪音小), `MOD_DEBUG=1 ./run_mod.sh` 开启;
 游戏侧 `Unity.LogError` 始终全量输出 (最高优先级排查信号)。

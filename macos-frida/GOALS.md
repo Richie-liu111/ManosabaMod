@@ -48,7 +48,7 @@
 
 ## 已知开放项（非阻断）
 
-- **音频 ogg 支持**（2026-08-12 调研后决策：不做，ogg 用 ffmpeg 转 wav）：
+- **音频 ogg 支持**（2026-08-12 调研后决策：不做，ogg 用 ffmpeg 转 wav；2026-08-13 起 run_mod.sh 启动前自动检测非标音频，纯 Python 读文件头毫秒级，发现后列出清单询问 y/N、确认才批量转换——转换是改文件操作不擅自执行；检测零依赖，仅转换需 ffmpeg；**检测为可选增强**：normalize_audio.py 不存在时 run_mod.sh 整块跳过，加载器不依赖）：
   - 根因（probe_audio.js P1/P2 实证）：原装 `WavToAudioClipConverter` ① `<Representations>k__BackingField` 仅含 `(".wav","audio/wav")` → `.ogg` 文件过不了资源定位（LocalResourceLocator 按 Representation.Extension 匹配扩展名）；② 解码仅 `Pcm16ToFloatArray`（PCM16），OggS 数据必然失败。带 ogg 的 mod 实测报 `Failed to load '114514/L01' resource of type 'UnityEngine.AudioClip'`。
   - 调研结论：C# 蓝本 = Harmony patch（ModAudioPatch.cs 注入 Representations + 接管 ConvertBlocking）+ NVorbis 解码；macOS 若要实现需注入 Representations（`A.an` 构造 struct 数组写 backing field，探针已验证可行）+ 接管 ConvertBlocking（UnityPlayer.dylib 导出 `FMOD_ov_*` 可复用，arm64 上 callbacks 结构在 x5 第 6 参）。成本高于收益 → 决策：ffmpeg 转 wav（README 已有此指导）。
   - **wav 同样受限**（不只 ogg）：原装解码器 `Pcm16ToFloatArray` 只做 PCM16（44100Hz 立体声假设），48kHz 等非标采样率/位深/声道的 wav 会播放失败或音高偏移（上游 #5 修的就是这个）。统一转码参数：`ffmpeg -i in.ogg -ar 44100 -ac 2 -sample_fmt s16 out.wav`（ogg 与任意 wav 均适用）。

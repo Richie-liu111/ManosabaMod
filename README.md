@@ -59,6 +59,7 @@ ManosabaMod/
     │   └── witchbook/         # 魔女图鉴 (state/data/textures/pages/session/characters/index)
     ├── dist/manosabamod.js    # 打包产物 (frida-compile 构建, 随版本提交)
     ├── run_mod.sh             # 启动脚本 (自动构建 + 启动游戏 + 注入)
+    ├── normalize_audio.py     # 可选: 非标音频 (ogg/48k 等) 检测与转换, run_mod.sh 启动前调用
     ├── ARCHITECTURE.md        # 架构 / 原理 / 与 Windows 版差异
     ├── GOALS.md               # Windows vs macOS 功能对照与差距 (活的)
     └── README.md              # macOS 版使用说明
@@ -72,6 +73,7 @@ ManosabaMod/
 ├── manosaba.app/              # 游戏本体
 ├── run_mod.sh                 # 启动脚本 (从仓库部署)
 ├── dist/manosabamod.js        # Frida bundle (从仓库部署)
+├── normalize_audio.py         # 可选: 音频标准化 (不部署则跳过该功能, 见下方说明)
 └── ManosabaMod/               # mod 目录 (首次运行 run_mod.sh 自动创建)
     ├── <ModId>/               # 你的 mod (info.json + Scripts/...)
     └── ModLoader/Scripts/     # 启动时自动生成 (菜单剧本)
@@ -79,15 +81,20 @@ ManosabaMod/
 
 ## 快速开始 — macOS
 
-**前置条件**:Apple Silicon (arm64);`python3` + `frida`(`pip install frida-tools`);游戏装在 Steam 默认位置。
+**前置条件**
+- macOS **Apple Silicon** (arm64)
+- `python3` + `frida`(`pip install frida-tools`)
+- 游戏装在 Steam 默认位置
+- `ffmpeg`(仅音频转换步骤需要;检测是纯 Python 零依赖,没有 ffmpeg 时转换步骤警告并跳过,非标音频播放受限)
 
 ```bash
 # 1. 克隆仓库 (任何位置)
 git clone https://github.com/Richie-liu111/ManosabaMod.git
 
-# 2. 部署到游戏目录 (打包版: 只需 run_mod.sh + dist/manosabamod.js 两个文件)
+# 2. 部署到游戏目录 (必选: run_mod.sh + dist/manosabamod.js 两个文件即可运行)
 GAME="$HOME/Library/Application Support/Steam/steamapps/common/manosaba_game"
 cp ManosabaMod/macos-frida/run_mod.sh "$GAME/"
+cp ManosabaMod/macos-frida/normalize_audio.py "$GAME/"   # 可选: 音频标准化 (见下方说明, 不复制则跳过)
 mkdir -p "$GAME/dist"
 cp ManosabaMod/macos-frida/dist/manosabamod.js "$GAME/dist/"
 
@@ -96,12 +103,19 @@ cd "$GAME"
 ./run_mod.sh
 ```
 
+**音频标准化(normalize_audio.py)是非必装的增强功能**。游戏原装转换器只支持 PCM16/44100Hz/立体声 wav,非标音频(ogg/48kHz/32kHz/单声道等)会无声或音高偏移;装了它,run_mod.sh 启动前会检测到非标音频并询问是否批量转成标准 wav。注意:
+
+- **它是"改文件"操作**:转换会覆盖同名 .wav、**删除 ogg 源文件**,建议先备份
+- 发现非标准音频时终端会先列出清单并给出警告,再询问 y/N —— **回车默认不转换照常启动**
+- 不部署该文件,run_mod.sh 自动跳过检测与转换,加载器本体完全不受影响
+
 `run_mod.sh` 自动完成:
 
 1. 定位游戏目录(已部署时直接用当前目录;否则依次检查 Steam 默认位置、工作区副本、`GAME` 环境变量)
 2. 若在仓库里运行且有 `src/`,先用 frida-compile 自动重新构建 bundle(源码版开发)
 3. 扫描 `ManosabaMod/*/info.json` → 生成 mod 选择菜单(每页 4 个,可翻页)
-4. 启动游戏并注入 `dist/manosabamod.js`
+4. 音频标准化检测(仅当同目录存在 normalize_audio.py,可选):见上方说明
+5. 启动游戏并注入 `dist/manosabamod.js`
 
 **退出游戏**：程序坞退出时游戏，或者游戏内退出表现为: "未响应"不退出，需强制退出，或在启动游戏的终端 ctrl+c 终止。
 
@@ -133,7 +147,7 @@ macOS 版的剧本结构与 Windows 版类似。
 ## 已知限制
 
 - **macOS 进程行为**:`ctrl+c` 终止启动脚本并一并收掉游戏(SIGTERM→SIGKILL);或直接退出游戏,脚本自动收尾。2026-08-12 起:游戏存活检测 + frida-helper 主动清理,不再残留孤儿进程。注意:程序坞退出游戏或者游戏内退出表现为"未响应",需强制退出。手动退出游戏时 macOS 可能弹出崩溃报告 (SIGSEGV at `__cxa_throw`,IL2CPP 退出期异常路径),与 mod 运行期功能无关
-- **音频解析** 走游戏原装 `WavToAudioClipConverter`,只支持 **PCM16 / 44100Hz / 立体声 wav**:`.ogg` 无法被资源定位;48kHz 等非标采样率/位深/声道的 wav 会播放失败或音高偏移(Windows 版 #5 修复的就是这个问题)。非标音频统一转码:`ffmpeg -i in.ogg -ar 44100 -ac 2 -sample_fmt s16 out.wav`(ogg 与任意 wav 都适用;根因与 Windows 侧对照见 macos-frida/GOALS.md)。
+- **音频解析** 走游戏原装 `WavToAudioClipConverter`,只支持 **PCM16 / 44100Hz / 立体声 wav**:`.ogg` 无法被资源定位;48kHz 等非标采样率/位深/声道的 wav 会播放失败或音高偏移(Windows 版 #5 修复的就是这个问题)。**run_mod.sh 启动前自动检测**(纯 Python 读文件头,毫秒级,零依赖):发现非标音频(ogg/48k/32k/单声道等)时列出清单并询问是否批量转成 `-ar 44100 -ac 2 -sample_fmt s16` 标准 wav —— 转换是改文件操作(覆盖原 wav、删除 ogg 源),**必须 y 确认后才执行**,回车/非 TTY 默认不转,照常启动;也可手动 `python3 normalize_audio.py --apply`。`NORMALIZE_AUDIO=0` 关闭检测,`force` 不询问直接转。根因与 Windows 侧对照见 macos-frida/GOALS.md。
 - @char SubId:"Middle" + 自定义角色 可能会导致角色立绘在退出剧本时不被清除，建议不要加SubId:"Middle"参数。
 
 ## 文档
