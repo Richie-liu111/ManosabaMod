@@ -513,3 +513,50 @@ export function clearBookViaVanilla() {
         wblog("clearBook: WitchBookUi.ClearState 全部 5 分类已调用");
     } catch (e) { error("clearBook err: " + e); }
 }
+// 挂钩游戏 @clearBook (ClearWitchBook 命令) 的完整语义:
+// 游戏侧 ClearState 只重置页面 _state (已获得版本), mod 的 wbData.states 不清 → 图鉴下次打开
+// applyStates (tryInjectWitchBook → injectPage) 会把自定义条目重新 SetVersion 点亮 → 清不掉。
+// 佐证: 原版 10-1 (同在 map) 能清掉 → 列表受 _state 门控, 自定义条目是"被 mod 复活"才残留。
+// 挂钩 WitchBookUi/WitchBookScreen.ClearState(category) onLeave:
+//   ① 清 wbData.states/pendingStates[分类] → applyStates 无可复活
+//   ② restorePageDefaults 复位该页面原版默认面板 (标签/缩略图/_currentItemId) → 上方面板不再冻结旧文本
+// 幂等 (WitchBookUi 内部会调 WitchBookScreen, 双 hook 各触发一次无害)。
+var _clearStateHooked = false;
+export function hookClearState() {
+    try {
+        if (_clearStateHooked) return;
+        _clearStateHooked = true;
+        var idxName = { 0: "clue", 1: "profile", 3: "rule", 4: "note" };
+        var handle = function (catIdx) {
+            try {
+                var catName = idxName[catIdx];
+                if (!catName) return;
+                if (wbData.states[catName]) wbData.states[catName] = {};
+                if (wbData.pendingStates[catName]) wbData.pendingStates[catName] = {};
+                var cat = wbCats[catName];
+                var pages = findAllPages();
+                for (var i = 0; i < pages.length; i++) {
+                    try {
+                        var pc = A.ogc(pages[i]);
+                        if (A.cgn(pc).readCString() !== cat.page) continue;
+                        restorePageDefaults(pages[i]);
+                    } catch (e2) {}
+                }
+                wblog("ClearState 挂钩: '" + catName + "' 状态已清 + 面板复位");
+            } catch (e) { error("clearStateHook err: " + e); }
+        };
+        ["witchBookUi", "witchBookScreen"].forEach(function (field) {
+            try {
+                var cls = wbCls[field];
+                if (!cls || cls.isNull()) return;
+                var mi = A.cgm(cls, Memory.allocUtf8String("ClearState"), 1);
+                if (!mi || mi.isNull()) return;
+                Interceptor.attach(mi.readPointer(), {
+                    onEnter: function (args) { this._cat = args[1].toInt32(); },
+                    onLeave: function () { try { handle(this._cat); } catch (e) {} }
+                });
+                wblog("hook " + A.cgn(cls).readCString() + ".ClearState(category)");
+            } catch (e) {}
+        });
+    } catch (e) { error("hookClearState err: " + e); }
+}

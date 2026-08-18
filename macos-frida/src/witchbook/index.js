@@ -14,7 +14,7 @@
 import { A, dbg, ensureItemIdsString, fieldOffset, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, wblog, error, warn } from "../utils.js";
 import { initCatStateMaps, setWbCls, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbPrevMod } from "./state.js";
 import { isCurrentModItem, loadWitchBookData, wbCatByIdx, wbCats } from "./data.js";
-import { clearAllWitchBookPages, clearBookViaVanilla, detectCurrentMod, findAllPages, rebuildAllPages } from "./session.js";
+import { clearAllWitchBookPages, clearBookViaVanilla, detectCurrentMod, findAllPages, hookClearState, rebuildAllPages } from "./session.js";
 import { injectPage, hookRefreshLocalized } from "./pages.js";
 import { registerTexturesInto } from "./textures.js";
 import { hookProfileName } from "./characters.js";
@@ -97,6 +97,9 @@ export function setupWitchBookHooks() {
         } catch (e) { error("page UpdateVersion hook err: " + e); }
         // Profile 姓名覆写 (mod 新角色显示格式化名字而非 ID)
         hookProfileName();
+        // @clearBook (ClearWitchBook 命令) → ClearState: 清 wbData.states + 复位面板
+        // 修: 剧本内 @clearBook 后自定义证物无法清除 (applyStates 复活) + 上方面板冻结残留
+        hookClearState();
         // RefreshPageContent onEnter: 重新预填 _localizedTextData
         // 修 InitializePages→LoadDataAsync 异步重建 map 时清掉注入导致 KeyNotFoundException
         hookRefreshLocalized();
