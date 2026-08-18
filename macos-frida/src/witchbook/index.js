@@ -15,7 +15,7 @@ import { A, dbg, ensureItemIdsString, fieldOffset, findClassAcrossImages, findNe
 import { initCatStateMaps, setWbCls, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbPrevMod } from "./state.js";
 import { isCurrentModItem, loadWitchBookData, wbCatByIdx, wbCats } from "./data.js";
 import { clearAllWitchBookPages, clearBookViaVanilla, detectCurrentMod, findAllPages, rebuildAllPages } from "./session.js";
-import { injectPage } from "./pages.js";
+import { injectPage, hookRefreshLocalized } from "./pages.js";
 import { registerTexturesInto } from "./textures.js";
 import { hookProfileName } from "./characters.js";
 
@@ -97,6 +97,9 @@ export function setupWitchBookHooks() {
         } catch (e) { error("page UpdateVersion hook err: " + e); }
         // Profile 姓名覆写 (mod 新角色显示格式化名字而非 ID)
         hookProfileName();
+        // RefreshPageContent onEnter: 重新预填 _localizedTextData
+        // 修 InitializePages→LoadDataAsync 异步重建 map 时清掉注入导致 KeyNotFoundException
+        hookRefreshLocalized();
         // WitchBook 打开/翻页重建 → 强制重注入
         ["BeginToPresent", "InitializePages"].forEach(function (mn) {
             try {

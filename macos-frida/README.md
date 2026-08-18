@@ -132,4 +132,11 @@ GAME=/path/to/manosaba ./run_mod.sh # 游戏不在 Steam 默认位置时
 | 存档章节名 (info.json ChapterNames) | ✅ |
 | 调试工具 | ❌ 未实现 (用 probe_*.js 探针替代) |
 
+## 已知问题 (2026-08-18)
+
+- **已知残留（2026-08-18）**：切语言瞬间有肉眼可见卡顿 —— 每个 loader 实例各触发一次
+  全量重注入（实测一次切换 ~200 次，间隔 ~20ms≈每帧），主线程被同步 IL2CPP 调用占用数秒。
+  优化方向（verify-before-repair / 按 loader 定向重注入）见 GOALS.md「差距」5。
+- 修复细节见 [GOALS.md](GOALS.md)「差距」5 / [ARCHITECTURE.md](ARCHITECTURE.md) 7.5。
+
 架构、工作原理、与 Windows 版差异、mod 格式兼容性详见 [ARCHITECTURE.md](ARCHITECTURE.md)。

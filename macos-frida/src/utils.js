@@ -101,6 +101,22 @@ export function invokeOk(mi, obj, args) {
     }
     return { ok: true, ret: ret };
 }
+
+// 读取 IL2CPP invoke 返回的 boxed bool 值.
+// il2cpp_runtime_invoke 对 bool 返回方法返回的是 boxed Boolean 对象指针,
+// 该指针无论 bool 是 true 还是 false 都非空, 必须读 0x10 偏移处的 1 字节字段.
+// 之前的 `!ckr.ret.isNull()` 永远为 true, ContainsKey 判断错误.
+export function invokeBool(mi, obj, args) {
+    var r = invokeOk(mi, obj, args);
+    if (!r.ok) return false;
+    var ret = r.ret;
+    if (!ret || ret.isNull()) return false;
+    try {
+        var k = A.cgn(A.ogc(ret)).readCString() || "";
+        if (k.indexOf("Boolean") >= 0) return ret.add(0x10).readU8() === 1;
+    } catch (e) {}
+    return ret.readU8() === 1;
+}
 // 0 参构造器调用 (用户已证可行)
 var ctorCache = {};
 export function tryCtor(cls, obj) {
@@ -161,7 +177,7 @@ export function populateConvertersDict(lrp, convClassName, targetClsFn, tag) {
         if (targetCls.isNull()) { dbg("[v3] 目标类型类 NULL (" + tag + ")"); return false; }
         var typeObj = A.tgo(A.cgt(targetCls));               // typeof(target)
         if (!invokeOk(A.cgm(dictCls, Memory.allocUtf8String("Add"), 2), dict, [typeObj, listObj]).ok) { dbg("[v3] Dict.Add 失败 (" + tag + ")"); return false; }
-        dbg("[v3] converters 填充成功 (" + convClassName + " → " + tag + ")");
+        // 静默成功: 每次重注入 16 mod × 5 类 = 80 行/帧, 日志爆炸. 仅失败时 warn.
         return true;
     } catch (e) { dbg("[v3] populateConverters err (" + tag + "): " + e); return false; }
 }
@@ -252,7 +268,10 @@ export function ensureItemIdsString(page, cls) {
         }
         var instCls = "";
         try { instCls = A.cgn(A.ogc(page)).readCString(); } catch (e1) { instCls = "?"; }
-        dbg(A.cgn(cls).readCString() + "._itemIds off=0x" + off.toString(16) + " val=" + arr + " type=" + cn + " 实例=" + instCls);
+        // 仅在异常情况下记录 (cn 不含 String[): 正常 String[] 情况静默, 减少 DEBUG 噪音
+        if (cn.indexOf("String[") < 0) {
+            dbg(A.cgn(cls).readCString() + "._itemIds off=0x" + off.toString(16) + " val=" + arr + " type=" + cn + " 实例=" + instCls + " → 需修复");
+        }
         if (cn.indexOf("String[") >= 0) return true;   // 已是 string[], 无需换
         // off=0x98 经各页面交叉验证是对的; val 悬空/垃圾正是要修的 → 一律用合法 String[] 覆盖
         var ids = [];

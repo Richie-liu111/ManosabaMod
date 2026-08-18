@@ -67,7 +67,14 @@ export function readJSONFile(path) {
     try {
         var s = fileReadString(path);
         if (s === null) { iodbg("readJSONFile 读取失败 '" + path + "'"); return null; }
-        return JSON.parse(s);
+        var parsed = JSON.parse(s);
+        // 诊断: 检测多字节 locale (ja) 是否在解析后被丢失
+        // 若 fileReadString 截断或 JSON.parse 静默失败, ja keys 会消失
+        var sHasJa = s.indexOf('"ja"') >= 0;
+        if (sHasJa) {
+            iodbg("readJSONFile '" + path + "' len=" + s.length + " 含'\"ja\"' 但需验证解析后是否保留");
+        }
+        return parsed;
     } catch (e) { iodbg("readJSONFile 解析失败 '" + path + "': " + e); return null; }
 }
 

@@ -1,7 +1,7 @@
 // ============ WitchBook 页面注入域: 注入 Page._loadedDataItemMap + _itemIds + _state + 本地化字典预填 ============
-import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, getGenericArgClass, getSystemClass, invokeOk, listContainsId, makeS, readStr, wblog, dbg, error, warn } from "../utils.js";
+import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, getGenericArgClass, getSystemClass, invokeBool, invokeOk, listContainsId, makeS, readStr, wblog, dbg, error, warn } from "../utils.js";
 import { wbCls, wbData, wbOverrides } from "./state.js";
-import { currentModIds, injectVersions, localeValue, resolveLocale, unionLocaleKeys } from "./data.js";
+import { currentModIds, fullLocaleTags, injectVersions, isCurrentModItem, localeValue, pickLocaleText, resolveLocale, wbCats } from "./data.js";
 import { clearModItemsFromPage, isVanillaId } from "./session.js";
 
 // 2) 注入 Page._loadedDataItemMap + _itemIds + _state
@@ -23,7 +23,7 @@ export function injectPage(cat) {
             var addMi = A.cgm(listCls, Memory.allocUtf8String("Add"), 1);
             if (!vItemCls.isNull() && addMi && !addMi.isNull()) {
                 var idOff2 = fieldOffset(vItemCls, "_id", 0x10);
-                var ids = currentModIds(cat), added = 0;
+                var ids = currentModIds(cat), added = 0, overrideIds = [];
                 for (var i = 0; i < ids.length; i++) {
                     var id = ids[i];
                     // override: mod 定义的原版同 id → 移除原版条目再注入 mod 版 (镜像 Windows)
@@ -31,11 +31,13 @@ export function injectPage(cat) {
                         var oSet = {}; oSet[id] = 1;
                         clearModItemsFromPage(page, pageCls, oSet);
                         wbOverrides[cat.name][id] = true;
-                        wblog(cat.name + " override '" + id + "' → 移除原版, 注入 mod 版");
+                        overrideIds.push(id);
                     }
                     if (listContainsId(mapList, id, idOff2)) continue;
                     added += injectVersions(mapList, addMi, vItemCls, cat, id, wbData[cat.name][id], page);
                 }
+                // 聚合日志 (替代每条 override 一行): 仅 1 条 INFO 覆盖整页 override 情况
+                if (overrideIds.length) wblog(cat.name + " override " + overrideIds.length + " 条: " + overrideIds.join(","));
                 if (added > 0) wblog(cat.name + "Page._loadedDataItemMap 注入 " + added + " 条 (total=" + mapList.add(0x18).readS32() + ")");
             }
         }
@@ -124,6 +126,27 @@ export function registerLocalizedDict(page, b) {
         var outer = page.add(dictField).readPointer();
         if (outer.isNull()) { warn(cat.name + "._localizedTextData 为 null, 跳过 '" + b.id + "'"); return; }
         var outerCls = A.ogc(outer);
+        // 诊断: 打字典大小 + 类名, 验证 ivp 字段值
+        try {
+            // Dictionary 在 0x20 偏移处直接有 count 字段, 绕过 get_Count 的 boxed Int32 调用
+            var cnt = -1;
+            try { cnt = outer.add(0x20).readS32(); } catch (e) {}
+            var ivpId = "?", ivpVer = -1;
+            try { ivpId = readStr(b.ivp.add(0x10).readPointer()); } catch (e) {}
+            try { ivpVer = b.ivp.add(0x18).readS32(); } catch (e) {}
+            var outerClsName = A.cgn(outerCls).readCString();
+            dbg("[WitchBook] " + cat.name + " registerDict '" + b.id + "' 进入: dict size=" + cnt + " cls=" + outerClsName + " ivp.Id='" + ivpId + "' ivp.Ver=" + ivpVer);
+        } catch (e) {}
+        // 重要: 切语言后 RefreshPageContent 会重复触发, 但游戏只会重新读取 _localizedTextData[ivp][locale]
+        // 如果只是 ContainsKey=true 就跳过, inner dict 里仍是旧 locale 集 (如只有 zh-Hans),
+        // 切到日文后游戏查 inner[ja] → KeyNotFoundException.
+        // 解决: 用 indexer set_Item (Add-or-Replace) 替换整个 inner dict, 保证 inner 包含所有 locale.
+        var existedOuter = false;
+        var ckOuter = A.cgm(outerCls, Memory.allocUtf8String("ContainsKey"), 1);
+        if (ckOuter && !ckOuter.isNull()) {
+            existedOuter = invokeBool(ckOuter, outer, [b.ivp]);
+        }
+        dbg("[WitchBook] " + cat.name + " registerDict '" + b.id + "' ContainsKey=" + existedOuter + (existedOuter ? " → 将用 set_Item 替换 inner" : " → 将用 Add 新增"));
         // 从现有值偷内层字典的具体实现类 (不能用泛型参数: 那是 IReadOnlyDictionary 接口, object_new 会崩)
         var sample = getFirstDictValue(outer);
         if (!sample) { warn(cat.name + "._localizedTextData 无现有值, 跳过 '" + b.id + "'"); return; }
@@ -137,10 +160,11 @@ export function registerLocalizedDict(page, b) {
         if (!invokeOk(A.cgm(innerCls, Memory.allocUtf8String(".ctor"), 0), inner, []).ok) { warn("内层字典 ctor 失败 '" + b.id + "'"); return; }
         if (cat.locKind === "str") {
             // Profile: Dictionary<LocaleKind, string> — 值 = 描述字符串
-            var descTags = unionLocaleKeys(vrec.desc);
+            // 补全全部游戏语言: 缺的语言回退到已有文本 (pickLocaleText), 防游戏按当前语言查询时 KeyNotFoundException
+            var descTags = fullLocaleTags(vrec.desc);
             for (var t2 = 0; t2 < descTags.length; t2++) {
                 var lv2 = Memory.alloc(4); lv2.writeS32(localeValue(descTags[t2]));
-                invokeOk(addInner, inner, [lv2, makeS(resolveLocale(vrec.desc, descTags[t2]))]);
+                invokeOk(addInner, inner, [lv2, makeS(resolveLocale(vrec.desc, descTags[t2]) || pickLocaleText(vrec.desc))]);
             }
         } else {
             // Clue/Rule/Note: Dictionary<LocaleKind, Xxx.LocalizedTexts> — 值 = 二元组
@@ -154,16 +178,44 @@ export function registerLocalizedDict(page, b) {
             if (cat.name === "clue") { f1 = vrec.name; f2 = vrec.desc; }         // (Name, Description)
             else if (cat.name === "rule") { f1 = vrec.subtitle; f2 = vrec.desc; } // (Subtitle, Description)
             else if (cat.name === "note") { f1 = vrec.title; f2 = vrec.desc; }   // (Title, Description)
-            var tags = unionLocaleKeys(f1, f2);
+            // 诊断: 看 vrec 里 name/desc 实际包含的 locale keys
+            var f1Keys = f1 ? Object.keys(f1) : [];
+            var f2Keys = f2 ? Object.keys(f2) : [];
+            dbg("[WitchBook] " + cat.name + " registerDict '" + b.id + "' vrec.name keys=[" + f1Keys.join(",") + "] vrec.desc keys=[" + f2Keys.join(",") + "]");
+            // 补全全部游戏语言: vrec 缺的语言用已有文本回退 (pickLocaleText), 防游戏按当前语言查询 KeyNotFoundException
+            var tags = fullLocaleTags(f1, f2);
             for (var t = 0; t < tags.length; t++) {
                 var lts = A.on(ltsCls);
                 var lv = Memory.alloc(4); lv.writeS32(localeValue(tags[t]));
-                invokeOk(ltsCtor, lts, [makeS(resolveLocale(f1, tags[t])), makeS(resolveLocale(f2, tags[t]))]);
+                invokeOk(ltsCtor, lts, [makeS(resolveLocale(f1, tags[t]) || pickLocaleText(f1)), makeS(resolveLocale(f2, tags[t]) || pickLocaleText(f2))]);
                 invokeOk(addInner, inner, [lv, lts]);
             }
+            dbg("[WitchBook] " + cat.name + " registerDict '" + b.id + "' inner 填 " + tags.length + " locales: " + tags.join(","));
         }
-        var addOuter = A.cgm(outerCls, Memory.allocUtf8String("Add"), 2);
-        if (addOuter && !addOuter.isNull()) invokeOk(addOuter, outer, [b.ivp, inner]);
+        // 用 indexer set_Item (Add-or-Replace) 替换 inner dict, 保证 inner 包含所有 locale
+        // 修: 切语言后 ContainsKey=true 但 inner 仍只有旧 locale 集 → 游戏查新 locale 时 KeyNotFoundException
+        var setOuter = A.cgm(outerCls, Memory.allocUtf8String("set_Item"), 2);
+        if (setOuter && !setOuter.isNull()) {
+            var setR = invokeOk(setOuter, outer, [b.ivp, inner]);
+            if (!setR.ok) {
+                dbg("[WitchBook] " + cat.name + " registerDict '" + b.id + "' set_Item 失败: " + setR.ex);
+            }
+        } else {
+            // fallback: 不存在则 Add, 已存在则先 Remove 再 Add
+            if (existedOuter) {
+                var rmOuter = A.cgm(outerCls, Memory.allocUtf8String("Remove"), 1);
+                if (rmOuter && !rmOuter.isNull()) invokeOk(rmOuter, outer, [b.ivp]);
+            }
+            var addOuter = A.cgm(outerCls, Memory.allocUtf8String("Add"), 2);
+            if (addOuter && !addOuter.isNull()) {
+                var addR = invokeOk(addOuter, outer, [b.ivp, inner]);
+                if (!addR.ok) {
+                    dbg("[WitchBook] " + cat.name + " registerDict '" + b.id + "' Add 外层失败: " + addR.ex);
+                }
+            } else {
+                dbg("[WitchBook] " + cat.name + " registerDict '" + b.id + "' set_Item/Add 外层方法均未找到");
+            }
+        }
         // Rule 额外: _numberings 字典 (IdVersionPair → string)
         if (cat.name === "rule") {
             try {
@@ -178,4 +230,44 @@ export function registerLocalizedDict(page, b) {
         }
         dbg(cat.name + "._localizedTextData 预填 '" + b.id + "' v" + b.ver + " (" + innerName + ")");
     } catch (e) { error("registerLocalizedDict err '" + b.id + "': " + e); }
+}
+// Hook RefreshPageContent onEnter: 在游戏读 _localizedTextData[map.IdVersionPair] 之前
+// 重新预填该 mod 条目. 修 InitializePages→LoadDataAsync 异步重建 map 时清掉注入的问题
+// (日志实证: InitializePages onEnter 注入后 800ms 才出现 KeyNotFoundException).
+// 仅对当前 mod 的条目执行 (其他条目原版字典已有数据, 不动).
+var _refreshHookedPages = {};
+export function hookRefreshLocalized() {
+    try {
+        var catNames = ["clue", "rule", "note"];  // 这三类用 LocalizedTexts dict
+        for (var i = 0; i < catNames.length; i++) {
+            var cat = wbCats[catNames[i]];
+            var pageCls = wbCls.pages[cat.name];
+            if (!pageCls || pageCls.isNull()) continue;
+            if (_refreshHookedPages[cat.name]) continue;
+            var mi = A.cgm(pageCls, Memory.allocUtf8String("RefreshPageContent"), 1);
+            if (!mi || mi.isNull()) { warn(cat.name + ".RefreshPageContent 未找到"); continue; }
+            _refreshHookedPages[cat.name] = 1;
+            (function (catN) {
+                Interceptor.attach(mi.readPointer(), {
+                    onEnter: function (a) {
+                        try {
+                            var map = a[1];
+                            if (!map || map.isNull()) return;
+                            var id = readStr(map.add(0x10).readPointer());  // VersionedItem._id
+                            if (!id) { dbg("[WitchBook] " + catN + ".RefreshPageContent: map._id 为空"); return; }
+                            var isMod = isCurrentModItem(wbCats[catN], id);
+                            dbg("[WitchBook] " + catN + ".RefreshPageContent onEnter id='" + id + "' isMod=" + isMod);
+                            if (!isMod) return;
+                            var ver = map.add(0x18).readS32();  // VersionedItem._version
+                            var ivp = map.add(0x28).readPointer();  // VersionedItem._idVersionPair
+                            if (ivp.isNull()) { dbg("[WitchBook] " + catN + ".RefreshPageContent: ivp=null, id=" + id); return; }
+                            var b = { cat: wbCats[catN], id: id, ver: ver, ivp: ivp };
+                            registerLocalizedDict(a[0], b);
+                        } catch (e) { dbg("[WitchBook] RefreshPageContent refill err: " + e); }
+                    }
+                });
+            })(cat.name);
+            wblog("hook " + cat.name + ".RefreshPageContent onEnter (refill _localizedTextData)");
+        }
+    } catch (e) { error("hookRefreshLocalized err: " + e); }
 }

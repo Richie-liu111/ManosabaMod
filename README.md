@@ -149,6 +149,7 @@ macOS 版的剧本结构与 Windows 版类似。
 - **macOS 进程行为**:`ctrl+c` 终止启动脚本并一并收掉游戏(SIGTERM→SIGKILL);或直接退出游戏,脚本自动收尾。2026-08-12 起:游戏存活检测 + frida-helper 主动清理,不再残留孤儿进程。注意:程序坞退出游戏或者游戏内退出表现为"未响应",需强制退出。手动退出游戏时 macOS 可能弹出崩溃报告 (SIGSEGV at `__cxa_throw`,IL2CPP 退出期异常路径),与 mod 运行期功能无关
 - **音频解析** 走游戏原装 `WavToAudioClipConverter`,只支持 **PCM16 / 44100Hz / 立体声 wav**:`.ogg` 无法被资源定位;48kHz 等非标采样率/位深/声道的 wav 会播放失败或音高偏移(Windows 版 #5 修复的就是这个问题)。**run_mod.sh 启动前自动检测**(纯 Python 读文件头,毫秒级,零依赖):发现非标音频(ogg/48k/32k/单声道等)时列出清单并询问是否批量转成 `-ar 44100 -ac 2 -sample_fmt s16` 标准 wav —— 转换是改文件操作(覆盖原 wav、删除 ogg 源),**必须 y 确认后才执行**,回车/非 TTY 默认不转,照常启动;也可手动 `python3 normalize_audio.py --apply`。`NORMALIZE_AUDIO=0` 关闭检测,`force` 不询问直接转。根因与 Windows 侧对照见 macos-frida/GOALS.md。
 - @char SubId:"Middle" + 自定义角色 可能会导致角色立绘在退出剧本时不被清除，建议不要加SubId:"Middle"参数。
+- **语言切换（macOS，2026-08-18 已修）**:游戏内切语言（zh-Hans ↔ ja）曾击穿 mod 资源加载——Naninovel 重建全部 `LocalizableResourceLoader<T>` 的 ProvisionSources，抹掉 mod 注入的 provider，导致中途切语言卡死。**已知残留:切语言瞬间有肉眼可见卡顿**（每个 loader 实例各触发一次全量重注入，实测 ~200 次/切换）。细节见 [GOALS.md](macos-frida/GOALS.md)「差距」5 / [ARCHITECTURE.md](macos-frida/ARCHITECTURE.md) 7.5。
 
 ## 文档
 

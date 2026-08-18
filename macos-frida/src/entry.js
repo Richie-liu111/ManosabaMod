@@ -16,7 +16,7 @@ import { clearCutInCaches, setupCutInHooks } from "./cutin.js";
 import { initChoiceHandlers, setupChoiceHandlerHooks } from "./choice.js";
 import { setupChapterDisplayHooks } from "./chapterdisplay.js";
 import { setupMovieHooks } from "./movie.js";
-import { addModLoader } from "./providers.js";
+import { addModLoader, setupLocaleReinjectHooks } from "./providers.js";
 import { hookStartGame, registerMenu, registerMenuText } from "./menu.js";
 import { resetWitchBookSession } from "./witchbook/session.js";
 import { setupWitchBookHooks } from "./witchbook/index.js";
@@ -382,13 +382,9 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                     var full = collectUtf16(0x14, 2000);
                     if (full) logLevel(level, "[v3] " + tag + " FULL: " + full);
                 } catch (e) {}
-                // 从多个起点走 UTF-16 到 null
-                [0x08, 0x10, 0x14, 0x18, 0x0C].forEach(function (so) {
-                    try {
-                        var s = collectUtf16(so, 2000);
-                        if (s) logLevel(level, "[v3] " + tag + " +0x" + so.toString(16) + " utf16='" + s + "'");
-                    } catch (e) {}
-                });
+                // 移除多偏移 UTF-16 尝试 (0x08/0x10/0x18/0x0C): C# 字符串是引用类型,
+                // 直接从对象实例内存读 UTF-16 是错的 — 读到的全是垃圾 (如 KeyNotFoundException
+                // 日志里的 '歀惠' 是误读, 无意义). 必要信息已在 hex + class + full 中.
             } catch (e3) { logLevel(level, "[v3] " + tag + " dump err: " + e3); }
         }
         try {
@@ -436,6 +432,11 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
 
         // @choice handler 支持 (自定义选项面板, 镜像 Windows ModChoiceHandlerLoader 精简核心)
         setupChoiceHandlerHooks();
+
+        // 语言切换重注入 hook (镜像上游 Windows LocaleWatcherComponent, commit 66e5388b)
+        // hook ResourceLoader<T>.HandleLocaleChanged (FSG) → 启动 ~10 帧重注入窗口
+        // 覆盖: Scripts/Text/Audio/Voice/Backgrounds/Characters (insertProvisionSource 自带去重)
+        setupLocaleReinjectHooks();
 
         // 存档章节名支持 (镜像 Windows ModChapterDisplay)
         setupChapterDisplayHooks();

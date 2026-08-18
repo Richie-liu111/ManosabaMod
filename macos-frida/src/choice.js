@@ -29,6 +29,7 @@
 import { A, dbg, fieldOffset, findAllObjectOfType, findClassAcrossImages, findSvc, getSystemClass, invoke, invokeOk, makeS, pngDims, readStr, warn } from "./utils.js";
 import { fileReadBytes, readJSONFile } from "./io.js";
 import { info } from "./log.js";
+import { startReinjectWindow } from "./providers.js";
 
 var chCls = null;            // 解析好的类表
 var chData = {
@@ -617,6 +618,15 @@ function chHookClassMethods(cls, tag, all) {
         var iter = Memory.alloc(Process.pointerSize);
         iter.writePointer(ptr(0));
         var seen = {};
+        // 高频方法节流: GetLoadedResourceOrNull/GetLoaded/ResourceExists/LoadResource 等每次资源查询都触发, modlog 噪音主要来源
+        // 前 N 条全打, 之后每 step 条打一条, 防日志爆炸
+        var noisyMethods = { GetLoadedResourceOrNull: 1, GetLoaded: 1, ResourceExists: 1, ResourceExistsBlocking: 1, LoadResource: 1, Load: 1 };
+        var logCount = {};   // mnm → 已打条数
+        var NOISY_LIMIT = 5;
+        var NOISY_STEP = 100;
+        // HandleLocaleChanged 一次切语言会被多个 ResourceLoader<T> 实例触发 (FSG), 同 locale 只打第一次
+        var lastLocale = null;
+        var localeHits = 0;
         var mi = A.cgmAll(cls, iter);
         var n = 0;
         while (mi && !mi.isNull() && n < 300) {
@@ -628,7 +638,7 @@ function chHookClassMethods(cls, tag, all) {
                 if (np && !np.isNull()) nm = np.readCString();
             } catch (e) {}
             if (mp && !mp.isNull() && !seen[mp.toString()] &&
-                (all || /^(Load|Locate|ResourceExists|SupportsType|GetLoaded|AddResource|SetResource|RemoveResource|Run|Create|Handle|Cancel|IsLocationCached|LocateCached)/.test(nm))) {
+                (all || /^(Load|Locate|ResourceExists|SupportsType|GetLoaded|AddResource|SetResource|RemoveResource|Run|Create|Handle|InitializeProvisionSources|Cancel|IsLocationCached|LocateCached)/.test(nm))) {
                 seen[mp.toString()] = true;
                 (function (addr, mnm) {
                     Interceptor.attach(addr, {
@@ -638,32 +648,51 @@ function chHookClassMethods(cls, tag, all) {
                                 var tag2 = (chData.vrp && self && self.equals(chData.vrp)) ? " [我们的 vrp]" : "";
                                 var path = "";
                                 try { path = readStr(a[1]); } catch (e) {}
-                                dbg("[Choice] " + tag + "." + mnm + "('" + path + "')" + tag2);
-                                // RL-P.Load 只读诊断 (2026-08-11 源码对照): 游戏实际 ProvisionSources 内容
-                                if (mnm === "Load" && tag === "RL-P") {
-                                    try {
-                                        var ps = chReadProvisionSources(self);
-                                        dbg("[Choice] RL-P.Load ProvisionSources(" + ps.cnt + "): " + ps.desc + (ps.hasVrp ? " 含 vrp" : " 无 vrp"));
-                                    } catch (e3) { dbg("[Choice] ProvisionSources 诊断 err: " + e3); }
+                                if (mnm === "InitializeProvisionSources") path = "";   // 无 path 参数, 抑制 a[1] 误读
+                                // 节流: 高频方法只打前 NOISY_LIMIT 条 + 之后每 NOISY_STEP 条一条
+                                // HandleLocaleChanged: 同 locale 多次触发 (FSG 多实例) 只 dbg 第一次
+                                var shouldLog = true;
+                                if (noisyMethods[mnm]) {
+                                    logCount[mnm] = (logCount[mnm] || 0) + 1;
+                                    var c = logCount[mnm];
+                                    if (c > NOISY_LIMIT) {
+                                        if (c % NOISY_STEP !== 0) shouldLog = false;
+                                        else { dbg("[Choice] " + tag + "." + mnm + " (节流, 已触发 " + c + " 次)"); shouldLog = false; }
+                                    }
+                                } else if (mnm === "HandleLocaleChanged" && path) {
+                                    this._locale = path;   // onLeave 通过 this 闭包拿
+                                    if (lastLocale === path) {
+                                        localeHits++;
+                                        if (localeHits > 1 && localeHits % 20 !== 0) shouldLog = false;
+                                        else if (localeHits > 1) {
+                                            dbg("[Choice] HandleLocaleChanged('" + path + "') 同 locale 第 " + localeHits + " 次触发 (FSG 多实例)");
+                                            shouldLog = false;
+                                        }
+                                    } else {
+                                        lastLocale = path;
+                                        localeHits = 1;
+                                    }
                                 }
-                                // RL-P.Load 的加载入口 backtrace (run14: 游戏拿到 vrp 后内部调用全盲区)
-                                if (mnm === "Load" && tag === "RL-P" && path.indexOf("MyMod") >= 0) {
-                                    try {
-                                        var bt = Thread.backtrace(this.context, Backtracer.ACCURATE).slice(0, 12);
-                                        var ga2 = null;
-                                        try { ga2 = Process.getModuleByName("GameAssembly_arm64.dylib"); } catch (e) {}
-                                        var b2 = ga2 ? ga2.base : ptr(0);
-                                        var names = bt.map(function (ad) {
-                                            try {
-                                                if (b2 && ad.compare(b2) >= 0 && ad.compare(b2.add(0x7000000)) < 0) return "0x" + ad.sub(b2).toString(16);
-                                                var s = DebugSymbol.fromAddress(ad);
-                                                return s && s.name ? s.name : ad.toString();
-                                            } catch (e) { return ad.toString(); }
-                                        });
-                                        dbg("[Choice] RL-P.Load backtrace: " + names.join(" <- "));
-                                    } catch (e2) {}
-                                }
+                                if (shouldLog) dbg("[Choice] " + tag + "." + mnm + "('" + path + "')" + tag2);
+                                // RL-P.Load ProvisionSources 诊断 + backtrace: 已完成诊断, 暂时静默减少噪音
+                                // (历史定位: 7181 / 11259 行噪音来自这两段, 一帧多次 Sfx/Bgm 加载触发)
                             } catch (e) {}
+                        },
+                        onLeave: function (retval) {
+                            // InitializeProvisionSources onLeave: wipe 点本身. 诊断观察时机 —
+                            // 若在 HandleLocaleChanged onLeave 之后仍频繁出现, 说明有延迟二次重建, 需补 trigger.
+                            if (mnm === "InitializeProvisionSources") {
+                                dbg("[Choice] " + tag + ".InitializeProvisionSources onLeave — ProvisionSources 已重建");
+                            }
+                            // HandleLocaleChanged 方法体已执行完 (InitializeProvisionSources 已清空+重建 list)
+                            // 此时 ProvisionSources 只剩游戏默认 provider — 立刻补回 mod provider
+                            // 后续异步 ReloadIfLocalized 才能用到 mod provider (修 "Failed to hold" 错误)
+                            if (mnm === "HandleLocaleChanged" && this._locale) {
+                                try {
+                                    startReinjectWindow("HandleLocaleChanged('" + this._locale + "') [onLeave]");
+                                    this._locale = null;
+                                } catch (e4) { dbg("[Choice] startReinjectWindow (onLeave) err: " + e4); }
+                            }
                         }
                     });
                 })(mp, nm);
@@ -914,7 +943,10 @@ function chHookRl() {
                                         try {
                                             if (!chData.vrpDict || chData.vrpDict.isNull()) return;
                                             var post = chDictPhysCount(chData.vrpDict);
-                                            dbg("[Choice] RL-P.Load 后 vrp.Resources count=" + post + " (onEnter 时 " + this._pre + ")" + (this._pre > 0 && post < this._pre ? " — 被清空了!" : ""));
+                                            // 高频诊断日志 (1859 行噪音): 仅在 count 变化或被清空时才打
+                                            if (this._pre > 0 && post < this._pre) {
+                                                dbg("[Choice] RL-P.Load 后 vrp.Resources count=" + post + " (onEnter 时 " + this._pre + ") — 被清空了!");
+                                            }
                                             // VRP 方法表 ResourceExists 的 mp 是否被解析 (特化体发现)
                                             if (A.cgmAll && chCls.vrp) {
                                                 var iter3 = Memory.alloc(Process.pointerSize);

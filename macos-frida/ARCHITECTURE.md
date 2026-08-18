@@ -295,6 +295,60 @@ RVA 0x3404d4 完全一致; 不加载任何 mod 也会发生, 加载 mod 后概�
 - **排查经验**: 新写代码读 float/bool 一律 directCall; 读 Vector2/Rect 必须守卫;
   怀疑此类问题时先 grep `readFloat`/`readS32` 检查返回值来源。
 
+### 7.5 语言切换击穿 mod 资源加载 — 已修复 (2026-08-18), 残留: 切语言卡顿
+
+**现象** (修复前): 游戏内切语言 (zh-Hans ↔ ja) 后:
+1. **剧本内卡死**: `Failed to load 'zh-Hans' localization document for '<mod>/<script>'` ×N →
+   `Failed to hold 'Text/Scripts/<mod>/<script>'` 剧本卡住。
+2. **退出到标题黑屏**: 覆盖标题的 mod 剧本 (如 Rewind 的 `System/System_Title.nani`)
+   从脚本缓存正常播放, 但 `@back EmaHiro Id:"Stills"` 等 **mod 资产**加载失败 →
+   `Unity.LogException` → 剧本死在 `@ShowUI TitleUI` 之前 → TitleUi.Activate 永不触发
+   → 加载器的重注入 hook 永不执行 → **自锁黑屏**。
+
+**根因**: Naninovel 切语言时对**每个** `LocalizableResourceLoader<T>` 实例调用
+`InitializeProvisionSources()` —— **清空并重建自己的 ProvisionSources 列表**,
+mod 在启动时 `insertProvisionSource` 注入的 provider (Scripts/Text/Audio/Voice/
+Backgrounds/Characters) 被全部抹掉。macOS 版**唯一**重注入点是 `TitleUi.Activate`
+的 onLeave hook (providers.js / entry.js), 只在回到标题时触发 → **中途切换无恢复**。
+
+**日志证据** (2026-08-18 modlog): 切语言瞬间
+`[Choice] RL.HandleLocaleChanged('ja')` 连发数十次 —— 这是 choice.js 的
+`chHookClassMethods` 钩在 `ResourceLoader<T>.HandleLocaleChanged` **共享代码体**上,
+因此**每一个**本地化 loader 实例的重建都被记录, 即"全量重建"的实锤。
+切换后 Backgrounds/Stills loader 的 ProvisionSources 只剩游戏自带 4 项
+(`Localization/zh-Hans/Backgrounds/Stills` + `Backgrounds/Stills`), mod 的
+`<key>/Backgrounds/Stills` 消失, `EmaHiro ResourceExists mp=0x0` → LogException。
+
+**修复** (2026-08-18, providers.js + choice.js):
+- hook `ResourceLoader<T>.HandleLocaleChanged` (FSG 共享体, 一次覆盖所有 T 实例化)
+  **onLeave** → 主线程同步重注入: 遍历 modList 重跑 `addModLoader`
+  (providers.js `startReinjectWindow` / `_reinjectAll`)。
+- `insertProvisionSource` 去重 (同 prefix 幂等跳过, providers.js `_scanProvisionSources`),
+  每次切语言可安全反复调用。
+- 覆盖面: Scripts / Text / Audio / Voice / Backgrounds(MainBackground|Stills|Tricks) /
+
+**关键坑 —— 为什么不用 JS timer (崩溃教训)**: 初版镜像上游 LocaleWatcherComponent
+的 Update 循环, 用 setTimeout 链做"连续 ~10 帧重注入"。但 Frida 的 JS timer 跑在
+**脚本线程**而非 Unity 主线程: 主线程正在异步 reload (UniTask 续体在 __NSFireTimer /
+主循环上调度), JS 线程同时调 IL2CPP 写 ProvisionSources → 竞争 → 2026-08-18 多次
+SIGBUS / SIGSEGV (GameAssembly 无符号偏移 +0xab2da0 / +0xb52c34 / +0xdc9988,
+KERN_PROTECTION_FAILURE / 垃圾指针解引用)。改为 onLeave 同步重注入
+(与上游 MonoBehaviour.Update 主线程语义对齐) 后, 同一场景实测 **358 次重注入零崩溃**。
+
+**已知残留 —— 切语言卡顿**: 一次切换每个 loader 实例各触发一次全量重注入,
+实测 ~200 次/切换, 间隔 ~20ms (≈每帧), 每次全量 `addModLoader` (30 mod × 5 类)。
+去重只省了 insert, findSvc / LRP 创建 / converters dict 填充仍每帧重复 →
+主线程被占用数秒 → 肉眼卡顿。优化方向 (见 GOALS.md「差距」5):
+① **verify-before-repair**: 重注入前先扫各 loader 列表, 全在则跳过 (绝大多数重注入冗余);
+② 按 loader 定向重注入: 只补刚被 wipe 的 loader, 最贴上游语义, 但 LRP 若只被 JS 记录
+引用会被 IL2CPP GC 回收 → 悬垂指针, 需额外 rooting。
+
+**附带修复 —— WitchBook 缺语言条目** (2026-08-18): mod info.json 条目缺某语言时
+(如 Clues 只有 zh-Hans), 日文下图鉴查 inner[ja] → KeyNotFoundException →
+name/desc 空白。`registerLocalizedDict` (witchbook/pages.js) 补全全部 7 种游戏语言
+(ja/en-US/zh-Hans/zh-Hant/ko/fr/es), 缺失回退 `pickLocaleText` (zh-Hans→ja→任意),
+与游戏 .txt "Missing translation → source locale" 语义一致。
+
 ## 八、日志系统 (2026-08-10 引入)
 
 **动机**: 游戏进程崩溃时 Frida 脚本跟着死, console 缓冲丢失, macOS 系统日志经常

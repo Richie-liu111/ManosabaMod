@@ -7,7 +7,17 @@ import { registerLocalizedDict } from "./pages.js";
 export var wbCats = {
   clue:    { name:"clue",    idx:0, field:"Clues",     page:"CluePage",    data:"ClueData",    item:"ClueDataItem",    texDir:"Clues",    locOff:0xD0, locKind:"lts",
              addr: function(id){ return buildClueTextureAddress(id); },
-             parseItem: function(it){ return { name: it.Name||{}, desc: it.Description||{} }; } },
+             parseItem: function(it){
+                var n = it.Name||{}, d = it.Description||{};
+                var nK = Object.keys(n), dK = Object.keys(d);
+                if (nK.length < 2 || dK.length < 2) {
+                    // 详细诊断: dump it.Name 的 JSON 看实际值
+                    var dump = "";
+                    try { dump = JSON.stringify(n).substr(0, 200); } catch(e) { dump = "stringify失败: " + e; }
+                    dbg("[WitchBook] parseItem 警告 id=" + (it.Id||"??") + " Name keys=[" + nK.join(",") + "] Desc keys=[" + dK.join(",") + "] Name(dump)=" + dump);
+                }
+                return { name: n, desc: d };
+            } },
   profile: { name:"profile", idx:1, field:"Profiles",  page:"ProfilePage", data:"ProfileData", item:"ProfileDataItem", texDir:"Profiles", locOff:0xE8, locKind:"str",
              addr: function(id){ return buildProfileTextureAddress(id); },
              parseItem: function(it){ return { desc: it.Description||{} }; } },
@@ -119,6 +129,15 @@ export function resolveLocale(locObj, tag) { return locObj && locObj[tag] ? locO
 export function unionLocaleKeys(a, b) {
     var seen = {};
     (a ? Object.keys(a) : []).concat(b ? Object.keys(b) : []).forEach(function (k) { seen[k] = 1; });
+    return Object.keys(seen);
+}
+// 游戏全部语言 (localeValue 枚举全集). 预填字典时用: 保证游戏按当前语言查询 inner[locale]
+// 永不 KeyNotFoundException, 缺的语言回退到已有文本 (见 pickLocaleText).
+export var ALL_LOCALES = ["ja", "en-US", "zh-Hans", "zh-Hant", "ko", "fr", "es"];
+// 预填字典的语言全集 = vrec 已有语言 ∪ 游戏全部语言 (缺的用回退文本填充)
+export function fullLocaleTags(a, b) {
+    var seen = {};
+    (a ? Object.keys(a) : []).concat(b ? Object.keys(b) : []).concat(ALL_LOCALES).forEach(function (k) { seen[k] = 1; });
     return Object.keys(seen);
 }
 // 取语言对象的最佳文本 (优先 zh-Hans → ja → 任意)
