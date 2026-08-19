@@ -3,6 +3,7 @@
 import { A, dbg, fieldOffset, findClassAcrossImages, findFirstObjectOfType, findSvc, invoke, invokeOk, listContainsId, makeLocalResourceProvider, makeS, populateConvertersDict, readStr, wblog, error, warn } from "../utils.js";
 import { wbCls, wbCurrentMod, wbData } from "./state.js";
 import { buildLocalizedTextArray, localeValue, pickLocaleText, resolveLocale, unionLocaleKeys } from "./data.js";
+import { getCurrentLocale, syncLocaleFromEngine } from "../locale.js";
 
 // ===== 立绘 (Characters) 注册 — 镜像 Windows AddRichCharacter/AddSimpleCharacter + providersMap =====
 // 从 metaMap.metas[] 偷一个原版 CharacterMetadata 的 Loader.ProviderTypes 类 (List<string>)
@@ -201,6 +202,8 @@ export function injectCharacterData() {
 // ProfilePage.RefreshPageContent onLeave: 覆写 mod 新角色的姓名标签 (_authorLabel @0xB8)
 // 镜像 Windows ProfilePageRefreshContent_Patch: 原版对不在角色系统中的 id 显示 ID,
 // 我们直接设置 _authorLabel.text = 格式化富文本 (BuildFullName 同款字号/颜色)
+// 语言: 用 locale.js 跟踪的当前语言 (HandleLocaleChanged 实参, 实证可靠),
+// 不再硬编码 zh-Hans → 切日语后 Profile 姓名应随语言切换 (朝尘→AsaChiri 等)。
 export function hookProfileName() {
     try {
         var cls = wbCls.pages.profile;
@@ -226,7 +229,10 @@ export function hookProfileName() {
                     var labCls = A.ogc(label);
                     var setTxt = A.cgm(labCls, Memory.allocUtf8String("set_text"), 1);
                     if (!setTxt || setTxt.isNull()) return;
-                    var tpl = buildAuthorTemplate(cc, "zh-Hans");
+                    try { syncLocaleFromEngine(); } catch (e) {}   // 兜底: 主动查一次 LocalizationManager (启动即目标语言)
+                    var loc = getCurrentLocale();   // 跟随当前语言 (ja → AsaChiri/IrisuM 等)
+                    var tpl = buildAuthorTemplate(cc, loc);
+                    if (!tpl) tpl = buildAuthorTemplate(cc, "zh-Hans");
                     if (!tpl) tpl = buildAuthorTemplate(cc, "ja");
                     if (tpl) invokeOk(setTxt, label, [makeS(tpl)]);
                 } catch (e) {}

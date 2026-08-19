@@ -18,6 +18,7 @@ import { setupChapterDisplayHooks } from "./chapterdisplay.js";
 import { setupScriptTextHooks } from "./scripttext.js";
 import { setupMovieHooks } from "./movie.js";
 import { addModLoader, setupLocaleReinjectHooks } from "./providers.js";
+import { hookLocaleAccessors } from "./locale.js";
 import { hookStartGame, registerMenu, registerMenuText } from "./menu.js";
 import { resetWitchBookSession } from "./witchbook/session.js";
 import { setupWitchBookHooks } from "./witchbook/index.js";
@@ -438,6 +439,10 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         // hook ResourceLoader<T>.HandleLocaleChanged (FSG) → 启动 ~10 帧重注入窗口
         // 覆盖: Scripts/Text/Audio/Voice/Backgrounds/Characters (insertProvisionSource 自带去重)
         setupLocaleReinjectHooks();
+
+        // LocalizationManager 语言 hook (spawn 注入早于引擎初始化): 启动即目标语言也能同步
+        // (HandleLocaleChanged 只在语言改变时触发, 启动初始化不触发 → 图鉴姓名启动即日语时仍显简中)
+        hookLocaleAccessors();
 
         // 存档章节名支持 (镜像 Windows ModChapterDisplay)
         setupChapterDisplayHooks();

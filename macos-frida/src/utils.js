@@ -266,11 +266,18 @@ export function ensureItemIdsString(page, cls) {
         // 用 isReadable 预检 + try 包裹, 拿到真实类型/实例类用于诊断。
         var cn = "null";
         if (arr && !arr.isNull()) {
-            try { cn = A.cgn(A.ogc(arr)).readCString(); }
-            catch (e0) { cn = "?不可读@0x" + arr; }
+            try {
+                var cnp = A.cgn(A.ogc(arr));
+                var cnStr = (cnp && !cnp.isNull()) ? cnp.readCString() : null;
+                cn = cnStr || ("?类名@0x" + arr);   // 类名指针有效但读不出/返回 null → 视为需修复, 避免后续 indexOf 崩
+            } catch (e0) { cn = "?不可读@0x" + arr; }
         }
-        var instCls = "";
-        try { instCls = A.cgn(A.ogc(page)).readCString(); } catch (e1) { instCls = "?"; }
+        var instCls = "?";
+        try {
+            var instP = A.cgn(A.ogc(page));
+            var instS = (instP && !instP.isNull()) ? instP.readCString() : null;
+            instCls = instS || "?";
+        } catch (e1) { instCls = "?"; }
         // 仅在异常情况下记录 (cn 不含 String[): 正常 String[] 情况静默, 减少 DEBUG 噪音
         if (cn.indexOf("String[") < 0) {
             dbg(A.cgn(cls).readCString() + "._itemIds off=0x" + off.toString(16) + " val=" + arr + " type=" + cn + " 实例=" + instCls + " → 需修复");
@@ -309,7 +316,10 @@ export function ensureItemIdsString(page, cls) {
                     if (!e2.isNull()) {
                         if (elemCls.isNull()) {
                             elemCls = A.ogc(e2);
-                            elemIsStr = (A.cgn(elemCls).readCString() === "System.String");
+                            try {
+                                var eP = A.cgn(elemCls);
+                                elemIsStr = (eP && !eP.isNull()) && (eP.readCString() === "System.String");
+                            } catch (e3) { elemIsStr = false; }
                             if (!elemIsStr) idOff = fieldOffset(elemCls, "_id", 0x10);
                         }
                         s2 = elemIsStr ? readStr(e2) : readStr(e2.add(idOff).readPointer());

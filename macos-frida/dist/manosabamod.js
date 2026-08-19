@@ -1,17 +1,18 @@
 📦
-34657 /src/entry.js
+34987 /src/entry.js
 1938 /src/banner.js
 5796 /src/chapterdisplay.js
-83218 /src/choice.js
+83411 /src/choice.js
 21467 /src/cutin.js
 4554 /src/io.js
+5858 /src/locale.js
 9445 /src/log.js
 15046 /src/menu.js
 5211 /src/movie.js
 15229 /src/providers.js
 13403 /src/scripttext.js
-24372 /src/utils.js
-19320 /src/witchbook/characters.js
+24951 /src/utils.js
+19978 /src/witchbook/characters.js
 14658 /src/witchbook/data.js
 15032 /src/witchbook/index.js
 18383 /src/witchbook/pages.js
@@ -26,6 +27,7 @@ import { setupChapterDisplayHooks } from "./chapterdisplay.js";
 import { setupScriptTextHooks } from "./scripttext.js";
 import { setupMovieHooks } from "./movie.js";
 import { addModLoader, setupLocaleReinjectHooks } from "./providers.js";
+import { hookLocaleAccessors } from "./locale.js";
 import { hookStartGame, registerMenu, registerMenuText } from "./menu.js";
 import { resetWitchBookSession } from "./witchbook/session.js";
 import { setupWitchBookHooks } from "./witchbook/index.js";
@@ -524,6 +526,9 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         // hook ResourceLoader<T>.HandleLocaleChanged (FSG) → 启动 ~10 帧重注入窗口
         // 覆盖: Scripts/Text/Audio/Voice/Backgrounds/Characters (insertProvisionSource 自带去重)
         setupLocaleReinjectHooks();
+        // LocalizationManager 语言 hook (spawn 注入早于引擎初始化): 启动即目标语言也能同步
+        // (HandleLocaleChanged 只在语言改变时触发, 启动初始化不触发 → 图鉴姓名启动即日语时仍显简中)
+        hookLocaleAccessors();
         // 存档章节名支持 (镜像 Windows ModChapterDisplay)
         setupChapterDisplayHooks();
         // 剧本 `"文本"|#ID|` 引号修复 (无 C# 蓝本, 自建运行时补丁, 见 scripttext.js 头注释)
@@ -816,6 +821,7 @@ import { A, dbg, fieldOffset, findAllObjectOfType, findClassAcrossImages, findSv
 import { fileReadBytes, readJSONFile } from "./io.js";
 import { info } from "./log.js";
 import { startReinjectWindow } from "./providers.js";
+import { setCurrentLocale } from "./locale.js";
 var chCls = null; // 解析好的类表
 var chData = {
     handlers: [],
@@ -1751,6 +1757,7 @@ function chHookClassMethods(cls, tag, all) {
                                 }
                                 else if (mnm === "HandleLocaleChanged" && path) {
                                     this._locale = path; // onLeave 通过 this 闭包拿
+                                    setCurrentLocale(path); // 全局跟踪当前语言 (locale.js), 供 WitchBook Profile 姓名双语等使用
                                     if (lastLocale === path) {
                                         localeHits++;
                                         if (localeHits > 1 && localeHits % 20 !== 0)
@@ -3147,6 +3154,132 @@ export function fileSync(fd) {
     }
     catch (e) { }
     return -1;
+}
+
+✄
+// ============ 当前游戏语言跟踪 ============
+// 以 Naninovel ResourceLoader<T>.HandleLocaleChanged(locale) 的实参为准:
+// 引擎切语言和启动初始化都会触发 (modlog 实证 'ja'/'zh-Hans'), 与 mod 的
+// @print/@toast/@choice 双语 (追加式 |#ID|) 共用同一套语言判定。
+// 2026-08-19: 试过 findSvc("LocalizationManager") + get_SelectedLocale 静默失败
+// (回退 zh-Hans), 该方案被 HandleLocaleChanged 跟踪取代。
+import { A, dbg, fieldOffset, findClassAcrossImages, invokeOk, readStr, wblog, warn } from "./utils.js";
+var _locale = "zh-Hans";
+export function setCurrentLocale(l) { if (l)
+    _locale = l; }
+export function getCurrentLocale() { return _locale || "zh-Hans"; }
+// ============ 引擎级语言同步 (LocalizationManager 自身) ============
+// 背景: HandleLocaleChanged 只在"语言实际改变"时触发 (modlog 实证) —
+// 以日语启动 (从未切语言) 时引擎启动初始化不触发它, _locale 停在 zh-Hans,
+// 图鉴姓名在"启动即日语"场景下仍显示中文注册名 (用户实测)。
+// 修复: spawn 注入早于引擎初始化 → hook LocalizationManager 自身方法,
+//   引擎初始化/读语言/切语言任一路径都会同步 _locale:
+//   get_SelectedLocale onLeave — 任何读语言 (启动加载本地化资源必经) → 读返回 String
+//   set_SelectedLocale / SelectLocale onEnter — 任何设语言 (切语言入口) → 读参数字符串
+//   InitializeService onEnter — 拿实例, 供 syncLocaleFromEngine 主动 invoke 兜底
+// (Windows C# 版镜像: Engine.GetService<ILocalizationManager>().SelectedLocale;
+//  类结构 Windows dump 实证: <SelectedLocale>k__BackingField @0x20, 方法均存在)
+var _lmInst = null;
+var _lmHooked = false;
+var _synced = false;
+export function hookLocaleAccessors() {
+    try {
+        if (_lmHooked)
+            return;
+        var cls = findClassAcrossImages("Naninovel", "LocalizationManager");
+        if (!cls || cls.isNull()) {
+            warn("[locale] LocalizationManager class NOT FOUND");
+            return;
+        }
+        var found = { get: false, set: false, sel: false, init: false };
+        var getMi = A.cgm(cls, Memory.allocUtf8String("get_SelectedLocale"), 0);
+        if (getMi && !getMi.isNull() && getMi.readPointer() && !getMi.readPointer().isNull()) {
+            Interceptor.attach(getMi.readPointer(), {
+                onLeave: function (ret) {
+                    try {
+                        if (ret && !ret.isNull())
+                            setCurrentLocale(readStr(ret));
+                    }
+                    catch (e) { }
+                }
+            });
+            found.get = true;
+        }
+        var setMi = A.cgm(cls, Memory.allocUtf8String("set_SelectedLocale"), 1);
+        if (setMi && !setMi.isNull() && setMi.readPointer() && !setMi.readPointer().isNull()) {
+            Interceptor.attach(setMi.readPointer(), {
+                onEnter: function (a) { try {
+                    setCurrentLocale(readStr(a[1]));
+                }
+                catch (e) { } }
+            });
+            found.set = true;
+        }
+        var selMi = A.cgm(cls, Memory.allocUtf8String("SelectLocale"), 1);
+        if (selMi && !selMi.isNull() && selMi.readPointer() && !selMi.readPointer().isNull()) {
+            Interceptor.attach(selMi.readPointer(), {
+                onEnter: function (a) { try {
+                    setCurrentLocale(readStr(a[1]));
+                }
+                catch (e) { } }
+            });
+            found.sel = true;
+        }
+        var initMi = A.cgm(cls, Memory.allocUtf8String("InitializeService"), 0);
+        if (initMi && !initMi.isNull() && initMi.readPointer() && !initMi.readPointer().isNull()) {
+            Interceptor.attach(initMi.readPointer(), {
+                onEnter: function (a) { _lmInst = a[0]; }
+            });
+            found.init = true;
+        }
+        _lmHooked = found.get || found.set || found.sel;
+        if (_lmHooked)
+            wblog("[locale] LocalizationManager hooks 就绪: get=" + found.get + " set=" + found.set + " sel=" + found.sel + " init=" + found.init);
+        else
+            warn("[locale] LocalizationManager hooks NONE 找到 (class=" + A.cgn(cls).readCString() + ")");
+    }
+    catch (e) {
+        warn("[locale] hookLocaleAccessors err: " + e);
+    }
+}
+// 兜底: 图鉴渲染姓名前用实例主动查询一次 (幂等)。优先 invoke getter, 失败读 backing field。
+export function syncLocaleFromEngine() {
+    if (_synced)
+        return _locale;
+    if (!_lmInst || _lmInst.isNull())
+        return _locale;
+    try {
+        var cls = A.ogc(_lmInst);
+        var getMi = A.cgm(cls, Memory.allocUtf8String("get_SelectedLocale"), 0);
+        if (getMi && !getMi.isNull()) {
+            var r = invokeOk(getMi, _lmInst, []);
+            if (r.ok && r.ret && !r.ret.isNull()) {
+                var loc = readStr(r.ret);
+                if (loc) {
+                    setCurrentLocale(loc);
+                    _synced = true;
+                    dbg("[locale] syncLocaleFromEngine → '" + loc + "'");
+                    return loc;
+                }
+            }
+        }
+        // invoke 失败 (调用链坑) → 直接读 backing field (动态查偏移, 回退 Windows dump 实证 0x20)
+        var fo = fieldOffset(cls, "<SelectedLocale>k__BackingField", 0x20);
+        var p = _lmInst.add(fo).readPointer();
+        if (p && !p.isNull()) {
+            var loc2 = readStr(p);
+            if (loc2) {
+                setCurrentLocale(loc2);
+                _synced = true;
+                dbg("[locale] syncLocaleFromEngine(字段@" + fo.toString(16) + ") → '" + loc2 + "'");
+                return loc2;
+            }
+        }
+    }
+    catch (e) {
+        warn("[locale] syncLocaleFromEngine err: " + e);
+    }
+    return _locale;
 }
 
 ✄
@@ -4875,15 +5008,19 @@ export function ensureItemIdsString(page, cls) {
         var cn = "null";
         if (arr && !arr.isNull()) {
             try {
-                cn = A.cgn(A.ogc(arr)).readCString();
+                var cnp = A.cgn(A.ogc(arr));
+                var cnStr = (cnp && !cnp.isNull()) ? cnp.readCString() : null;
+                cn = cnStr || ("?类名@0x" + arr); // 类名指针有效但读不出/返回 null → 视为需修复, 避免后续 indexOf 崩
             }
             catch (e0) {
                 cn = "?不可读@0x" + arr;
             }
         }
-        var instCls = "";
+        var instCls = "?";
         try {
-            instCls = A.cgn(A.ogc(page)).readCString();
+            var instP = A.cgn(A.ogc(page));
+            var instS = (instP && !instP.isNull()) ? instP.readCString() : null;
+            instCls = instS || "?";
         }
         catch (e1) {
             instCls = "?";
@@ -4930,7 +5067,13 @@ export function ensureItemIdsString(page, cls) {
                     if (!e2.isNull()) {
                         if (elemCls.isNull()) {
                             elemCls = A.ogc(e2);
-                            elemIsStr = (A.cgn(elemCls).readCString() === "System.String");
+                            try {
+                                var eP = A.cgn(elemCls);
+                                elemIsStr = (eP && !eP.isNull()) && (eP.readCString() === "System.String");
+                            }
+                            catch (e3) {
+                                elemIsStr = false;
+                            }
                             if (!elemIsStr)
                                 idOff = fieldOffset(elemCls, "_id", 0x10);
                         }
@@ -5111,6 +5254,7 @@ export function makeLocalResourceProvider(root) {
 import { A, dbg, fieldOffset, findClassAcrossImages, findFirstObjectOfType, findSvc, invoke, invokeOk, listContainsId, makeLocalResourceProvider, makeS, populateConvertersDict, readStr, wblog, error, warn } from "../utils.js";
 import { wbCls, wbCurrentMod, wbData } from "./state.js";
 import { buildLocalizedTextArray, localeValue, pickLocaleText, resolveLocale, unionLocaleKeys } from "./data.js";
+import { getCurrentLocale, syncLocaleFromEngine } from "../locale.js";
 // ===== 立绘 (Characters) 注册 — 镜像 Windows AddRichCharacter/AddSimpleCharacter + providersMap =====
 // 从 metaMap.metas[] 偷一个原版 CharacterMetadata 的 Loader.ProviderTypes 类 (List<string>)
 function stealListStringClass(metaMap) {
@@ -5380,6 +5524,8 @@ export function injectCharacterData() {
 // ProfilePage.RefreshPageContent onLeave: 覆写 mod 新角色的姓名标签 (_authorLabel @0xB8)
 // 镜像 Windows ProfilePageRefreshContent_Patch: 原版对不在角色系统中的 id 显示 ID,
 // 我们直接设置 _authorLabel.text = 格式化富文本 (BuildFullName 同款字号/颜色)
+// 语言: 用 locale.js 跟踪的当前语言 (HandleLocaleChanged 实参, 实证可靠),
+// 不再硬编码 zh-Hans → 切日语后 Profile 姓名应随语言切换 (朝尘→AsaChiri 等)。
 export function hookProfileName() {
     try {
         var cls = wbCls.pages.profile;
@@ -5416,7 +5562,14 @@ export function hookProfileName() {
                     var setTxt = A.cgm(labCls, Memory.allocUtf8String("set_text"), 1);
                     if (!setTxt || setTxt.isNull())
                         return;
-                    var tpl = buildAuthorTemplate(cc, "zh-Hans");
+                    try {
+                        syncLocaleFromEngine();
+                    }
+                    catch (e) { } // 兜底: 主动查一次 LocalizationManager (启动即目标语言)
+                    var loc = getCurrentLocale(); // 跟随当前语言 (ja → AsaChiri/IrisuM 等)
+                    var tpl = buildAuthorTemplate(cc, loc);
+                    if (!tpl)
+                        tpl = buildAuthorTemplate(cc, "zh-Hans");
                     if (!tpl)
                         tpl = buildAuthorTemplate(cc, "ja");
                     if (tpl)

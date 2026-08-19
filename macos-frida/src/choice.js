@@ -30,6 +30,7 @@ import { A, dbg, fieldOffset, findAllObjectOfType, findClassAcrossImages, findSv
 import { fileReadBytes, readJSONFile } from "./io.js";
 import { info } from "./log.js";
 import { startReinjectWindow } from "./providers.js";
+import { setCurrentLocale } from "./locale.js";
 
 var chCls = null;            // 解析好的类表
 var chData = {
@@ -661,6 +662,7 @@ function chHookClassMethods(cls, tag, all) {
                                     }
                                 } else if (mnm === "HandleLocaleChanged" && path) {
                                     this._locale = path;   // onLeave 通过 this 闭包拿
+                                    setCurrentLocale(path);   // 全局跟踪当前语言 (locale.js), 供 WitchBook Profile 姓名双语等使用
                                     if (lastLocale === path) {
                                         localeHits++;
                                         if (localeHits > 1 && localeHits % 20 !== 0) shouldLog = false;
