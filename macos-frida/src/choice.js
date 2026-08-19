@@ -193,7 +193,7 @@ function chSwapPortrait(clone, sprite) {
 // (探针实证: def 类 Resource(string,Object) ctor hook 抓不到 inflated 调用 — "泛型类方法不共享";
 //  有效路径 = 触发按钮加载后从 LoadedByFullPath 缓存条目偷取)
 function chFindResourceLoader() {
-    var mgr = findSvc("ChoiceHandlerManager");
+    var mgr = findSvc("ChoiceHandlerManager", true);
     if (!mgr) mgr = findSvc("WitchTrialsChoiceHandlerManager");
     if (!mgr) { dbg("[Choice] steal: mgr NOT FOUND"); return null; }
     var cands = [0x38, 0x40, 0x48, 0x50, 0x58, 0x60, 0x68, 0x70, 0x78, 0x80, 0x88, 0x90];
@@ -244,7 +244,7 @@ function chTriggerGOClass() {
     try {
         if (chGOTriggered) return;
         chGOTriggered = true;
-        var mgr = findSvc("ChoiceHandlerManager");
+        var mgr = findSvc("ChoiceHandlerManager", true);
         if (!mgr) mgr = findSvc("WitchTrialsChoiceHandlerManager");
         if (!mgr || mgr.isNull()) { chGOTriggered = false; return; }
         var cfg = null;
@@ -453,7 +453,7 @@ function tryFinalizeChoiceHandlers() {
         chData.finalizing = true;
         try {
             // 1. mgr + metaMap
-            var mgr = findSvc("ChoiceHandlerManager");
+            var mgr = findSvc("ChoiceHandlerManager", true);
             if (!mgr) mgr = findSvc("WitchTrialsChoiceHandlerManager");
             if (!mgr) { dbg("[Choice] mgr 未就绪, 稍后重试"); return; }
             var cfg = null, metaMap = null;
@@ -1096,7 +1096,7 @@ function installDiagHooks() {
         // GetOrAddActor 对我们 id 的调用 (mgr 可能尚未出现 — 单独重试, 不阻塞后续 hook)
         (function hookGOA() {
             try {
-                var mgr = findSvc("ChoiceHandlerManager");
+                var mgr = findSvc("ChoiceHandlerManager", true);
                 if (!mgr) mgr = findSvc("WitchTrialsChoiceHandlerManager");
                 if (!mgr) { setTimeout(hookGOA, 1000); return; }
                 var goaMi = A.cgm(A.ogc(mgr), Memory.allocUtf8String("GetOrAddActor"), 1);

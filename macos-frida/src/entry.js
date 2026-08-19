@@ -15,6 +15,7 @@ import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifie
 import { clearCutInCaches, setupCutInHooks } from "./cutin.js";
 import { initChoiceHandlers, setupChoiceHandlerHooks } from "./choice.js";
 import { setupChapterDisplayHooks } from "./chapterdisplay.js";
+import { setupScriptTextHooks } from "./scripttext.js";
 import { setupMovieHooks } from "./movie.js";
 import { addModLoader, setupLocaleReinjectHooks } from "./providers.js";
 import { hookStartGame, registerMenu, registerMenuText } from "./menu.js";
@@ -440,6 +441,9 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
 
         // 存档章节名支持 (镜像 Windows ModChapterDisplay)
         setupChapterDisplayHooks();
+
+        // 剧本 `"文本"|#ID|` 引号修复 (无 C# 蓝本, 自建运行时补丁, 见 scripttext.js 头注释)
+        setupScriptTextHooks();
 
         // WitchBook 线索支持
         setupWitchBookHooks();

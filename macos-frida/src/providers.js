@@ -78,7 +78,7 @@ export function addTextLoader(root, prefix) {
 // voice + audio provider: AudioManagerExtended 的 voiceLoader(0x78)/audioLoader(0x70) + WavToAudioClipConverter
 export function addAudioProviders(root, prefix) {
     try {
-        var am = findSvc("AudioManagerExtended");
+        var am = findSvc("AudioManagerExtended", true);
         if (!am) am = findSvc("AudioManager");
         if (!am) { dbg("[v3] addAudioProviders: AudioManager NOT FOUND"); return; }
         var audioClipFn = function () { return findClassAcrossImages("UnityEngine", "AudioClip"); };
@@ -107,17 +107,31 @@ export function addBackgroundProviders(root, prefix) {
         if (!galMi || galMi.isNull()) { warn("[v3] addBackgroundProviders: GetAppearanceLoader NOT FOUND"); return; }
         var texFn = function () { return findClassAcrossImages("UnityEngine", "Texture2D"); };
         var backIds = ["MainBackground", "Stills", "Tricks"];
+        var addedNames = [];
         for (var i = 0; i < backIds.length; i++) {
             try {
                 var loader = invoke(galMi, bm, [makeS(backIds[i])]);
                 if (!loader || loader.isNull()) { warn("[v3] 背景 loader '" + backIds[i] + "' 为空"); continue; }
+                var scan = _scanProvisionSources(loader, prefix + "/Backgrounds/" + backIds[i]);
+                if (scan.has) continue;   // 重注入 no-op: 已在列表, 静默
                 var lrp = makeLocalResourceProvider(root);
                 if (lrp.isNull()) { warn("[v3] 背景 LRP 创建失败 ('" + backIds[i] + "')"); continue; }
                 if (!populateConvertersDict(lrp, "JpgOrPngToTextureConverter", texFn, "Backgrounds/" + backIds[i])) { warn("[v3] 背景 converters 填充失败 ('" + backIds[i] + "')"); continue; }
-                insertProvisionSource(loader, lrp, prefix + "/Backgrounds/" + backIds[i], "Backgrounds/" + backIds[i]);
+                if (insertProvisionSource(loader, lrp, prefix + "/Backgrounds/" + backIds[i], "Backgrounds/" + backIds[i])) addedNames.push(backIds[i]);
             } catch (e) { error("[v3] 背景 '" + backIds[i] + "' 注入 err: " + e); }
         }
-        wblog("[v3] addBackgroundProviders 完成 (" + backIds.join("/") + ")");
+        // 只在真正新增时记 wblog, 且每 burst 只记首条 (一次切语言 FSG ×几十次重注入,
+        // 每波都真重插某个 loader → 只让第一条可见); 重注入 no-op 静默。
+        if (addedNames.length > 0) {
+            if (!_localeReinject.bgLoggedThisBurst) {
+                wblog("[v3] addBackgroundProviders 完成: 新增 [" + addedNames.join(",") + "] (" + backIds.join("/") + ")");
+                _localeReinject.bgLoggedThisBurst = true;
+            } else {
+                dbg("[v3] addBackgroundProviders 新增 [" + addedNames.join(",") + "] (burst 内重复)");
+            }
+        } else {
+            dbg("[v3] addBackgroundProviders 完成 (已在列表, 重注入 no-op)");
+        }
     } catch (e) { error("[v3] addBackgroundProviders err: " + e); }
 }
 export function addModLoader(root, prefix) {
@@ -159,19 +173,29 @@ export function addModLoader(root, prefix) {
 // macOS 特化点 (相对上游): ① 覆盖面含 Backgrounds (标题黑屏根因); ② insertProvisionSource 已带去重.
 var _localeReinject = {
     inProgress: false,   // 重入守卫: HandleLocaleChanged 多 T 实例化密集触发时合并
-    totalReinjects: 0
+    totalReinjects: 0,
+    lastReason: "",      // 同 burst 日志去重: 一次切语言 FSG ×几十次触发, 只记首条
+    bgLoggedThisBurst: false  // addBackgroundProviders 的"新增"日志: 每 burst 只记首条 (首次加载也算一 burst)
 };
 
 // 同步重注入 (主线程, hook onLeave 上下文内执行).
 // 对每个 mod 重跑 addModLoader — insertProvisionSource 自带去重 (同 prefix 已在列表则跳过),
 // 幂等可反复调用. 每次切语言 HandleLocaleChanged 会被每个 loader 实例触发 (FSG ×几十),
-// 每次触发都同步重注入一次, 覆盖各 loader 各自的 wipe+reload 窗口.
+// 每次触发都同步重注入一次, 覆盖各 loader 各自的 wipe+reload 窗口 (漏一次就丢 provider).
+// 重注入不能合并 (各 loader 各自 wipe 的时序), 但日志要合并: 同 reason (同一次切语言) 只打首条.
 export function startReinjectWindow(reason) {
     if (_localeReinject.inProgress) return;   // 重入合并: 注入中再触发直接忽略
     _localeReinject.inProgress = true;
     try {
         _localeReinject.totalReinjects++;
-        wblog("[v3] ==== 语言切换重注入 #" + _localeReinject.totalReinjects + " (" + reason + ") ====");
+        var sameBurst = (reason === _localeReinject.lastReason);
+        _localeReinject.lastReason = reason;
+        if (!sameBurst) _localeReinject.bgLoggedThisBurst = false;   // 新 burst: 允许下一条"新增"记 wblog
+        if (sameBurst) {
+            dbg("[v3] 语言切换重注入 #" + _localeReinject.totalReinjects + " (" + reason + ") 同 burst 第 N 次 (FSG 多实例), 已注入");
+        } else {
+            wblog("[v3] ==== 语言切换重注入 #" + _localeReinject.totalReinjects + " (" + reason + ") ====");
+        }
         _reinjectAll();
     } catch (e) {
         dbg("[v3] 重注入 err: " + e);

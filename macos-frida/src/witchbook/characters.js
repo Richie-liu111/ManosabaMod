@@ -55,7 +55,7 @@ export function addCharacterProviders(root, prefix) {
             }
         }
         // ② 注册 ActorMetadata — 用基础 CharacterManager (Configuration=CharactersConfiguration, 有 MetadataMap)
-        var cm = findSvc("CharacterManager");
+        var cm = findSvc("CharacterManager", true);
         if (!cm) cm = findSvc("CharacterManagerExtended");
         if (!cm) { dbg("[v3] addCharacterProviders: CharacterManager NOT FOUND"); return; }
         var cfg = null;

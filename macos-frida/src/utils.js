@@ -183,7 +183,9 @@ export function populateConvertersDict(lrp, convClassName, targetClsFn, tag) {
 }
 
 // ============ 服务查找 ============
-export function findSvc(name) {
+// quiet=true: 未找到只打 dbg (探针回退场景, 如 CharacterManager→CharacterManagerExtended,
+// 每次场景加载都探一次, WARN 太吵); 默认 false 保持原 WARN 行为。
+export function findSvc(name, quiet) {
     try {
         var el = A.cfn(nv, Memory.allocUtf8String("Naninovel"), Memory.allocUtf8String("Engine"));
         if (!el || el.isNull()) { warn("[v3] findSvc('" + name + "') FAIL: Engine class NOT FOUND (nv=" + nv + ", allImgs=" + allImgs.length + ")"); return null; }
@@ -195,7 +197,8 @@ export function findSvc(name) {
             var cn = A.cgn(A.ogc(ep)).readCString();
             if (cn === name) return ep;
         }
-        warn("[v3] findSvc('" + name + "') NOT FOUND in " + sz + " services (nv=" + nv + ")");
+        var msg = "[v3] findSvc('" + name + "') NOT FOUND in " + sz + " services (nv=" + nv + ")";
+        if (quiet) dbg(msg); else warn(msg);
         return null;
     } catch (e) { error("[v3] findSvc('" + name + "') err: " + e + " (nv=" + nv + ", allImgs=" + allImgs.length + ")"); return null; }
 }

@@ -223,7 +223,7 @@ export function registerMenu(modList) {
 // ============ 重定向 StartGame 的 @goto (镜像 Windows HookStartGame) ============
 export function hookStartGame() {
     try {
-        var sp = findSvc("WitchTrialsScriptPlayer");
+        var sp = findSvc("WitchTrialsScriptPlayer", true);
         if (!sp) sp = findSvc("ScriptPlayer");
         if (!sp) { dbg("[v3] ScriptPlayer NOT FOUND"); return; }
         var played = sp.add(0x58).readPointer();   // PlayedScript
