@@ -195,7 +195,8 @@ export function findSvc(name, quiet) {
         for (var i = 0; i < sz; i++) {
             var ep = its.add(0x20 + i * 8).readPointer(); if (ep.isNull()) continue;
             var cn = A.cgn(A.ogc(ep)).readCString();
-            if (cn === name) return ep;
+            // 服务类名是短名 ("UIManager"), 调用方可能传全名 ("Naninovel.UIManager") — 后缀匹配
+            if (cn === name || (cn && cn.indexOf(".") >= 0 && cn.endsWith("." + name)) || (name && name.indexOf(".") >= 0 && name.endsWith("." + cn))) return ep;
         }
         var msg = "[v3] findSvc('" + name + "') NOT FOUND in " + sz + " services (nv=" + nv + ")";
         if (quiet) dbg(msg); else warn(msg);

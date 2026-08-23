@@ -130,10 +130,17 @@ GAME=/path/to/manosaba ./run_mod.sh # 游戏不在 Steam 默认位置时
 | 审判自定义面板 (@choice handler:"<Id>") | ✅ |
 | 自定义论破动画 (@gosubCutIn) | ✅ |
 | 存档章节名 (info.json ChapterNames) | ✅ |
+| 致谢演出复刻 (staff 滚动 + 共犯 36 屏 + 製作段) | ⚠️ 试验性 (macOS 独有, 上游无此功能, 稳定性未实测) |
 | 调试工具 | ❌ 未实现 (用 probe_*.js 探针替代) |
 
 ## 已知问题 (2026-08-18)
 
+- **致谢演出复刻（2026-08-19+，试验性）**：macOS 版自研功能，**上游 Windows 版
+  ManosabaMod 无此功能**。静态数据驱动（`TestCredit/data.json` + `Assets/thanks-pages.json`），
+  复刻原版致谢演出：staff 主名单滚动、原版 stills、共犯者 Special Thanks 36 屏翻页
+  （zh 420 + ja 4544 合并名单）、製作・販売/Acacia/© 段滚动。**稳定性未经充分实测**，
+  依赖原版 CreditsDirectorAct2 运行时参数（bpm/拍数/滚动速度）与 CreditsUI 场景结构。
+  触发方式见 ARCHITECTURE.md 九节。
 - **已知残留（2026-08-18）**：切语言瞬间有肉眼可见卡顿 —— 每个 loader 实例各触发一次
   全量重注入（实测一次切换 ~200 次，间隔 ~20ms≈每帧），主线程被同步 IL2CPP 调用占用数秒。
   优化方向（verify-before-repair / 按 loader 定向重注入）见 GOALS.md「差距」5。

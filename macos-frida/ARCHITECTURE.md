@@ -215,6 +215,7 @@ ManosabaMod/<ModName>/
 | @choice handler:"<Id>" | ✅ |
 | CutIn (论破) | ✅ |
 | 角色名富文本 (AuthorTaggedTextGenerator) | ✅ |
+| 致谢演出复刻 (staff 滚动 + 共犯 36 屏 + 製作段) | ⚠️ 试验性 (macOS 独有, 上游无此功能, 稳定性未实测, 见九节) |
 | 调试工具 | ❌ 未实现 (macOS 用 probe_*.js 探针替代) |
 
 ## 七、macOS 已知坑与修复
@@ -394,3 +395,42 @@ LogWarning→WARN(黄)、Log→INFO(青) —— 功能等价于 Windows BepInEx 
 **约束**: 所有日志调用必须在 `initLog` 之后 (entry.js 顶层先 initLog 再装 crash
 handler, 早于首个 wblog)。文件体积第一版不做轮转, `MOD_DEBUG=1` 时 dumpObj FULL 栈
 涨得快, 文档注明。
+
+## 九、致谢演出复刻 — 试验性 (macOS 独有, 2026-08-19+)
+
+> **状态: ⚠️ 试验性**。**上游 Windows 版 ManosabaMod 没有此功能** — 这是 macOS 版
+> 自研的致谢演出复刻, 与上游功能对齐目标无关。**稳定性未经充分实测**:
+> 依赖原版 `CreditsDirectorAct2` 运行时参数 (bpm/拍数/滚动速度) 与 CreditsUI 场景结构,
+> 游戏版本更新可能失效。测试脚本与数据 (build/extract/integrate/probe/credits-data)
+> 不随仓库分发。
+
+**功能** (src/credit.js, 全部静态本地数据驱动, 运行时零提取):
+剧本内 `@set "g_modCreditRoll = \"data.json\""` + `g_modCreditRollPhase` 分阶段触发:
+
+- **phase 1 — staff 主名单滚动**: `CreditRollVerticalScroll.ScrollAsync(height/speed)`,
+  222 条目标签逐条目静态填充, 与原版 prefab 布局一致。时长 = ContentHeight/_scrollSpeed
+  (248), 写入 `g_staffDuration` 供 nani `@wait`。
+- **phase 2 — 原版 stills + 共犯者翻页**: 9 张原版致谢画面 (静态裁图) 按原版拍数时序
+  播放; 共犯者 (Special Thanks) 按 36 屏页级状态机翻页 — zh 420 + ja 4544 合并完整
+  名单 (原版显示的就是合并全量, 非运行时字典), 每屏一次 TMP 富文本 `set_Text`
+  (行 join `<br>`), fade 0.51s + display 2.30s ≈ 3.3s/屏, 与 run-30c 实测原版节奏一致。
+- **phase 3 — 製作・販売/Acacia/© 段**: 共犯之后最后一段滚动, 文本为 prefab 静态默认,
+  只激活 + ScrollAsync。
+
+**关键坑 (踩过实锤)**:
+1. **引擎级 Unity API 必须在主线程调** — JS 定时器线程 (setTimeout/setInterval 回调)
+   调 `get_ContentHeight`/`ScrollAsync` = Frida "breakpoint triggered" (IL2CPP 线程保护
+   int3)。共犯翻页的 `set_Text` 是纯托管路径侥幸可跑, 但滚动必须走 `g_creditTick`
+   nani 轮询泵 → onSVV (SetVariableValue 主线程同步 hook) 执行 (run-30f)。
+2. **运行时字典 `_specialThanksCredits@0xA0` 只有部分数据** (ja 459 + zh 420),
+   原版显示的是 asset 全量 (4964 人次) — 静态提取自 run-30c TMP set_Text 全量捕获
+   (509 条), 按 REPL/APPEND 规则重建 36 屏, 原样保留富文本。
+3. **原版节奏参数全部运行时读**: `_scrollSpeed@0x68`、still 拍数 (delay/fade/display@0x6C-0x74)、
+   bpm@0x30、共犯 fade/display 拍数 (0.75/3.38) — 不硬编码。
+4. **总时长对齐歌曲** (run-30g): 原版演出 = staff 滚动 119s + 共犯 36×3.3s + 製作段,
+   无段间空档。mod 侧去掉 endPause/nani 预热等待/多余缓冲后, 全流程 ≈ 260s,
+   在 5 分钟歌曲 (bloom) 结束前播完。
+
+**数据文件**: `ManosabaMod/TestCredit/data.json` (staff 222 条 + thanks 36 屏 +
+production 3 条) 与 `Assets/thanks-pages.json` — 生成/提取脚本在仓库外
+(`test-tools/`), 不随仓库分发。

@@ -13,6 +13,7 @@
 
 import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, wblog } from "./utils.js";
 import { clearCutInCaches, setupCutInHooks } from "./cutin.js";
+import { clearCreditCaches, setupCreditHooks } from "./credit.js";
 import { initChoiceHandlers, setupChoiceHandlerHooks } from "./choice.js";
 import { setupChapterDisplayHooks } from "./chapterdisplay.js";
 import { setupScriptTextHooks } from "./scripttext.js";
@@ -80,6 +81,8 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         A.gf  = new NativeFunction(E.il2cpp_class_get_field_from_name, 'pointer', ['pointer', 'pointer']);
         A.fo  = new NativeFunction(E.il2cpp_field_get_offset, 'uint32', ['pointer']);
         A.fgt = E.il2cpp_field_get_type ? new NativeFunction(E.il2cpp_field_get_type, 'pointer', ['pointer']) : null;
+        A.mgp = E.il2cpp_method_get_param ? new NativeFunction(E.il2cpp_method_get_param, 'pointer', ['pointer', 'uint32']) : null;
+        A.csyst = E.il2cpp_class_from_system_type ? new NativeFunction(E.il2cpp_class_from_system_type, 'pointer', ['pointer']) : null;
         A.sdf = new NativeFunction(E.il2cpp_class_get_static_field_data, 'pointer', ['pointer']);
         A.ta  = new NativeFunction(E.il2cpp_thread_attach, 'pointer', ['pointer']);
         A.ots = E.il2cpp_object_to_string ? new NativeFunction(E.il2cpp_object_to_string, 'pointer', ['pointer']) : null;
@@ -435,6 +438,9 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         // @choice handler 支持 (自定义选项面板, 镜像 Windows ModChoiceHandlerLoader 精简核心)
         setupChoiceHandlerHooks();
 
+        // 自定义致谢演出控制器 (用户 nani 触发, 100% 内容可控; 蓝本 probe_credit.js v4, P1-P5 裁决)
+        setupCreditHooks();
+
         // 语言切换重注入 hook (镜像上游 Windows LocaleWatcherComponent, commit 66e5388b)
         // hook ResourceLoader<T>.HandleLocaleChanged (FSG) → 启动 ~10 帧重注入窗口
         // 覆盖: Scripts/Text/Audio/Voice/Backgrounds/Characters (insertProvisionSource 自带去重)
@@ -466,6 +472,8 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                         try { resetWitchBookSession(); } catch (e) {}
                         // 回标题 → 清 CutIn 实例缓存 (旧实例指针可能失效)
                         try { clearCutInCaches(); } catch (e) {}
+                        // 回标题 → 清 Credit 演出状态 (disarm + 还原残留祖先; comp 指针保留, 字段探针复核)
+                        try { clearCreditCaches(); } catch (e) {}
                         if (typeof modList !== "undefined" && modList && modList.length) registerMenu(modList);
                         else registerMenu([]);
                         registerMenuText();

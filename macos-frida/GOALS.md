@@ -1,6 +1,6 @@
 # ManosabaMod macOS 移植 — 目标与差距文档
 
-> 随代码演进更新。最后更新：2026-08-18（语言切换重注入已修 + 切语言卡顿残留 + WitchBook 缺语言回退填充，见「差距」5）。
+> 随代码演进更新。最后更新：2026-08-23（新增 macOS 自研致谢演出复刻 — ⚠️ 试验性, 上游无此功能, 见「差距」6）。
 
 > **蓝本勘定（2026-08-11/12）**：Windows 对照的蓝本是 **ManosabaMod1 群文件版 ManosabaLoader.dll**（254KB，md5 ea00a666，ilspycmd 反编译 `/tmp/manosaba1_decomp.cs`，10232 行）——唯一包含 `ModChoiceHandlerLoader` + `ModObjectionCutInLoader` 的版本。GitHub 源码仓库 `ManosabaMod-2.0.0`（csproj v1.0.0）**没有**这两个类；GitHub release 的 ManosabaMod2 DLL（221KB）与 `ManosabaMod`（221KB，md5 86d623ab）同源，也都没有。C# 侧参考路径：`DoomsGuardians/Project-Cannon-and-Candle`（Packages/com.elringus.naninovel/，与 dump.cs 签名完全匹配）。
 >
@@ -29,6 +29,7 @@
 | ModUiStrings（#9） | mod 菜单 UI 文案本地化 | ⚠️ 边缘（macOS 菜单文案硬编码中文，不随语言切换；中文环境无感） |
 | ModDebugTools | 调试工具（RenderTexture 截图等） | ❌ 未实现（macOS 用 probe_*.js 探针替代） |
 | ScriptWorkingManager / ModManager | 工作区/配置管理 | ⚠️ 由 run_mod.sh 命令行约定替代 |
+| （Windows 无此模块） | 致谢演出复刻（staff 滚动 + 共犯 36 屏 + 製作段） | ⚠️ 试验性（macOS 自研, **上游无此功能**, 稳定性未实测 — 见「差距」6） |
 
 ## 差距 / 未闭环清单
 
@@ -53,6 +54,17 @@
    - **与上游 66e5388b 的差异 —— 不用 JS timer**：上游用 LocaleWatcherComponent（MonoBehaviour.Update）连续 ~10 帧重注入；macOS 初版镜像用 setTimeout 链，但 Frida timer 跑在**脚本线程**而非 Unity 主线程，与主线程异步 reload（UniTask 续体）竞争 → 2026-08-18 多次 SIGBUS/SIGSEGV 崩溃（GameAssembly 无符号偏移 +0xab2da0/0xb52c34/0xdc9988）。改 onLeave 同步重注入后，同一场景实测 **358 次重注入零崩溃**（主线程语义对齐上游）。
    - **已知残留 —— 切语言卡顿**：一次切换 ~200+ 次重注入（每个 loader 实例各一次，间隔 ~20ms≈每帧），每次全量 `addModLoader`（30 mod × 5 类）。去重只省 insert，findSvc / LRP 创建 / converters dict 填充仍每帧重复 → 主线程被占用数秒 → 肉眼卡顿。优化方向：① **verify-before-repair**——重注入前先扫各 loader 列表，全在则跳过（绝大多数重注入冗余）；② 按 loader 定向重注入——只补刚被 wipe 的 loader，最贴上游语义，但 LRP 若只被 JS 记录引用会被 IL2CPP GC 回收成悬垂指针，需额外 rooting。
    - **附带修复 —— WitchBook 缺语言条目**：mod 的 info.json 某条目缺某语言（如 Gapless 的 Clues 只有 zh-Hans）时，日文下图鉴查 `inner[ja]` → KeyNotFoundException → name/desc 空白。`registerLocalizedDict`（witchbook/pages.js）现在补全全部 7 种游戏语言，缺的用已有文本回退（`pickLocaleText`：zh-Hans→ja→任意），与游戏 .txt "Missing translation → source locale" 语义一致（2026-08-18 已修）。
+
+6. **致谢演出复刻** — ⚠️ 试验性（2026-08-19+, macOS 自研, **上游 Windows 版 ManosabaMod 无此功能**）
+   - 复刻原版结尾致谢演出: staff 主名单滚动（CreditRollVerticalScroll.ScrollAsync,
+     ContentHeight/_scrollSpeed=248）+ 原版 stills 9 张（拍数时序）+ 共犯者 Special Thanks
+     36 屏翻页（zh 420 + ja 4544 合并完整名单, 0.51s fade + 2.30s display ≈ 3.3s/屏, 与
+     run-30c 实测原版节奏一致）+ 製作・販売/Acacia/© 段滚动。
+   - 全部静态本地数据驱动（`data.json` + `thanks-pages.json`）, 运行时零提取; 原版节奏
+     参数（bpm/拍数/_scrollSpeed）运行时读 director, 不硬编码。
+   - **稳定性未经充分实测**: 依赖 CreditsDirectorAct2 运行时参数与 CreditsUI 场景结构,
+     游戏版本更新可能失效。测试脚本/数据在仓库外（`test-tools/`）不随仓库分发。
+   - 机制细节与踩坑（主线程泵/breakpoint triggered/运行时字典不全）见 ARCHITECTURE.md 九节。
 
 ## 已知开放项（非阻断）
 
