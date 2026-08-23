@@ -12,7 +12,7 @@
 'use strict';
 
 import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, wblog } from "./utils.js";
-import { clearCutInCaches, setupCutInHooks } from "./cutin.js";
+import { clearCutInCaches, preloadCutInTextures, setupCutInHooks } from "./cutin.js";
 import { clearCreditCaches, setupCreditHooks } from "./credit.js";
 import { initChoiceHandlers, setupChoiceHandlerHooks } from "./choice.js";
 import { setupChapterDisplayHooks } from "./chapterdisplay.js";
@@ -472,6 +472,8 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                         try { resetWitchBookSession(); } catch (e) {}
                         // 回标题 → 清 CutIn 实例缓存 (旧实例指针可能失效)
                         try { clearCutInCaches(); } catch (e) {}
+                        // 首次进标题 → 预加载全部 CutIn 纹理 (把审判触发的解码卡顿挪到菜单空闲期)
+                        try { preloadCutInTextures(); } catch (e) {}
                         // 回标题 → 清 Credit 演出状态 (disarm + 还原残留祖先; comp 指针保留, 字段探针复核)
                         try { clearCreditCaches(); } catch (e) {}
                         if (typeof modList !== "undefined" && modList && modList.length) registerMenu(modList);

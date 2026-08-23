@@ -1,10 +1,10 @@
 📦
-35750 /src/entry.js
+36048 /src/entry.js
 1938 /src/banner.js
 5796 /src/chapterdisplay.js
 83411 /src/choice.js
 206106 /src/credit.js
-21467 /src/cutin.js
+22709 /src/cutin.js
 4554 /src/io.js
 5858 /src/locale.js
 9445 /src/log.js
@@ -22,7 +22,7 @@
 6346 /src/witchbook/textures.js
 ✄
 import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, wblog } from "./utils.js";
-import { clearCutInCaches, setupCutInHooks } from "./cutin.js";
+import { clearCutInCaches, preloadCutInTextures, setupCutInHooks } from "./cutin.js";
 import { clearCreditCaches, setupCreditHooks } from "./credit.js";
 import { initChoiceHandlers, setupChoiceHandlerHooks } from "./choice.js";
 import { setupChapterDisplayHooks } from "./chapterdisplay.js";
@@ -558,6 +558,11 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                         // 回标题 → 清 CutIn 实例缓存 (旧实例指针可能失效)
                         try {
                             clearCutInCaches();
+                        }
+                        catch (e) { }
+                        // 首次进标题 → 预加载全部 CutIn 纹理 (把审判触发的解码卡顿挪到菜单空闲期)
+                        try {
+                            preloadCutInTextures();
                         }
                         catch (e) { }
                         // 回标题 → 清 Credit 演出状态 (disarm + 还原残留祖先; comp 指针保留, 字段探针复核)
@@ -6767,7 +6772,8 @@ function getOrCreateCutInSprite(reg, vanillaName, vanillaSpr) {
     if (cutInData.spriteCache[cacheKey] !== undefined)
         return cutInData.spriteCache[cacheKey];
     try {
-        var ent = loadCutInTexture(reg.sprites[vanillaName].path, cacheKey);
+        // texCache 按 resolved path 缓存 (同文件多 CutIn/多槽共用一份解码; 旧 cacheKey=id/vanillaName 导致同文件重复解码 6 次, 300-900ms stall)
+        var ent = loadCutInTexture(reg.sprites[vanillaName].path, reg.sprites[vanillaName].path);
         if (!ent || !ent.tex) {
             cutInData.spriteCache[cacheKey] = null;
             return null;
@@ -6929,6 +6935,33 @@ function swapCutInSprites(inst, reg) {
 export function clearCutInCaches() {
     cutInData.instCache = {};
     cutInData.pendingEntry = null;
+}
+// 菜单预加载: 首次进标题时把所有 CutIn 纹理按文件去重解码进 texCache (主线程同步 hook 内调,
+// 避免审判触发时 300-900ms 解码卡顿)。spriteCache 需原版 sprite 的 pivot/ppu 实例, 无法预建,
+// 触发时仅剩 Sprite.Create 一次调用 (毫秒级)。
+var cutInPreloadDone = false;
+export function preloadCutInTextures() {
+    if (cutInPreloadDone || !cutInData.ready)
+        return;
+    cutInPreloadDone = true;
+    var paths = [];
+    for (var id in cutInData.registry) {
+        var reg = cutInData.registry[id];
+        for (var k in reg.sprites) {
+            var p = reg.sprites[k].path;
+            if (paths.indexOf(p) < 0)
+                paths.push(p);
+        }
+    }
+    if (!paths.length)
+        return;
+    info("[v3][CutIn] 菜单预加载 " + paths.length + " 张纹理 ...");
+    var ok = 0;
+    for (var i = 0; i < paths.length; i++) {
+        if (loadCutInTexture(paths[i], paths[i]))
+            ok++;
+    }
+    info("[v3][CutIn] 预加载完成: " + ok + "/" + paths.length);
 }
 export function setupCutInHooks() {
     try {

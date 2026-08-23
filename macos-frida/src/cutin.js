@@ -192,7 +192,8 @@ function getOrCreateCutInSprite(reg, vanillaName, vanillaSpr) {
     var cacheKey = reg.id + "/" + vanillaName;
     if (cutInData.spriteCache[cacheKey] !== undefined) return cutInData.spriteCache[cacheKey];
     try {
-        var ent = loadCutInTexture(reg.sprites[vanillaName].path, cacheKey);
+        // texCache 按 resolved path 缓存 (同文件多 CutIn/多槽共用一份解码; 旧 cacheKey=id/vanillaName 导致同文件重复解码 6 次, 300-900ms stall)
+        var ent = loadCutInTexture(reg.sprites[vanillaName].path, reg.sprites[vanillaName].path);
         if (!ent || !ent.tex) { cutInData.spriteCache[cacheKey] = null; return null; }
         var px = 0.5, py = 0.5, ppu = 100, rw = 0, rh = 0;
         if (vanillaSpr && !vanillaSpr.isNull()) {
@@ -299,6 +300,29 @@ function swapCutInSprites(inst, reg) {
 export function clearCutInCaches() {
     cutInData.instCache = {};
     cutInData.pendingEntry = null;
+}
+// 菜单预加载: 首次进标题时把所有 CutIn 纹理按文件去重解码进 texCache (主线程同步 hook 内调,
+// 避免审判触发时 300-900ms 解码卡顿)。spriteCache 需原版 sprite 的 pivot/ppu 实例, 无法预建,
+// 触发时仅剩 Sprite.Create 一次调用 (毫秒级)。
+var cutInPreloadDone = false;
+export function preloadCutInTextures() {
+    if (cutInPreloadDone || !cutInData.ready) return;
+    cutInPreloadDone = true;
+    var paths = [];
+    for (var id in cutInData.registry) {
+        var reg = cutInData.registry[id];
+        for (var k in reg.sprites) {
+            var p = reg.sprites[k].path;
+            if (paths.indexOf(p) < 0) paths.push(p);
+        }
+    }
+    if (!paths.length) return;
+    info("[v3][CutIn] 菜单预加载 " + paths.length + " 张纹理 ...");
+    var ok = 0;
+    for (var i = 0; i < paths.length; i++) {
+        if (loadCutInTexture(paths[i], paths[i])) ok++;
+    }
+    info("[v3][CutIn] 预加载完成: " + ok + "/" + paths.length);
 }
 export function setupCutInHooks() {
     try {
