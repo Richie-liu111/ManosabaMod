@@ -23,9 +23,9 @@
 //     懒加载工厂自建 + GCI 子树扫描 + 全程分阶段日志
 // 原则 (项目惯例): 只做加法+自清理, 不改任何游戏现有对象; 全程 try/catch 不崩。
 //   错误路径一律写安全默认时长 → nani @Wait 永不悬挂 (R4)。
-import { A, dbg, directCall, findClassAcrossImages, findSvc, findAllObjectOfType, getSystemClass, invoke, invokeOk, makeS, nv, readStr, warn, error } from "./utils.js";
+import { A, dbg, directCall, findClassAcrossImages, findSvc, findAllObjectOfType, getSystemClass, invoke, invokeOk, makeS, nv, pngDims, readStr, warn, error } from "./utils.js";
 import { getIO } from "./io.js";   // run-24-2: 写文件走 io.js 绑定 (Module.findExportByName 在 bundle 内不可用, io.js 的 findGlobalExportByName 实证可用)
-import { readJSONFile, openForWrite, writeString, fileSync } from "./io.js";
+import { readJSONFile, openForWrite, writeString, fileSync, fileReadBytes } from "./io.js";
 import { info } from "./log.js";
 import { getCurrentLocale } from "./locale.js";
 import { wbCurrentMod } from "./witchbook/state.js";
@@ -41,6 +41,7 @@ var comp = {           // 捕获的组件 (跨回标题保留 — 探针实证�
     dictCls: null,                           // Dictionary<LocaleKind,string[][]> 类 (metadata 自解析)
     labels: [],                              // staff content 全部 TMP 标签 {tmp, go, active, font}
     stills: null, stillTimer: null,          // run-26: Act2 Stills 显示 (EndingStill[] + fade 定时器)
+    // run-31: stills 条目扩展 {comp, go, name, cg, img, vanillaSpr} — img=Image 组件, vanillaSpr=原版 sprite (immutable, 恢复总从它)
     stillIdx: 0, stillState: "idle", stillStepStart: 0,
     stillT: { delay: 2000, fade: 2000, display: 26000 },   // run-27: 动态时序 (キャスト 偏移 + 原版 units)
     timing: null,                            // run-27: 原版 director 时序参数缓存 (_scrollSpeed/units/bpm)
@@ -54,8 +55,12 @@ var creditState = {
     jsonPath: null,      // json 路径 (日志)
     original: false,     // run-15: 原版复刻模式 (g_modCreditRoll="original" → 直接调 CreditsUI.PlayAsync(2))
     extract: false,      // run-24: 素材提取模式 (trigger "extract" → 原版全流程 + stills PNG/名单 json → mod 文件夹)
-    pendingProduction: false   // run-30f: 共犯完成后置位 → 由 g_creditTick 主线程泵执行 doProduction
+    pendingProduction: false,  // run-30f: 共犯完成后置位 → 由 g_creditTick 主线程泵执行 doProduction
+    stillsConf: null           // run-31: 自定义 stills 播放列表 (data.json j.stills, 校验后; null=原版 9 张)
 };
+// run-31: stills 自定义图缓存 — texCache/sprCache key=resolved path (同文件多槽位共享一次解码);
+//   sprCache null = 加载失败 (不重试); doEnd/abortCredit 清空置 null (Unity GC 回收纹理)
+var stillsTexCache = {}, stillsSprCache = {};
 var mgr = null;                  // CustomVariableManager 实例 (首个 SetVariableValue 缓存, 写回变量用 — F13)
 var activatedAncestors = [];     // phase=1 激活的祖先 GO (phase=3/中止 还原)
 var deactivatedLabels = [];      // run-11: 单标签模式停用的非当前语种标签 GO (结束还原)
@@ -122,6 +127,7 @@ function resolveCreditClasses() {
         ["localeKind", "GigaCreation.Essentials.Localization", "LocaleKind"],
         ["scriptLoader", "Naninovel", "ScriptLoader"],
         ["image", "UnityEngine.UI", "Image"],
+        ["imageConversion", "UnityEngine", "ImageConversion"],
         ["sprite", "UnityEngine", "Sprite"],
         ["texture2D", "UnityEngine", "Texture2D"],
         ["renderTexture", "UnityEngine", "RenderTexture"],
@@ -918,6 +924,7 @@ function thanksProbeFlush() {
 // ============ 数据 json ============
 function loadCreditData(path) {
     creditState.json = null;
+    creditState.stillsConf = null;   // run-31: 每次 trigger 重置 (original 分支提前 return, 不清会残留上次自定义列表)
     creditState.original = false;
     // run-15: 原版复刻模式 — 值 "original" 不读 json, 直接调原版 CreditsUI.PlayAsync(2)
     //   (= nani @credit 2 命令全流程: stills + staff 滚动 + SpecialThanks, 内容/语种/时序全原版)
@@ -953,6 +960,28 @@ function loadCreditData(path) {
         } else { dbg("[v3][Credit] thanks-pages.json 无 thanks 字段或缺失 — 用 data.json 旧数据"); }
     } catch (eC) { warn("[v3][Credit] thanks 覆盖 err: " + eC); }
     creditState.jsonPath = p;
+    // run-31: 自定义 stills 播放列表 — 数组序 = 播放序; 缺 file 条目占位 null (该位显示原版 sprite, 列表不错位);
+    //   非数组/空数组 → warn + 原版 9 张。时长字段全部可选, 缺省回落原版换算 (stillTick 分相取)
+    creditState.stillsConf = null;
+    if (j.stills !== undefined) {
+        if (Array.isArray(j.stills) && j.stills.length) {
+            var conf = [], nBad = 0;
+            for (var si = 0; si < j.stills.length; si++) {
+                var it = j.stills[si];
+                if (!it || typeof it.file !== "string" || !it.file) { nBad++; continue; }   // 占位 null → 原版
+                var e = { file: it.file };
+                // 0 是有效值 (display 0 = 展示完立即淡出; fade 0 → clamp 200ms 防除零); 负数视为缺省回落原版
+                if (typeof it.display === "number" && it.display >= 0) e.displayMs = it.display * 1000;
+                if (typeof it.fadeIn === "number" && it.fadeIn >= 0) e.fadeInMs = Math.max(200, it.fadeIn * 1000);
+                if (typeof it.fadeOut === "number" && it.fadeOut >= 0) e.fadeOutMs = Math.max(200, it.fadeOut * 1000);
+                conf[si] = e;
+            }
+            creditState.stillsConf = conf;
+            info("[v3][Credit] stills 播放列表: " + j.stills.length + " 项 (无效 " + nBad + " 项走原版) — 图片仅 PNG, 路径相对 mod 根");
+        } else {
+            warn("[v3][Credit] stills 段非数组或空 — 用原版 9 张");
+        }
+    }
     // 校验: staff 至少一个语种有内容; thanks 至少一个语种有 groups
     var staffOk = false, thanksOk = false;
     if (j.staff && typeof j.staff === "object") {
@@ -1080,7 +1109,7 @@ function findStills() {
             } catch (e2) {}
             var nm = go ? getGoName(go) : "?";
             var cg = es.add(0x20).readPointer();     // EndingStill._canvasGroup@0x20
-            var sp = "?", act = "?";
+            var sp = "?", act = "?", imgRef = null, vanillaSpr = null;
             try {
                 if (go) act = dcBool(cgmChain(A.ogc(go), "get_activeSelf", 0), go) ? "活" : "隐";
                 var comps = invokeOk(cgmChain(A.ogc(go), "GetComponentsInChildren", 2), go, [A.tgo(A.cgt(cls.image)), boolPtr(true)]);
@@ -1089,17 +1118,20 @@ function findStills() {
                     for (var ci = 0; ci < clen; ci++) {
                         var img = comps.ret.add(0x20 + ci * 8).readPointer();
                         if (!img || img.isNull()) continue;
+                        if (!imgRef) imgRef = img;   // run-31: 首个 Image 引用 (自定义图 set_sprite 目标)
                         var spR = invokeOk(cgmChain(A.ogc(img), "get_sprite", 0), img, []);
                         if (spR.ok && spR.ret && !spR.ret.isNull()) {
-                            var nmR = invokeOk(cgmChain(A.ogc(spR.ret), "get_name", 0), spR.ret, []);
-                            sp = (nmR.ok && nmR.ret) ? (readStr(nmR.ret) || "?") : "?";
+                            if (!vanillaSpr) vanillaSpr = spR.ret;   // run-31: 原版 sprite (immutable, 恢复用)
+                            if (sp === "?") {
+                                var nmR = invokeOk(cgmChain(A.ogc(spR.ret), "get_name", 0), spR.ret, []);
+                                sp = (nmR.ok && nmR.ret) ? (readStr(nmR.ret) || "?") : "?";
+                            }
                         }
-                        break;
                     }
                 }
             } catch (e3) {}
-            arr.push({ comp: es, go: go, name: nm, cg: cg });
-            info("[v3][Credit] still #" + (idx + 1) + ": " + nm + " active=" + act + " cg=" + (cg && !cg.isNull() ? cg : "null") + " sprite=" + sp);
+            arr.push({ comp: es, go: go, name: nm, cg: cg, img: imgRef, vanillaSpr: vanillaSpr });
+            info("[v3][Credit] still #" + (idx + 1) + ": " + nm + " active=" + act + " cg=" + (cg && !cg.isNull() ? cg : "null") + " sprite=" + sp + (vanillaSpr ? " (img 已存)" : " (无 Image!)"));
         }
         var arr = [];
         if (order) {
@@ -1124,33 +1156,161 @@ function findStills() {
         return arr.length;
     } catch (e) { warn("[v3][Credit] findStills err: " + e); return 0; }
 }
+// ============ run-31: 自定义 stills 播放列表 (换图 + 每张时长) ============
+// 时机: 纹理/Sprite 在 showStills 内 (主线程, phase1 hook) 一次性预建; 播放期 stillTick
+//   (定时器线程) 只做轻量 set_sprite (与 setStillAlpha 同级 — 重量级 API 定时器线程会 int3)
+function stillCfgFor(idx) {
+    var conf = creditState.stillsConf;
+    if (!conf || idx >= conf.length) return null;
+    return conf[idx];
+}
+// Sprite.Create 5 参 (4 参 macOS 崩 — cutin 实证); pivot/ppu 继承槽位原版 sprite (失败回落 0.5/100)
+function makeStillSprite(tex, texW, texH, px, py, ppu) {
+    try {
+        if (!tex || tex.isNull() || !texW || !texH) return null;
+        var rect = Memory.alloc(16);
+        rect.writeFloat(0); rect.add(4).writeFloat(0); rect.add(8).writeFloat(texW); rect.add(12).writeFloat(texH);
+        var pivot = Memory.alloc(8);
+        pivot.writeFloat(px); pivot.add(4).writeFloat(py);
+        var ppuPtr = Memory.alloc(4); ppuPtr.writeFloat(ppu || 100);
+        var createMi = A.cgm(cls.sprite, Memory.allocUtf8String("Create"), 5);
+        if (!createMi || createMi.isNull()) { warn("[v3][Credit] still: Sprite.Create NOT FOUND"); return null; }
+        var extrude = Memory.alloc(4); extrude.writeU32(0);
+        return invoke(createMi, ptr(0), [tex, rect, pivot, ppuPtr, extrude]);
+    } catch (e) { warn("[v3][Credit] still makeStillSprite err: " + e); return null; }
+}
+// 单个文件 → Sprite (缓存 key=resolved path; null=失败不重试)。主线程调用 (引擎 API)
+function loadStillSprite(path, vanillaSpr) {
+    if (stillsSprCache[path] !== undefined) return stillsSprCache[path];
+    try {
+        var fb = fileReadBytes(path);
+        if (!fb || fb.size <= 0) { warn("[v3][Credit] still 读图失败 '" + path + "' (该位原版)"); stillsSprCache[path] = null; return null; }
+        var dims = pngDims(fb);
+        if (!dims) { warn("[v3][Credit] still PNG 尺寸读取失败 '" + path + "' (仅支持 PNG, 该位原版)"); stillsSprCache[path] = null; return null; }
+        var ent = stillsTexCache[path];
+        if (!ent) {
+            var byteCls = getSystemClass("Byte");
+            var barr = A.an(byteCls, fb.size);
+            barr.add(0x20).writeByteArray(fb.buf.readByteArray(fb.size));
+            var tex = A.on(cls.texture2D);   // 注意: defs 键是 texture2D (大写 D) — 小写 undefined 会 "expected a pointer"
+            var wbuf = Memory.alloc(4); wbuf.writeS32(dims.w);
+            var hbuf = Memory.alloc(4); hbuf.writeS32(dims.h);
+            var ctorMi = A.cgm(cls.texture2D, Memory.allocUtf8String(".ctor"), 2);
+            if (ctorMi && !ctorMi.isNull()) invokeOk(ctorMi, tex, [wbuf, hbuf]);
+            var liMi = A.cgm(cls.imageConversion, Memory.allocUtf8String("LoadImage"), 2);
+            if (!liMi || liMi.isNull()) { warn("[v3][Credit] still: ImageConversion.LoadImage NOT FOUND"); stillsSprCache[path] = null; return null; }
+            var r = invokeOk(liMi, ptr(0), [tex, barr]);
+            if (!r.ok) { warn("[v3][Credit] still LoadImage 失败 '" + path + "' (该位原版)"); stillsSprCache[path] = null; return null; }
+            ent = { tex: tex, w: dims.w, h: dims.h };
+            stillsTexCache[path] = ent;
+        }
+        var px = 0.5, py = 0.5, ppu = 100, rw = 0, rh = 0;
+        if (vanillaSpr && !vanillaSpr.isNull()) {
+            try {
+                var ppuMi = A.cgm(cls.sprite, Memory.allocUtf8String("get_pixelsPerUnit"), 0);
+                if (ppuMi && !ppuMi.isNull()) { try { var ppuV = directCall(ppuMi, "float", [vanillaSpr]); if (ppuV > 0) ppu = ppuV; } catch (e3) {} }
+                var rectMi = A.cgm(cls.sprite, Memory.allocUtf8String("get_rect"), 0);
+                if (rectMi && !rectMi.isNull()) { try { var rp = invoke(rectMi, vanillaSpr, []); if (rp && !rp.isNull()) { rw = rp.add(8).readFloat(); rh = rp.add(12).readFloat(); } } catch (e2) {} }
+                var pivMi = A.cgm(cls.sprite, Memory.allocUtf8String("get_pivot"), 0);
+                if (pivMi && !pivMi.isNull() && rw > 0.001 && rh > 0.001) {
+                    try { var pp = invoke(pivMi, vanillaSpr, []); if (pp && !pp.isNull()) { var pvx = pp.readFloat(), pvy = pp.add(4).readFloat(); if (isFinite(pvx) && isFinite(pvy)) { px = pvx / rw; py = pvy / rh; } } } catch (e4) {}
+                }
+                if (!(px >= 0 && px <= 1)) px = 0.5;
+                if (!(py >= 0 && py <= 1)) py = 0.5;
+            } catch (e5) {}
+        }
+        var spr = makeStillSprite(ent.tex, ent.w, ent.h, px, py, ppu);
+        if (!spr) { warn("[v3][Credit] still Sprite.Create 失败 '" + path + "' (该位原版)"); stillsSprCache[path] = null; return null; }
+        stillsSprCache[path] = spr;
+        return spr;
+    } catch (e) { warn("[v3][Credit] still loadStillSprite err '" + path + "': " + e); stillsSprCache[path] = null; return null; }
+}
+// 主线程预建全部自定义 sprite (showStills 内, 阻塞一次性; 12 张 ≈ 数百 ms 可接受)
+function buildCustomStills() {
+    var conf = creditState.stillsConf;
+    if (!conf || !comp.stills || !comp.stills.length) return;
+    var okN = 0, failN = 0;
+    for (var i = 0; i < conf.length; i++) {
+        var c = conf[i];
+        if (!c) continue;
+        var slot = comp.stills[i % comp.stills.length];
+        var p = MOD_ROOT + "/" + wbCurrentMod + "/" + c.file;
+        var spr = loadStillSprite(p, slot && slot.vanillaSpr);
+        c.sprite = spr;   // null → 播放期该位恢复原版 sprite
+        if (spr) okN++; else failN++;
+    }
+    info("[v3][Credit] stills 预建: " + okN + " 张成功 / " + failN + " 张失败走原版 (配置 " + conf.length + " 项)");
+}
+// 播放期 (定时器线程, 该张 fadeIn 前) — 轻量 set_sprite (spike 验证点: 若 int3/闪烁 → 回退主线程全换+限 9)
+function applyStillSprite(idx) {
+    var cfg = stillCfgFor(idx);
+    if (!cfg || !cfg.sprite) return;
+    var slot = comp.stills[idx % comp.stills.length];
+    if (!slot || !slot.img || slot.img.isNull()) return;
+    try {
+        var setSprMi = A.cgm(cls.image, Memory.allocUtf8String("set_sprite"), 1);
+        if (setSprMi && !setSprMi.isNull()) invoke(setSprMi, slot.img, [cfg.sprite]);
+        if (!cfg._applied) { cfg._applied = 1; info("[v3][Credit] still 自定义图: 第" + (idx + 1) + "张 ← " + cfg.file); }
+    } catch (e) { warn("[v3][Credit] still set_sprite err #" + idx + ": " + e); }
+}
+// 换图后 1s re-dump 槽位 sprite 名 — 检测游戏动画覆盖回原版 (镜像 cutin scheduleSpriteReDump)
+function scheduleStillReDump() {
+    if (!creditState.stillsConf) return;
+    setTimeout(function () {
+        try {
+            var out = [];
+            for (var i = 0; i < (comp.stills || []).length; i++) {
+                var st = comp.stills[i];
+                var nm2 = "?";
+                if (st && st.img && !st.img.isNull()) {
+                    try {
+                        var spR = invokeOk(cgmChain(A.ogc(st.img), "get_sprite", 0), st.img, []);
+                        if (spR.ok && spR.ret && !spR.ret.isNull()) {
+                            var nmR2 = invokeOk(cgmChain(A.ogc(spR.ret), "get_name", 0), spR.ret, []);
+                            nm2 = (nmR2.ok && nmR2.ret) ? (readStr(nmR2.ret) || "?") : "?";
+                        }
+                    } catch (e2) {}
+                }
+                out.push(i + "=" + nm2);
+            }
+            dbg("[v3][Credit] still 替换后1s sprite: " + out.join(" | "));
+        } catch (e) { warn("[v3][Credit] still reDump err: " + e); }
+    }, 1000);
+}
 function stillTick() {
     try {
-        var st = comp.stills[comp.stillIdx];
+        // run-31: 槽位取模 (自定义列表可超 9 张循环复用); 播放长度 = 配置长度(有 conf 时)或槽位数
+        var totalN = creditState.stillsConf ? creditState.stillsConf.length : comp.stills.length;
+        var st = comp.stills[comp.stillIdx % comp.stills.length];
         if (!st) return;
+        var cfg = stillCfgFor(comp.stillIdx);
         var now = Date.now();
         var el = now - comp.stillStepStart;
         if (comp.stillState === "delay") {
-            if (el >= comp.stillT.delay) { comp.stillState = "fade"; comp.stillStepStart = now; el = 0; }
+            if (el >= comp.stillT.delay) { applyStillSprite(comp.stillIdx); comp.stillState = "fade"; comp.stillStepStart = now; el = 0; }
         }
         if (comp.stillState === "fade") {
-            var a = Math.min(1, el / comp.stillT.fade);
+            // run-31: fade 时长分相 — 每张 fadeIn 独立 (缺省回落原版), clamp ≥ 200ms (loadCreditData 已钳)
+            var fadeInMs = (cfg && cfg.fadeInMs != null) ? cfg.fadeInMs : comp.stillT.fade;
+            var a = Math.min(1, el / fadeInMs);
             setStillAlpha(st, a);
-            if (el >= comp.stillT.fade) { comp.stillState = "display"; comp.stillStepStart = now; setStillAlpha(st, 1); }
+            if (el >= fadeInMs) { comp.stillState = "display"; comp.stillStepStart = now; setStillAlpha(st, 1); }
         } else if (comp.stillState === "display") {
-            if (el >= comp.stillT.display) {
+            var dispMs = (cfg && cfg.displayMs != null) ? cfg.displayMs : comp.stillT.display;
+            if (el >= dispMs) {
                 // run-28: 张间不再回 delay — 原版 delay(18拍) 只对齐首张キャスト出现; 逐张 fadeout 后切换
                 //   (旧: 每张都等 12.3s delay → 9×22.2=200s > phase1 119s → 后几张没播)
                 comp.stillState = "fadeout"; comp.stillStepStart = now;
             }
         } else if (comp.stillState === "fadeout") {
-            var a2 = Math.max(0, 1 - el / comp.stillT.fade);
+            var fadeOutMs = (cfg && cfg.fadeOutMs != null) ? cfg.fadeOutMs : comp.stillT.fade;
+            var a2 = Math.max(0, 1 - el / fadeOutMs);
             setStillAlpha(st, a2);
-            if (el >= comp.stillT.fade) {
+            if (el >= fadeOutMs) {
                 setStillAlpha(st, 0);
                 comp.stillIdx++;
-                if (comp.stillIdx >= comp.stills.length) {
-                    info("[v3][Credit] still: " + comp.stills.length + " 张播完 (末张 fadeout 收尾)");
+                if (comp.stillIdx >= totalN) {
+                    info("[v3][Credit] still: " + comp.stillIdx + " 张播完 (末张 fadeout 收尾)");
                     comp.stillState = "done";
                     if (comp.stillTimer) { clearInterval(comp.stillTimer); comp.stillTimer = null; }
                     return;
@@ -1164,16 +1324,30 @@ function stillTick() {
 function showStills(delayMs, fadeMs, displayMs) {
     try {
         if (comp.stillTimer) { clearInterval(comp.stillTimer); comp.stillTimer = null; }
+        // run-31: 有效性检查 — 场景重载后旧指针可能失效, 失效重跑 findStills (Codex R1 #9)
+        var stale = false;
+        if (comp.stills && comp.stills.length) {
+            for (var ci2 = 0; ci2 < comp.stills.length; ci2++) {
+                if (!comp.stills[ci2].img || comp.stills[ci2].img.isNull()) { stale = true; break; }
+            }
+            if (stale) { comp.stills = []; dbg("[v3][Credit] still: 槽位指针失效, 重扫"); }
+        }
         if (!comp.stills || !comp.stills.length) {
             if (!findStills()) { warn("[v3][Credit] still: 无 EndingStill 组件 — 右侧画面跳过"); return; }
         }
+        // run-31: 重置 (重放防泄漏 — Codex R1 #12) + 主线程预建自定义 sprite
+        comp.stillIdx = 0; comp.stillState = "idle"; comp.stillStepStart = Date.now();
+        buildCustomStills();
         if (delayMs !== undefined && delayMs >= 0) comp.stillT.delay = delayMs;
         if (fadeMs !== undefined && fadeMs > 0) comp.stillT.fade = fadeMs;
         if (displayMs !== undefined && displayMs > 0) comp.stillT.display = displayMs;
-        comp.stillIdx = 0; comp.stillState = "delay"; comp.stillStepStart = Date.now();
+        comp.stillState = "delay"; comp.stillStepStart = Date.now();
         comp.stillTimer = setInterval(stillTick, 50);
-        info("[v3][Credit] still: 开始播放 " + comp.stills.length + " 张 (delay " + comp.stillT.delay / 1000
-            + "s + fade " + comp.stillT.fade / 1000 + "s + display " + comp.stillT.display / 1000 + "s/张)");
+        var playN = creditState.stillsConf ? creditState.stillsConf.length : comp.stills.length;
+        scheduleStillReDump();
+        info("[v3][Credit] still: 开始播放 " + playN + " 张 (delay " + comp.stillT.delay / 1000
+            + "s + fade " + comp.stillT.fade / 1000 + "s + display " + comp.stillT.display / 1000 + "s/张"
+            + (creditState.stillsConf ? ", 自定义播放列表" : "") + ")");
     } catch (e) { warn("[v3][Credit] showStills err: " + e); }
 }
 // run-27: 原版时序参数 — 场景扫 CreditsDirectorAct2 (CreditsUI prefab 自带组件) 读序列化字段:
@@ -1225,10 +1399,26 @@ function castLeadOffsetPx() {
         return -y;
     } catch (e) { warn("[v3][Credit] castLeadOffsetPx err: " + e); return null; }
 }
+// run-31: 恢复每槽位原版 sprite (只做加法+自清理 — Codex R1 #5); set_sprite 轻量, 与 setStillAlpha 同级
+function restoreStillSprites() {
+    for (var i = 0; i < (comp.stills || []).length; i++) {
+        var st = comp.stills[i];
+        if (!st || !st.img || st.img.isNull() || !st.vanillaSpr || st.vanillaSpr.isNull()) continue;
+        try {
+            var setSprMi = A.cgm(cls.image, Memory.allocUtf8String("set_sprite"), 1);
+            if (setSprMi && !setSprMi.isNull()) invoke(setSprMi, st.img, [st.vanillaSpr]);
+        } catch (e) {}
+    }
+}
+// run-31: 清自定义 sprite/纹理缓存 (置空 JS 引用 → Unity GC 回收纹理) — 仅 doEnd/abortCredit 调
+function clearStillCaches() {
+    stillsSprCache = {}; stillsTexCache = {};
+}
 function stopStills() {
     try {
         if (comp.stillTimer) { clearInterval(comp.stillTimer); comp.stillTimer = null; }
         for (var i = 0; i < (comp.stills || []).length; i++) setStillAlpha(comp.stills[i], 0);
+        restoreStillSprites();
         comp.stillState = "idle";
     } catch (e) {}
 }
@@ -2548,7 +2738,8 @@ function doEnd() {
             try { invoke(cgmChain(A.ogc(deactivatedLabels[i]), "SetActive", 1), deactivatedLabels[i], [boolPtr(true)]); } catch (e) {}
         }
         deactivatedLabels = [];
-        stopStills();   // run-26: still 定时器/alpha 收尾
+        stopStills();   // run-26: still 定时器/alpha 收尾 + run-31: 恢复原版 sprite
+        clearStillCaches();   // run-31: 清自定义 sprite/纹理缓存 (Unity GC 回收)
         stopThanks();   // run-28: 共犯翻页定时器收尾
         restoreAncestors();
         creditState.armed = false;
@@ -2571,7 +2762,8 @@ function abortCredit(reason) {
         var roll = (!comp.rollScroll || comp.rollScroll.isNull()) ? comp.rollThanks : comp.rollScroll;
         if (roll && !roll.isNull()) invoke(cgmChain(A.ogc(roll), "DisableCanvas", 0), roll, []);
     } catch (e) {}
-    stopStills();   // run-26: still 定时器/alpha 收尾
+    stopStills();   // run-26: still 定时器/alpha 收尾 + run-31: 恢复原版 sprite
+    clearStillCaches();   // run-31: 清自定义 sprite/纹理缓存
     stopThanks();   // run-28: 共犯翻页定时器收尾
     restoreAncestors();
     creditState.armed = false;

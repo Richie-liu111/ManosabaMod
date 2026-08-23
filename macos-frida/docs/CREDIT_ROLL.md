@@ -10,8 +10,9 @@
 你的 mod 提供**静态数据**（名单 JSON），剧本用几个 `@set` 变量触发，加载器把名单填入
 游戏原版的致谢 UI 组件（staff 滚动 = CreditRollVerticalScroll，共犯 = SpecialThanks 翻页），
 并驱动原版节奏参数（bpm/拍数/滚动速度）在运行时播放。**内容（名单文本）全部来自你的
-数据文件；演出画面背景用的是游戏原版的致谢 CG（9 张 stills，当前版本不可替换）**；
-底色/转场/音乐由你的剧本自己编排（`@back`/`@bgm`，见下方示例）。
+数据文件；演出画面背景默认用游戏原版的致谢 CG，可在 data.json 配 `stills` 播放列表换成
+自己的图（见 §6；原版 9 张仅作兜底）**；底色/转场/音乐由你的剧本自己编排
+（`@back`/`@bgm`，见下方示例）。
 
 ## 2. 文件布局
 
@@ -64,7 +65,7 @@ ManosabaMod/<你的ModId>/
 ; ---- 后续（淡出回标题/进下段剧情, 自行编排） ----
 ```
 
-> `# EndCredits2` 标签：**原版模式**（trigger 值 = `"original"`，见 §7）播完原版全流程后
+> `# EndCredits2` 标签：**原版模式**（trigger 值 = `"original"`，见 §8）播完原版全流程后
 > 会跳回剧本的 `EndCredits2` 标签，剧本里保留一个同名空标签即可（缺失会报 label not found）。
 > 自定义模式下该标签无用但无害，示例中已包含。
 
@@ -156,11 +157,42 @@ zh-Hans 语种下加载器自动把标签字体换成简中动态字体（原版
 
 所以自定义时：**staff 写 data.json，共犯写 Assets/thanks-pages.json**，两者互不依赖。
 
-## 6. 变量协议速查
+## 6. data.json — stills 自定义播放列表（可选）
+
+致谢演出右侧背景图默认用游戏原版 9 张 CG。想换成自己的图：data.json **顶层**加 `stills` 段，
+**数组长度 = 播放张数**（想播几张播几张；超 9 张自动循环复用原版槽位，第 10 张换到第 1 张的位置）：
+
+```json
+"stills": [
+ { "file": "Assets/stills/01.png", "display": 12 },
+ { "file": "Assets/stills/02.png", "display": 10, "fadeIn": 2, "fadeOut": 2 }
+]
+```
+
+| 字段 | 含义 |
+|------|------|
+| `file` | 图片路径，相对 mod 根。**仅支持 PNG** |
+| `display` | 展示秒数（淡入完成 → 开始淡出）。缺省 = 原版节奏换算值 |
+| `fadeIn` / `fadeOut` | 淡入/淡出秒数。缺省 = 原版节奏换算值 |
+
+- 数组序 = 播放顺序；`stills` 段缺省/空数组 → 原版 9 张（行为不变）
+- 某条缺 `file` 或图片加载失败 → 该播放位置显示原版 CG（列表长度不变，不串位）
+- 全部字段可选：只配 `file` = 只换图不改节奏；缺省时长 = 原版节奏（首张延迟除外，始终用原版换算值）
+- **零时长有效**：`display: 0` = 展示完立即淡出；`fadeIn: 0` / `fadeOut: 0` 自动 clamp 到 200ms（防除零）
+- 播完 fadeout 收尾即黑（画面不保留）；图片**不分语种**，所有语言共用一套
+- **图片尺寸建议与原版一致（1347x925）**；异尺寸图实测（2026-08-23）可正常加载显示，
+  会被拉伸填充到原版展示区域（可能变形），不报错不串位 —— 想用异尺寸直接配即可，只是建议按原版规格出图
+- **播放时长配平**（实测注意）：stills 与 staff 滚动**并行**播放，phase 1 时长 = staff 滚动时长
+  （`g_staffDuration`）。stills 总时长超出滚动时长时，超出部分会被 phase 2（共犯翻页）接手、
+  不再播完（>9 张 × 原版 11.3s/张 时最常见）。要播完所有张数，由制作者自行配平：
+  调短每张 `display`，或调慢 `staff.speed` / 加大 `endPause` 拉长滚动时长
+- 演出结束（phase 3 / 中途中止）自动恢复原版 sprite，无残留
+
+## 7. 变量协议速查
 
 | 变量 | 谁写 | 含义 |
 |------|------|------|
-| `g_modCreditRoll` | 剧本写 | trigger：值 = json 文件名（或 `"original"` 见 §7）；成功→武装，失败→后续 phase 走安全时长（不悬挂） |
+| `g_modCreditRoll` | 剧本写 | trigger：值 = json 文件名（或 `"original"` 见 §8）；成功→武装，失败→后续 phase 走安全时长（不悬挂） |
 | `g_modCreditRollPhase` | 剧本写 | 1 = staff 滚动；2 = 共犯翻页+製作段；3 = 收尾 |
 | `g_staffDuration` | 控制器写 | phase 1 后 = staff 滚动+停留秒数（= 高度/speed + endPause） |
 | `g_thanksDuration` | 控制器写 | phase 2 后 = 共犯翻页总秒数（参考用，主流程靠轮询 g_creditDone） |
@@ -170,7 +202,7 @@ zh-Hans 语种下加载器自动把标签字体换成简中动态字体（原版
 防御行为（都是让你**不悬挂**）：未 trigger 直接 phase → 写安全时长 3s/5s；数据无效 → 同左；
 共犯/製作段 360s 超时兜底 → 强制写 `g_creditDone = 1`。
 
-## 7. 原版模式（可选）：直接用原版致谢
+## 8. 原版模式（可选）：直接用原版致谢(如果打算使用原版致谢，不如选择@credit 2)
 
 trigger 值写 `"original"` 不读 json，直接调原版 `CreditsUI.PlayAsync(2)` 播原版全流程
 （stills + 原版名单 + 原版 Special Thanks，内容/语种/节奏全原版）：
@@ -192,8 +224,9 @@ trigger 值写 `"original"` 不读 json，直接调原版 `CreditsUI.PlayAsync(2
 @set "g_modCreditRollPhase = 3"
 ```
 另两个内部值 `"extract"` / `"probe-thanks"` 是开发探针，mod 作者不用。
+不如直接用@credit 2
 
-## 8. 注意事项
+## 9. 注意事项
 
 1. **试验性**：演出依赖游戏原版 CreditsUI 场景结构与 CreditsDirectorAct2 运行时参数，
    游戏更新可能失效；失效时剧本不会崩（安全时长兜底），但演出不显示。
