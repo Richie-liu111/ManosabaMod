@@ -160,6 +160,8 @@ macOS 版的剧本结构与 Windows 版类似。
 | [macos-frida/README.md](macos-frida/README.md) | macOS 版完整使用说明(部署/开发/游戏目录定位) |
 | [macos-frida/ARCHITECTURE.md](macos-frida/ARCHITECTURE.md) | 架构、原理、与 Windows 版的差异、mod 兼容性 |
 | [macos-frida/GOALS.md](macos-frida/GOALS.md) | Windows vs macOS 功能对照与差距清单 |
+| [macos-frida/docs/CREDIT_ROLL.md](macos-frida/docs/CREDIT_ROLL.md) | 致谢演出教程:mod 作者如何自定义致谢(数据格式 + 剧本触发协议) |
+| [macos-frida/docs/语音历史回放.md](macos-frida/docs/语音历史回放.md) | 语音教程:让角色语音在历史回放(backlog)中重播(自动语音改造) |
 
 ## 致谢
 

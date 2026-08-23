@@ -147,3 +147,5 @@ GAME=/path/to/manosaba ./run_mod.sh # 游戏不在 Steam 默认位置时
 - 修复细节见 [GOALS.md](GOALS.md)「差距」5 / [ARCHITECTURE.md](ARCHITECTURE.md) 7.5。
 
 架构、工作原理、与 Windows 版差异、mod 格式兼容性详见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+mod 作者教程见 [docs/CREDIT_ROLL.md](docs/CREDIT_ROLL.md)（自定义致谢演出：数据格式 + 剧本触发协议）
+与 [docs/语音历史回放.md](docs/语音历史回放.md)（让角色语音可在历史回放重播）。

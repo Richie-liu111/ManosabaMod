@@ -468,7 +468,7 @@ function ensureRollFromAsset(assetComp, targetCls, checkFn, tag) {
         var cp = invokeOk(mi, ptr(0), [root]);
         if (!cp.ok || !cp.ret || cp.ret.isNull()) { warn("[v3][Credit] Instantiate FAIL (" + tag + ", 根='" + getGoName(root) + "')"); return false; }
         if (!comp.liveRoot || comp.liveRoot.isNull()) comp.liveRoot = cp.ret;
-        info("[v3][Credit] ⭐ prefab 资产 → 场景实例化副本 = " + cp.ret + " (根='" + getGoName(root) + "', " + tag + ")");
+        info("[v3][Credit] prefab 资产 → 场景实例化副本 = " + cp.ret + " (根='" + getGoName(root) + "', " + tag + ")");
         return collectAndCapture(cp.ret, targetCls, checkFn, tag + ".副本");
     } catch (e) { warn("[v3][Credit] ensureRollFromAsset err: " + e); return false; }
 }
@@ -904,7 +904,7 @@ function installThanksProbe() {
             }
         } catch (e3) { warn("[v3][Credit] 探针 ShowAsync hook err: " + e3); }
         thanksProbe.attached = true;
-        info("[v3][Credit] ⭐ 探针已挂 (SpecialThanksLabel.set_Text + Clear + ShowAsync — 逐行富文本 + 时序)");
+        info("[v3][Credit] 探针已挂 (SpecialThanksLabel.set_Text + Clear + ShowAsync — 逐行富文本 + 时序)");
         if (!thanksProbe.flushTimer) thanksProbe.flushTimer = setInterval(function () { try { thanksProbeFlush(); } catch (e4) {} }, 3000);
     } catch (e) { warn("[v3][Credit] installThanksProbe err: " + e); }
 }
@@ -927,7 +927,7 @@ function loadCreditData(path) {
         creditState.extract = (path === "extract" || path === "probe-thanks");   // run-30: probe-thanks 复用 extract 分支挂探针
         writeVar("g_creditDone", 0);   // run-19: trigger 即重置 — CustomVariableManager 变量持久化, 防上次会话残留 1
         if (creditState.extract) { writeVar("g_extractDone", 0); }
-        info("[v3][Credit] ⭐ trigger '" + path + "' → 原版复刻模式已武装 (phase=2 将调 CreditsUI.PlayAsync(2)" + (creditState.extract ? (path === "probe-thanks" ? " + 共犯完整数据探针" : " + 演出素材提取") : "") + ")");
+        info("[v3][Credit] trigger '" + path + "' → 原版复刻模式已武装 (phase=2 将调 CreditsUI.PlayAsync(2)" + (creditState.extract ? (path === "probe-thanks" ? " + 共犯完整数据探针" : " + 演出素材提取") : "") + ")");
         return true;
     }
     if (typeof MOD_ROOT === "undefined" || !MOD_ROOT) { warn("[v3][Credit] MOD_ROOT 未定义"); return false; }
@@ -1320,7 +1320,7 @@ function doStaff() {
                     }
                 } catch (e) {}
             }
-            info("[v3][Credit] staff 标签诊断 color[" + colorInfo.join(" | ") + "] pos[" + posInfo.join(" | ") + "]");
+            dbg("[v3][Credit] staff 标签诊断 color[" + colorInfo.join(" | ") + "] pos[" + posInfo.join(" | ") + "]");
         }
         // run-14: 字体换装来源改"完整简中动态字体" — run-13 实证 SpecialThanks_ZhHans 是静态子集字体
         //   (只含原版 zh 致谢文本字符 → "自动化"→"自化"、剧本全没、魔女裁判 MOD 制作→魔女 MOD; 缺字空白不渲染);
@@ -1360,7 +1360,7 @@ function doStaff() {
         }
         var setT = cgmChain(A.ogc(comp.labels[0].tmp), "set_text", 1);
         var setF = isZh ? cgmChain(A.ogc(comp.labels[0].tmp), "set_font", 1) : null;
-        var filled = 0, cleared = 0, matchedCount = 0;
+        var filled = 0, cleared = 0, matchedCount = 0, swappedCount = 0;
         deactivatedLabels = [];
         for (var i = 0; i < comp.labels.length; i++) {
             var lb = comp.labels[i];
@@ -1379,7 +1379,7 @@ function doStaff() {
                 if (zhFont && setF) {
                     var fr = invokeOk(setF, lb.tmp, [zhFont]);
                     if (!fr.ok) warn("[v3][Credit] set_font #" + i + " FAIL");
-                    else info("[v3][Credit] 标签 #" + i + " 字体换装: " + (lb.font || "?") + " → " + getFontName(lb.tmp));
+                    else swappedCount++;   // 逐条换装不再打日志 (222 条刷屏) — 循环后汇总
                 } else if (isZh && lb.font && lb.font.indexOf("Tsukushi") >= 0) {
                     warn("[v3][Credit] zh-Hans 文本写入标签 #" + i + " 但字体=" + lb.font + " (TsukushiMincho 无简中字形 → 可能显示 □)");
                 }
@@ -1395,7 +1395,7 @@ function doStaff() {
             }
             if (!r.ok) warn("[v3][Credit] set_text #" + i + " FAIL");
         }
-        info("[v3][Credit] staff 文本写入: " + filled + " 填 / " + cleared + " 清 (items 匹配 " + matchedCount + "/" + (itemMap ? Object.keys(itemMap).length : 0) + ", 标签 " + comp.labels.length + " 个, speed=" + speed + ", canvas active=" + cb + ")");
+        info("[v3][Credit] staff 文本写入: " + filled + " 填 / " + cleared + " 清 (items 匹配 " + matchedCount + "/" + (itemMap ? Object.keys(itemMap).length : 0) + ", 标签 " + comp.labels.length + " 个, 字体换装 " + swappedCount + " 个, speed=" + speed + ", canvas active=" + cb + ")");
         // 3. 同步强制布局 (N1): set_text 只标记 MarkLayoutForRebuild
         invoke(cgmChain(cls.layoutRebuilder, "ForceRebuildLayoutImmediate", 1), ptr(0), [comp.content]);
         invoke(cgmChain(cls.canvas, "ForceUpdateCanvases", 0), ptr(0), []);
@@ -1936,7 +1936,7 @@ function doStaff() {
 //[run-25-废弃] // 主入口: doPlayAsyncInvoke (PlayAsync 成功, 仍处主线程同步 hook) 后调用
 //[run-25-废弃] function extractStep() {
 //[run-25-废弃]     try {
-//[run-25-废弃]         info("[v3][Credit] ⭐ 素材提取开始 (stills PNG + SpecialThanks 名单 + staff 文本 + 时序)");
+//[run-25-废弃]         info("[v3][Credit] 素材提取开始 (stills PNG + SpecialThanks 名单 + staff 文本 + 时序)");
 //[run-25-废弃]         var d = comp.director;
 //[run-25-废弃]         if (!d || d.isNull()) { warn("[v3][Credit] extract: director 不可得"); writeVar("g_extractDone", 1); return; }
 //[run-25-废弃]         mkdirs(extractOutRoot());
@@ -2591,7 +2591,7 @@ function onSVV(a) {
             if (!str) { warn("[v3][Credit] trigger: g_modCreditRoll 值非字符串, 忽略"); return; }
             var ok = loadCreditData(str);
             creditState.armed = ok;   // json 无效 → 不 arm, phase 走安全时长
-            info("[v3][Credit] ⭐ trigger '" + str + "' → " + (ok ? "已武装" : "json 无效 (时间线将走安全默认时长)") +
+            info("[v3][Credit] trigger '" + str + "' → " + (ok ? "已武装" : "json 无效 (时间线将走安全默认时长)") +
                  " | 捕获状态: scroll=" + (comp.rollScroll ? "有" : "无") + " thanks=" + (comp.rollThanks ? "有" : "无") +
                  " dict=" + (comp.dictCls ? "有" : "无") + " ui=" + (comp.creditsUI ? "有" : "无"));
         } else if (name === "g_modCreditRollPhase") {
