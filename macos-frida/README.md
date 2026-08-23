@@ -136,7 +136,8 @@ GAME=/path/to/manosaba ./run_mod.sh # 游戏不在 Steam 默认位置时
 ## 已知问题 (2026-08-18)
 
 - **致谢演出复刻（2026-08-19+，试验性）**：macOS 版自研功能，**上游 Windows 版
-  ManosabaMod 无此功能**。静态数据驱动（`TestCredit/data.json` + `Assets/thanks-pages.json`），
+  ManosabaMod 无此功能**。静态数据驱动（`data.json` + `Assets/thanks-pages.json`，数据格式
+  见 [CREDIT_ROLL.md](docs/CREDIT_ROLL.md)），
   复刻原版致谢演出：staff 主名单滚动、原版 stills、共犯者 Special Thanks 36 屏翻页
   （zh 420 + ja 4544 合并名单）、製作・販売/Acacia/© 段滚动。**稳定性未经充分实测**，
   依赖原版 CreditsDirectorAct2 运行时参数（bpm/拍数/滚动速度）与 CreditsUI 场景结构。

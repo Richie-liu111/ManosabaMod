@@ -431,6 +431,6 @@ handler, 早于首个 wblog)。文件体积第一版不做轮转, `MOD_DEBUG=1` 
    无段间空档。mod 侧去掉 endPause/nani 预热等待/多余缓冲后, 全流程 ≈ 260s,
    在 5 分钟歌曲 (bloom) 结束前播完。
 
-**数据文件**: `ManosabaMod/TestCredit/data.json` (staff 222 条 + thanks 36 屏 +
-production 3 条) 与 `Assets/thanks-pages.json` — 生成/提取脚本在仓库外
-(`test-tools/`), 不随仓库分发。
+**数据文件**: mod 侧 `data.json` (staff 222 条 + thanks 36 屏 + production 3 条)
+与 `Assets/thanks-pages.json` (格式见 docs/CREDIT_ROLL.md) — 提取/生成脚本与测试 mod
+均在仓库外 (`test-tools/`), 不随仓库分发。

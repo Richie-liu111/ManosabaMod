@@ -104,8 +104,8 @@ ManosabaMod/<你的ModId>/
 - `Name_6|Line_1|Left` = 人名 6 号块、第 1 行、左栏标签
 - `Left|Name_7|_1` = 左栏人名 7 号块、第 1 个子槽
 
-**最稳做法**：打开 `TestCredit/data.json`（游戏目录 mod 里有完整原版 140 行条目），
-照抄 key、只改 text —— 不必自己发明槽位；要加新条目就复用一个同型 key。
+**最稳做法**：key 按上表模式复用即可，不必自己发明槽位 —— 新条目复用一个同型 key
+（`Full|Roll_N|` 与 `Name_6|Line_N|Left/Right` 是最常见的两类；连续条目用递增 N）。
 `text` 支持 Naninovel 富文本（`<size=0.8em>` 等）。
 
 **语种**：staff 下也可按语种分组（加载器回退链：当前语种 → `ja` → `zh-Hans` → 任意）：
@@ -114,7 +114,7 @@ ManosabaMod/<你的ModId>/
   "zh-Hans": [ { "key": "Full|Roll_1|", "text": "企划" } ],
   "ja":      [ { "key": "Full|Roll_1|", "text": "企画" } ] } }
 ```
-`items` 与语种数组二选一（`items` 优先；TestCredit 用的是 `items` 单语种）。
+`items` 与语种数组二选一（`items` 优先，也是最简单的写法）。
 zh-Hans 语种下加载器自动把标签字体换成简中动态字体（原版 TsukushiMincho 无简中字形）。
 
 ## 5. Assets/thanks-pages.json — 共犯者 Special Thanks
@@ -203,5 +203,5 @@ trigger 值写 `"original"` 不读 json，直接调原版 `CreditsUI.PlayAsync(2
    引擎级 API 只能在主线程同步 hook 里调 —— 这是本功能最重要的坑）。
 4. **phase 顺序**：严格 1 → 2 → 3；中途存档/读档回放时变量已持久化，加载器有防御（未武装的
    phase 直接写安全时长），但演出不会重放。
-5. 演出期间隐藏 UI/关闭 ProcessInput 等编排见 TestCredit 示例剧本（游戏目录
-   `ManosabaMod/TestCredit/Scripts/`），可直接抄。
+5. 演出期间隐藏 UI/关闭输入由你自己编排：进演出前 `@ProcessInput false` + `@HideUI ...`，
+   演出结束后用 `@ProcessInput true set:Continue.true,....` 恢复（Naninovel 标准用法）。
