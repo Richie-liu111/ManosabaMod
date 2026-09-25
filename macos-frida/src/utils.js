@@ -307,7 +307,7 @@ export function ensureItemIdsString(page, cls) {
             }
         } catch (e1) { ids = []; }
         // 回退: 从数组元素提取 (string 元素直接读; 对象元素读 _id 字段) — 仅当数组可读时
-        if (!ids.length && arr && !arr.isNull() && Memory.isReadable(arr)) {
+        if (!ids.length && arr && !arr.isNull() && Process.findRangeByAddress(arr)) {
             var len = arr.add(0x18).readS32();
             if (len > 0 && len < 100000) {
                 var elemCls = ptr(0), elemIsStr = false, idOff = 0x10;
@@ -376,6 +376,28 @@ export function findAllObjectOfType(cls) {
     } catch (e) { error("findAllObjectOfType err: " + e); return []; }
 }
 export function findFirstObjectOfType(cls) { var a = findAllObjectOfType(cls); return a.length ? a[0] : null; }
+// 同 findAllObjectOfType, 但用 Resources.FindObjectsOfTypeAll —— **包含未激活对象**。
+// 为什么需要: Unity 的 FindObjectsOfType 默认不含未激活对象, 而魔女图鉴的页面在未打开时是未激活状态
+// (书页与"出示证物"页还是两个不同实例) → 只枚举激活实例会漏掉游戏真正要渲染的那一个,
+// 于是"往页面字段里补字典"补到了别人身上 (2026-09-25 实证: 图鉴崩在 '10-1' v2, 而所有可见实例都不缺这个键)。
+export function findAllObjectOfTypeAll(cls) {
+    try {
+        var resCls = findClassAcrossImages("UnityEngine", "Resources");
+        if (!resCls || resCls.isNull()) return [];
+        var typeObj = A.tgo(A.cgt(cls));
+        var mia = A.cgm(resCls, Memory.allocUtf8String("FindObjectsOfTypeAll"), 1);
+        if (!mia || mia.isNull() || !mia.readPointer() || mia.readPointer().isNull()) return [];
+        var arr = invoke(mia, ptr(0), [typeObj]);
+        if (!arr || arr.isNull()) return [];
+        var len = arr.add(0x18).readS32();
+        var out = [];
+        for (var i = 0; i < len; i++) {
+            var e = arr.add(0x20 + i * 8).readPointer();
+            if (e && !e.isNull()) out.push(e);
+        }
+        return out;
+    } catch (e) { dbg("findAllObjectOfTypeAll err: " + e); return []; }
+}
 // List<T> 里是否已有 id。List 布局: _items(T[])@+0x10, _size(int)@+0x18, _version@+0x1C
 // 数组元素在 arr+0x20 (SZARRAY 数据区)
 export function listContainsId(list, id, idOff) {

@@ -427,6 +427,71 @@ string 指针的值是 `{len=8,"Mo"}` —— 即**一个 `System.String` 被当�
 ② 参考 7.5 那条"LRP 只被 JS 引用会被 GC 回收→悬垂指针"的同类教训。
 **待审同类点**: `state.js` 的 `wbPageDefaults[cls].defaultTex` (纹理指针, 只在首次捕获)、
 `wbData.texCache` (我们加载的 Texture2D 是否被游戏侧对象 root)。
+→ 上述两点已在同日处理: `defaultTex` 改为恢复面板时从活着的缩略图对象**现读**(不再缓存裸指针),
+`texCache` 由 `AddressablesManager._loadedAssets` 持有且会话重置时清空 (低风险, 保留)。
+
+### 7.9 覆写路径白做 + 整页重建的悬垂 item (A3/B3, 2026-09-25)
+
+**B3 — 覆写换血每轮重做**: `injectPage` 里"mod 定义的原版同 id"原先**逐 id** 调
+`clearModItemsFromPage` (该函数按 id 集合一趟做 5 步: map 删 / dict 删 / `_itemIds` 重建 /
+`_state` 删 / 清 `_currentItemId`), 而且**每次注入都重跑** —— 实测日志里 58 ms 内 30 趟、
+全会话 181 趟。修法:
+- **合批**: 一次收齐所有待换血 id, 只调一次 `clearModItemsFromPage`;
+- **幂等**: `isOverrideInPlace()` 用**三重地址身份** (页面实例 + 我们注入的条目地址 +
+  该条目持有的 `IdVersionPair` 地址) 判定"换血已完成" → 整条跳过 (不看版本号: mod 覆写的
+  版本号可能与原版相同, 版本号区分不了"原版残留"与"我们注入的");
+- 记账落在 `wbOverrides` (原先只写不读的死字段), 会话/剧本切换时 `resetWbOverrides()` 清空;
+- 副作用随之收敛: `_currentItemId = ""` 只在真正换血时执行一次, 不再每次注入清空选中项。
+
+**A3 — 快照 item 悬垂改为复用**: 整页重建 (见 7.8) 的快照里, `item` 指针会在游戏重建页面后悬垂。
+原先的处理是**丢弃**该条 (静默少一条原版条目)。现改为按 id 从 **Data 资产** (`readDataItemsIndex`)
+取回 item 复用 (版本号沿用快照值, 只换 item, 避免改变 map 里的版本集合), 取不到才丢弃并 warn。
+顺带 `isVanillaId` 支持传索引: profile 的 100 条 id 从"每条扫一遍 Data 列表 (≈1 万次读)"
+变成"一次建索引 (≈104 次读)"。
+
+### 7.10 图鉴打不开 — `IdVersionPair` 字典**按实例匹配** (2026-09-25, 与 7.8 同一现场)
+
+**现象**: 进 Gapless 剧本后魔女图鉴打不开, 每次点击都抛
+`KeyNotFoundException: The given key 'WitchTrials.Models.IdVersionPair' was not present in the dictionary.`,
+游戏随之中断打开流程; 同一加载器下 Twilight 剧本正常 (差别只是剧本 `@update` 激活了哪些键)。
+
+**定位手段 (备查, 以后 IL2CPP 无符号问题的标准打法)**:
+1. **运行时方法表**: 枚举全部 assembly 的 `il2cpp_class_get_methods`, 取每个 MethodInfo 的
+   代码指针 (第 1 个字段) 建"地址 → 类::方法"索引 (本作 12.5 万个方法), 再把异常栈的
+   `模块+偏移` 对回去 → 抛出帧 = `WitchTrials.Views.CluePage::RefreshPageContent +0x128`;
+2. **离线交叉验证**: `lipo -thin arm64` + `objdump -d` 看该函数的字段偏移用法;
+3. **直接问异常**: 挂 `System.ThrowHelper.GetKeyNotFoundException(key)` (缺键抛异常的唯一必经点)
+   读出缺失的键 —— 注意它是**静态方法**, Frida `onEnter` 里第一个形参在 **`a[0]`** 而非 `a[1]`;
+4. 备用: `KeyNotFoundException..ctor(string)` 打 message + 原生栈 (entry.js 的异常字段 dump
+   扫"指向 System.String 的字段", 因为 `A.cgn` 给的是**不带命名空间**的类名, 比较要用 `"String"`)。
+
+**根因 (两条叠加)**:
+1. 页面字典 `_localizedTextData` 是 `Dictionary<IdVersionPair, …>`, 它的匹配实际上**按实例**
+   (identity 哈希)。而 `restorePageFromData` 整页重建时用 `buildVanillaItem` **new 了等价实例**
+   当 `_idVersionPair` → 游戏拿 `map.IdVersionPair` 查字典必然 MISS。我们注入的 mod 条目之所以
+   一直没事, 是因为注入时 map 条目的 ivp 与字典键**用的是同一个实例**。
+2. 我们判断"键在不在"用的是**值相等**扫描 ⇒ 全部误报"存在" ⇒ 每一层自愈都静默跳过。
+   雪上加霜: .NET `Dictionary` 的 `Remove` 只把 `Entry.hashCode` 置 **-1**, **键的指针留在数组里**
+   → 已删除条目的残留也被值相等扫描当成存在。
+
+**修法**:
+- `session.js` 新增 `dictFindKeyInstance(dict, id, ver)`: 从字典自己的 entries 里取该 (id,ver) 的
+  **键实例** (含已删除残留 —— 键指针仍在, 且正是游戏用过的实例, 由字典持有**不会悬空**);
+- `restorePageFromData` 重建的 map 条目把 `_idVersionPair` **指向该键实例**;
+- `writeLocalizedDictEntry()` 写字典前**先复用字典已有的键实例**, 并从函数返回它
+  (调用方用它做端到端核对);
+- `dictHasIdVer()` / `getFirstDictValue()` 加 **`hashCode >= 0`** 的存活判定
+  (插入时 `hashCode = GetHashCode(key) & 0x7FFFFFFF` 必为非负, 负数只可能是已删除);
+- 兜底 (dictheal.js): 每次注入末尾按 `_state` 逐个核对"将要渲染的键", 缺的从游戏 Data 重建
+  (`healStateKeys`) —— mod 条目用 mod 文本, 原版条目用该条 item 的 `LocalizedText`, 取不到只 warn。
+
+**副作用 / 经验**:
+- "值相等"这个假设此前散布在 6 处判定里, 全部按"实例语义"重审;
+- **诊断代码必须永不静默**: 本轮多跑好几轮的原因是自己的过滤条件/API 用错之后被 `try` 吞掉
+  (例: 为防字典串台加的"按页面实例过滤"恰好挡住真正被查的"方法内局部字典";
+  `Memory.isReadable` 在本版 Frida 不存在 → 扫描函数整体抛错被吞);
+- 取证用的 hook (get_Item 兜底 / 渲染前补字典 / ThrowHelper 取证 / 寄存器与栈扫描) 在确认修复后
+  **已全部删除**, 生产包只保留"注入末尾按 `_state` 补全"这一条主干。
 
 ## 八、日志系统 (2026-08-10 引入)
 

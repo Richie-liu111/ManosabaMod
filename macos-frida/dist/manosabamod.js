@@ -1,5 +1,5 @@
 📦
-36048 /src/entry.js
+40439 /src/entry.js
 1938 /src/banner.js
 5796 /src/chapterdisplay.js
 83411 /src/choice.js
@@ -12,13 +12,14 @@
 5211 /src/movie.js
 15229 /src/providers.js
 13453 /src/scripttext.js
-25191 /src/utils.js
+26595 /src/utils.js
 21084 /src/witchbook/characters.js
 14658 /src/witchbook/data.js
-18944 /src/witchbook/index.js
-19689 /src/witchbook/pages.js
-35785 /src/witchbook/session.js
-1843 /src/witchbook/state.js
+6919 /src/witchbook/dictheal.js
+18994 /src/witchbook/index.js
+26690 /src/witchbook/pages.js
+43343 /src/witchbook/session.js
+2673 /src/witchbook/state.js
 6346 /src/witchbook/textures.js
 ✄
 import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, wblog } from "./utils.js";
@@ -462,12 +463,36 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                     }
                     return s;
                 }
-                try {
-                    var full = collectUtf16(0x14, 2000);
-                    if (full)
-                        logLevel(level, "[v3] " + tag + " FULL: " + full);
+                // 异常对象另当别论: 它的字符串成员是**引用** (_message / _stackTraceString),
+                // 直接读对象内存只会读到 _className 一个字符串的内容 (之前的 '歀惠' 就是这么来的)。
+                // 这里扫实例里的字符串字段指针 (偏移随 IL2CPP/Unity 版本有出入 → 按"指向 System.String"
+                // 识别, 不硬编码): 能拿到异常 message (含缺失的字典键) 与托管栈 (含抛出的方法名)。
+                var isExc = cn && cn.indexOf("Exception") >= 0;
+                if (isExc) {
+                    for (var eo = 0x10; eo <= 0x50; eo += 8) {
+                        try {
+                            var sp = obj.add(eo).readPointer();
+                            if (sp.isNull() || !Process.findRangeByAddress(sp))
+                                continue;
+                            var spc = A.cgn(A.ogc(sp));
+                            // 注意: A.cgn 给的是**不带命名空间**的类名 → 是 "String" 而不是 "System.String"
+                            if (!spc || spc.isNull() || spc.readCString() !== "String")
+                                continue;
+                            var stxt = readStr(sp);
+                            if (stxt)
+                                logLevel(level, "[v3] " + tag + " [+0x" + eo.toString(16) + "] " + stxt);
+                        }
+                        catch (e5) { }
+                    }
                 }
-                catch (e) { }
+                else {
+                    try {
+                        var full = collectUtf16(0x14, 2000);
+                        if (full)
+                            logLevel(level, "[v3] " + tag + " FULL: " + full);
+                    }
+                    catch (e) { }
+                }
                 // 移除多偏移 UTF-16 尝试 (0x08/0x10/0x18/0x0C): C# 字符串是引用类型,
                 // 直接从对象实例内存读 UTF-16 是错的 — 读到的全是垃圾 (如 KeyNotFoundException
                 // 日志里的 '歀惠' 是误读, 无意义). 必要信息已在 hex + class + full 中.
@@ -519,6 +544,59 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         }
         catch (e) {
             dbg("[v3] Debug hook err: " + e);
+        }
+        // KeyNotFoundException 抛出点诊断 (2026-09-25 图鉴打不开时加的取证):
+        // 异常对象的字段布局在 macOS IL2CPP 上与 Windows dump 不完全一致 (读实例内存拿不稳 message),
+        // 所以在**构造那一刻**抓参数 —— 消息 + 原生调用栈 (模块+偏移, 可离线 objdump 对回去)。
+        // 只在真抛异常时触发, 无常态开销。
+        try {
+            var knfCls = null;
+            var knfNames = [["System.Collections.Generic", "KeyNotFoundException"], ["System", "KeyNotFoundException"]];
+            for (var ki = 0; ki < allImgs.length && !knfCls; ki++) {
+                for (var kj = 0; kj < knfNames.length; kj++) {
+                    try {
+                        var kc = A.cfn(allImgs[ki], Memory.allocUtf8String(knfNames[kj][0]), Memory.allocUtf8String(knfNames[kj][1]));
+                        if (kc && !kc.isNull()) {
+                            knfCls = kc;
+                            break;
+                        }
+                    }
+                    catch (eK) { }
+                }
+            }
+            if (!knfCls)
+                dbg("[v3] KeyNotFoundException 类未找到");
+            else {
+                for (var ka = 0; ka <= 2; ka++) {
+                    var kmi = A.cgm(knfCls, Memory.allocUtf8String(".ctor"), ka);
+                    if (!kmi || kmi.isNull())
+                        continue;
+                    (function (narg) {
+                        Interceptor.attach(kmi.readPointer(), {
+                            onEnter: function (args) {
+                                try {
+                                    var msg = (narg >= 1) ? readStr(args[1]) : "<无参 ctor>";
+                                    var bt = Thread.backtrace(this.context, Backtracer.ACCURATE).slice(0, 6).map(function (a) {
+                                        try {
+                                            var md = Process.findModuleByAddress(a);
+                                            return md ? (md.name + "+0x" + a.sub(md.base).toString(16)) : a.toString();
+                                        }
+                                        catch (eB) {
+                                            return "?";
+                                        }
+                                    }).join(" ← ");
+                                    wblog("KeyNotFoundException 抛出 (argc=" + narg + "): " + msg + " | 栈: " + bt);
+                                }
+                                catch (eM) { }
+                            }
+                        });
+                    })(ka);
+                }
+                dbg("[v3] KeyNotFoundException ctor hook 完成");
+            }
+        }
+        catch (e) {
+            dbg("[v3] KeyNotFoundException hook err: " + e);
         }
         // Movie 支持钩子 (URL 流式)
         setupMovieHooks();
@@ -9072,7 +9150,7 @@ export function ensureItemIdsString(page, cls) {
             ids = [];
         }
         // 回退: 从数组元素提取 (string 元素直接读; 对象元素读 _id 字段) — 仅当数组可读时
-        if (!ids.length && arr && !arr.isNull() && Memory.isReadable(arr)) {
+        if (!ids.length && arr && !arr.isNull() && Process.findRangeByAddress(arr)) {
             var len = arr.add(0x18).readS32();
             if (len > 0 && len < 100000) {
                 var elemCls = ptr(0), elemIsStr = false, idOff = 0x10;
@@ -9165,6 +9243,36 @@ export function findAllObjectOfType(cls) {
     }
 }
 export function findFirstObjectOfType(cls) { var a = findAllObjectOfType(cls); return a.length ? a[0] : null; }
+// 同 findAllObjectOfType, 但用 Resources.FindObjectsOfTypeAll —— **包含未激活对象**。
+// 为什么需要: Unity 的 FindObjectsOfType 默认不含未激活对象, 而魔女图鉴的页面在未打开时是未激活状态
+// (书页与"出示证物"页还是两个不同实例) → 只枚举激活实例会漏掉游戏真正要渲染的那一个,
+// 于是"往页面字段里补字典"补到了别人身上 (2026-09-25 实证: 图鉴崩在 '10-1' v2, 而所有可见实例都不缺这个键)。
+export function findAllObjectOfTypeAll(cls) {
+    try {
+        var resCls = findClassAcrossImages("UnityEngine", "Resources");
+        if (!resCls || resCls.isNull())
+            return [];
+        var typeObj = A.tgo(A.cgt(cls));
+        var mia = A.cgm(resCls, Memory.allocUtf8String("FindObjectsOfTypeAll"), 1);
+        if (!mia || mia.isNull() || !mia.readPointer() || mia.readPointer().isNull())
+            return [];
+        var arr = invoke(mia, ptr(0), [typeObj]);
+        if (!arr || arr.isNull())
+            return [];
+        var len = arr.add(0x18).readS32();
+        var out = [];
+        for (var i = 0; i < len; i++) {
+            var e = arr.add(0x20 + i * 8).readPointer();
+            if (e && !e.isNull())
+                out.push(e);
+        }
+        return out;
+    }
+    catch (e) {
+        dbg("findAllObjectOfTypeAll err: " + e);
+        return [];
+    }
+}
 // List<T> 里是否已有 id。List 布局: _items(T[])@+0x10, _size(int)@+0x18, _version@+0x1C
 // 数组元素在 arr+0x20 (SZARRAY 数据区)
 export function listContainsId(list, id, idOff) {
@@ -10032,6 +10140,136 @@ export function injectVersions(list, addMi, vItemCls, cat, id, rec, page) {
 }
 
 ✄
+// ============ 页面字典补全 (WitchBook 5 个页面的 _localizedTextData) ============
+// 背景 (2026-09-25 图鉴打不开的根因, 已实证):
+//   页面字典 `_localizedTextData` 是 `Dictionary<IdVersionPair, …>`, 而 IdVersionPair 的**实际匹配是
+//   按实例**的 (identity 哈希): 我们自己 new 一个"值相等"的 IdVersionPair 去当键, 游戏的查询**查不到**。
+//   两个后果:
+//     ① 整页重建 (restorePageFromData) 时用新建的包装对象替换原版条目 → 游戏拿 map.IdVersionPair 查字典
+//        必然 MISS → KeyNotFoundException → 一打开图鉴就抛 (实证 id='10-1' version=2)。
+//     ② 我们所有"键在不在"的判定基于值相等 → 全部误报"存在" → 每一层自愈都静默跳过。
+//   修法见 session.js: buildVanillaItem 侧沿用字典里的键实例 + writeLocalizedDictEntry 内部优先复用
+//   字典已有的键实例。本模块只保留"缺了就补"的那一条主干 (补时同样复用键实例, 所以补得上)。
+// 顺带记录的第二个坑: .NET Dictionary 的 Remove 只把 Entry.hashCode 置 -1, **键的指针留在数组里**
+//   → 只看键会把这些"已删除残留"当成存在 (dictHasIdVer 已按 hashCode >= 0 判定存活)。
+import { A, fieldOffset, findAllObjectOfType, findClassAcrossImages, getGenericArgClass, invokeBool, readStr, wblog, warn, error } from "../utils.js";
+import { wbCls, wbData } from "./state.js";
+import { isCurrentModItem, makeIdVersionPair, wbCats } from "./data.js";
+import { dictHasIdVer, readDataItemsIndex, writeLocalizedDictEntry } from "./session.js";
+import { registerLocalizedDict } from "./pages.js"; // 循环引用安全: 只在函数内调用
+// MapPage 的分类描述 (locKind="str" → 字典值是字符串; MapDataItem._buttonText @0x10 = LocalizedText[])
+var MAP_SPEC = { name: "map", page: "MapPage", data: "MapData", locOff: 0xC0, locKind: "str", mapOnly: true };
+// 页面规格: 受管 4 分类 (wbCats) + Map (mod 不提供 Map 数据, 但它的字典同为 IdVersionPair 键)
+function pageSpecs() {
+    var out = [];
+    var names = Object.keys(wbCats);
+    for (var i = 0; i < names.length; i++) {
+        var cat = wbCats[names[i]];
+        out.push({ cat: cat, key: cat.name, pageCls: wbCls.pages[cat.name], locOff: cat.locOff, dataCls: wbCls.datas[cat.name] });
+    }
+    try {
+        if (wbCls.mapPage === undefined)
+            wbCls.mapPage = findClassAcrossImages("WitchTrials.Views", MAP_SPEC.page);
+        if (wbCls.mapData === undefined)
+            wbCls.mapData = findClassAcrossImages("WitchTrials.Models", MAP_SPEC.data);
+        if (wbCls.mapPage && !wbCls.mapPage.isNull()) {
+            out.push({ cat: MAP_SPEC, key: "map", pageCls: wbCls.mapPage, locOff: MAP_SPEC.locOff, dataCls: wbCls.mapData, mapOnly: true });
+        }
+    }
+    catch (e) { }
+    return out;
+}
+// 从分类的 Data 资产取 (id, ver) 的 item; 版本对不上时退回该 id 的第一条并告警 (数据不一致)
+var _approxWarned = {};
+function pickDataItem(dataCls, cat, id, ver) {
+    var idx = readDataItemsIndex(cat, dataCls);
+    if (!idx)
+        return null;
+    var exact = idx.byVer[id + "@" + ver];
+    if (exact && !exact.isNull())
+        return exact;
+    var first = idx.first[id];
+    if (first && !first.isNull()) {
+        var k = cat.name + "/" + id;
+        if (!_approxWarned[k]) {
+            _approxWarned[k] = 1;
+            warn(cat.name + " '" + id + "' 数据里没有 v" + ver + ", 退回第一条 (版本号对不上)");
+        }
+        return first;
+    }
+    return null;
+}
+// 补一个键: mod 条目用 mod 文本 (与注入同一来源), 原版条目从游戏自己的 Data 重建该条 item 的本地化文本
+export function healDictKey(dict, spec, id, ver, ivp) {
+    try {
+        if (!dict || dict.isNull() || !id)
+            return false;
+        if (dictHasIdVer(dict, id, ver))
+            return false;
+        var pages = spec.pageCls ? findAllObjectOfType(spec.pageCls) : [];
+        var page = pages.length ? pages[0] : null;
+        if (!page)
+            return false;
+        if (!spec.mapOnly && isCurrentModItem(spec.cat, id)) {
+            var cur = page.add(fieldOffset(spec.pageCls, "_localizedTextData", spec.locOff)).readPointer();
+            if (cur.equals(dict)) {
+                wblog("[WitchBook] " + spec.key + " 字典缺键 → 用 mod 文本补: '" + id + "' v" + ver);
+                registerLocalizedDict(page, { cat: spec.cat, id: id, ver: ver, ivp: ivp && !ivp.isNull() ? ivp : makeIdVersionPair(id, ver) });
+                return true;
+            }
+        }
+        // 原版条目 (或 Map / 非本页面的字典): 从 Data 取回该条 item 重建
+        var item = pickDataItem(spec.dataCls, spec.cat, id, ver);
+        if (!item || item.isNull()) {
+            warn(spec.key + " 字典缺键 '" + id + "' v" + ver + " 且数据里没有这条 (数据本身对不上)");
+            return false;
+        }
+        wblog("[WitchBook] " + spec.key + " 字典缺键 → 从 " + spec.cat.name + " 数据重建: '" + id + "' v" + ver);
+        var usedKey = writeLocalizedDictEntry(page, spec.pageCls, spec.cat, id, ver, item, ivp && !ivp.isNull() ? ivp : makeIdVersionPair(id, ver), dict);
+        // 端到端核对: 用"实际写进去的那个键实例"问一次字典 —— 匹配是按实例的, 值相等不算数
+        try {
+            var ck = A.cgm(A.ogc(dict), Memory.allocUtf8String("ContainsKey"), 1);
+            if (ck && !ck.isNull() && usedKey && !usedKey.isNull()) {
+                wblog("[WitchBook] " + spec.key + " 补后核对 ContainsKey=" + invokeBool(ck, dict, [usedKey]));
+            }
+        }
+        catch (e4) { }
+        return true;
+    }
+    catch (e) {
+        error("healDictKey(" + spec.key + ") err: " + e);
+        return false;
+    }
+}
+// 每次注入末尾: 把该页 `_state` 里"将要渲染的键"逐个核对, 缺就补 (mod 条目用 mod 文本, 原版从 Data 重建)。
+// 渲染门槛就是 _state, 所以这层足够覆盖"游戏接下来会查的键"; 也是本轮 KNF 的正式兜底。
+export function healStateKeys(page, cat) {
+    try {
+        var spec = null, specs = pageSpecs();
+        for (var i = 0; i < specs.length; i++)
+            if (specs[i].key === cat.name) {
+                spec = specs[i];
+                break;
+            }
+        if (!spec || !spec.pageCls || spec.pageCls.isNull())
+            return 0;
+        var dict = page.add(fieldOffset(spec.pageCls, "_localizedTextData", spec.locOff)).readPointer();
+        if (dict.isNull())
+            return 0;
+        var stMap = (wbData.states || {})[cat.name] || {};
+        var n = 0;
+        for (var id in stMap)
+            if (healDictKey(dict, spec, id, stMap[id] | 0, null))
+                n++;
+        return n;
+    }
+    catch (e) {
+        error("healStateKeys err: " + e);
+        return 0;
+    }
+}
+
+✄
 // ============ WitchBook 组装域: 类解析 / hook 挂载 / 注入编排 ============
 // 链路: @update 命令 → IWitchBookUi.UpdateVersion → WitchBookScreen.UpdateVersion → CluePage.UpdateVersion
 //   → _state.SetVersion。原版对 _itemIds 之外的 id 不处理, 且 _loadedDataItemMap/_localizedTextData
@@ -10046,7 +10284,7 @@ export function injectVersions(list, addMi, vItemCls, cat, id, rec, page) {
 //      _subjectLabel/_descriptionLabel/_thumbnail (绕开 _localizedTextData 的 KeyNotFoundException)。
 // 数据来源: 运行时读 <MOD_ROOT>/<modKey>/info.json 的 Clues 字段 + 扫 WitchBook/Clues/*.png。
 import { A, dbg, ensureItemIdsString, fieldOffset, findAllObjectOfType, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, wblog, error, warn } from "../utils.js";
-import { initCatStateMaps, setWbCls, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbPrevMod } from "./state.js";
+import { initCatStateMaps, resetWbOverrides, setWbCls, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbPrevMod } from "./state.js";
 import { isCurrentModItem, loadWitchBookData, wbCatByIdx, wbCats } from "./data.js";
 import { clearAllWitchBookPages, clearBookViaVanilla, detectCurrentMod, findAllPages, hookClearState, rebuildAllPages } from "./session.js";
 import { injectPage, hookRefreshLocalized } from "./pages.js";
@@ -10223,6 +10461,7 @@ export function tryInjectWitchBook() {
             wbData.states = {};
             wbData.pendingStates = {};
             initCatStateMaps();
+            resetWbOverrides();
             setWbPrevMod(wbCurrentMod);
             wblog("mod 切换 → 整页重建 + 状态重置, 注入范围: " + (wbCurrentMod ? "'" + wbCurrentMod + "'" : "无"));
         }
@@ -10386,11 +10625,12 @@ export function onWitchBookUpdate(args) {
 
 ✄
 // ============ WitchBook 页面注入域: 注入 Page._loadedDataItemMap + _itemIds + _state + 本地化字典预填 ============
-import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, getGenericArgClass, getSystemClass, invokeBool, invokeOk, listContainsId, makeS, readStr, wblog, dbg, error, warn } from "../utils.js";
+import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, findAllObjectOfTypeAll, getGenericArgClass, getSystemClass, invokeBool, invokeOk, listContainsId, makeS, readStr, wblog, dbg, error, warn } from "../utils.js";
 import { fileExists } from "../io.js";
 import { wbCls, wbData, wbOverrides } from "./state.js";
 import { currentModIds, fullLocaleTags, injectVersions, isCurrentModItem, localeValue, pickLocaleText, resolveLocale, wbCats } from "./data.js";
-import { clearModItemsFromPage, isVanillaId } from "./session.js";
+import { clearModItemsFromPage, dictHasIdVer, isVanillaId, readDataItemsIndex } from "./session.js";
+import { healStateKeys } from "./dictheal.js"; // 循环引用安全: 只在函数内调用
 // 旗标文件 <MOD_ROOT>/.wb_no_override 存在 → 跳过"原版同 id 覆写" (= 上游 AddRichCharacter 语义)。
 // 用于 A/B 定位覆写机制是否与崩溃相关; 缓存在首次调用时读一次 (旗标只在启动前有意义)。
 var _wbNoOverride = null;
@@ -10406,6 +10646,52 @@ function wbNoOverride() {
             wblog("WB_NO_OVERRIDE 生效: 跳过原版同 id 覆写 (改名失效)");
     }
     return _wbNoOverride;
+}
+// VersionedItem<TImage> 的 _id / _idVersionPair 偏移 (按类缓存; 类在会话内不变)
+var _viOffCache = {};
+function viOffsets(vItemCls) {
+    var k = vItemCls.toString(), o = _viOffCache[k];
+    if (!o) {
+        o = { id: fieldOffset(vItemCls, "_id", 0x10), ivp: fieldOffset(vItemCls, "_idVersionPair", 0x28) };
+        _viOffCache[k] = o;
+    }
+    return o;
+}
+// 在 _loadedDataItemMap 里找第一个 _id === id 的条目 (返回 VersionedItem 指针; 未命中返回 null)
+function findMapEntryPtr(mapList, id, off) {
+    try {
+        var cnt = mapList.add(0x18).readS32(), arr = mapList.add(0x10).readPointer();
+        if (arr.isNull() || cnt < 0 || cnt > 100000)
+            return null;
+        for (var i = 0; i < cnt; i++) {
+            var e = arr.add(0x20 + i * 8).readPointer();
+            if (e.isNull())
+                continue;
+            if (readStr(e.add(off.id).readPointer()) === id)
+                return e;
+        }
+    }
+    catch (e) { }
+    return null;
+}
+// 覆写换血的幂等判定: 页面 map 里该 id 的那条, 是不是我们上一轮换血注入的那一个?
+// 用地址身份而不是版本号 —— mod 覆写的版本号可能与原版完全相同, 版本号区分不了"原版残留"与"我们注入的"。
+// 三重身份 (条目地址 + 条目持有的 IdVersionPair 地址 + 页面实例地址) 同时被复用才可能误判, 实际不可能。
+// 命中即证明: 原版条目已让位 + 我们的条目在位 → 本轮无需再删再添 (B3)。
+function isOverrideInPlace(cat, id, page, mapList, off) {
+    var rec = wbOverrides[cat.name][id];
+    if (!rec || rec.page !== page.toString())
+        return false;
+    var e = findMapEntryPtr(mapList, id, off);
+    if (!e)
+        return false;
+    return e.toString() === rec.e && e.add(off.ivp).readPointer().toString() === rec.ivp;
+}
+// 记账 (地址只做身份比较, 不解引用; 条目由 map 持有 → 只要还命中就必然存活)
+function markOverrideInPlace(cat, id, page, mapList, off) {
+    var e = findMapEntryPtr(mapList, id, off);
+    if (e)
+        wbOverrides[cat.name][id] = { page: page.toString(), e: e.toString(), ivp: e.add(off.ivp).readPointer().toString() };
 }
 // 2) 注入 Page._loadedDataItemMap + _itemIds + _state
 export function injectPage(cat) {
@@ -10426,12 +10712,20 @@ export function injectPage(cat) {
             var vItemCls = getGenericArgClass(listCls, 0);
             var addMi = A.cgm(listCls, Memory.allocUtf8String("Add"), 1);
             if (!vItemCls.isNull() && addMi && !addMi.isNull()) {
-                var idOff2 = fieldOffset(vItemCls, "_id", 0x10);
+                var off2 = viOffsets(vItemCls);
+                var idOff2 = off2.id;
                 var ids = currentModIds(cat), added = 0, overrideIds = [];
+                var oSet = {}, pending = [];
+                // 原版 id 判定一次建索引 (否则每条 id 都扫一遍 Data._items: profile 100 条 × 104 = 上万次读)
+                var vanillaIdx = readDataItemsIndex(cat);
+                // 第一趟: 分类。① 上一轮换血的结果仍在位 → 整条跳过 (幂等, 见 isOverrideInPlace)
+                //          ② 原版同 id → 收进 oSet 待换血  ③ 其余 → 待注入
                 for (var i = 0; i < ids.length; i++) {
                     var id = ids[i];
+                    if (isOverrideInPlace(cat, id, page, mapList, off2))
+                        continue;
                     // override: mod 定义的原版同 id → 移除原版条目再注入 mod 版 (镜像 Windows)
-                    if (isVanillaId(cat, id)) {
+                    if (isVanillaId(cat, id, vanillaIdx)) {
                         // WB_NO_OVERRIDE (旗标文件 <MOD_ROOT>/.wb_no_override): 跳过覆写, 等价上游
                         // ModResourceLoader.AddRichCharacter 的 ContainsId→return (mod 的改名失效, 原版数据不动)。
                         // 用途: A/B 判断覆写机制是否为崩溃触发点; 也是可发布的规避方案。
@@ -10439,15 +10733,24 @@ export function injectPage(cat) {
                             dbg("[WitchBook] WB_NO_OVERRIDE: 跳过原版同 id 覆写 '" + id + "'");
                             continue;
                         }
-                        var oSet = {};
                         oSet[id] = 1;
-                        clearModItemsFromPage(page, pageCls, oSet);
-                        wbOverrides[cat.name][id] = true;
                         overrideIds.push(id);
                     }
-                    if (listContainsId(mapList, id, idOff2))
+                    pending.push(id);
+                }
+                // 换血合批: clearModItemsFromPage 本就按 id 集合做一趟 (map/dict/_itemIds/_state),
+                // 那就传集合调一次, 而不是逐 id 各跑一趟 (旧实现 profile 15 条覆写 = 15 趟 × 每次注入)。
+                if (overrideIds.length)
+                    clearModItemsFromPage(page, pageCls, oSet);
+                // 第二趟: 注入 (原版同 id 的条目此时已让位; 其余 id 由 contains 门控)
+                for (var j = 0; j < pending.length; j++) {
+                    var pid = pending[j];
+                    if (listContainsId(mapList, pid, idOff2))
                         continue;
-                    added += injectVersions(mapList, addMi, vItemCls, cat, id, wbData[cat.name][id], page);
+                    var n = injectVersions(mapList, addMi, vItemCls, cat, pid, wbData[cat.name][pid], page);
+                    if (n > 0 && oSet[pid])
+                        markOverrideInPlace(cat, pid, page, mapList, off2);
+                    added += n;
                 }
                 // 聚合日志 (替代每条 override 一行): 仅 1 条 INFO 覆盖整页 override 情况
                 if (overrideIds.length)
@@ -10459,11 +10762,48 @@ export function injectPage(cat) {
         ensureItemIdsString(page, pageCls); // macOS: Graphic[]/Canvas[] → String[] (游戏 Contains 才不炸)
         appendItemIds(page, cat);
         applyStates(page, cat);
+        ensureStateEntriesDict(page, cat);
         return true;
     }
     catch (e) {
         error("injectPage err(" + cat.name + "): " + e);
         return false;
+    }
+}
+// 字典自愈 (每次注入末尾): 游戏 LoadDataAsync 会在我们注入之后重建页面, 我们写进 _localizedTextData
+// 的条目会随之丢失 → 游戏查 _localizedTextData[map.IdVersionPair] 时 KeyNotFoundException
+// (index.js 文件头记的"无预填 → KeyNotFound"是同一个坑)。
+// 这里只核对"会被渲染的条目"—— 即 _state 里已设过版本的 id (通常十几条) —— 缺键就补:
+// 开销可忽略, 而漏补的后果是整个图鉴打不开。渲染前的兜底还有 RefreshPageContent hook (见下)。
+var _lastDictCnt = {}; // catName -> 上次注入后看到的字典条目数 (用于观察游戏是否重建过字典)
+export function ensureStateEntriesDict(page, cat) {
+    try {
+        var pageCls = wbCls.pages[cat.name];
+        var outer = page.add(fieldOffset(pageCls, "_localizedTextData", cat.locOff)).readPointer();
+        if (outer.isNull())
+            return 0;
+        // 观察点: 字典条目数比上次注入后还少 ⇒ 游戏在我们注入之后重建过它 (取证的直接证据)
+        try {
+            var cnt = outer.add(0x20).readS32();
+            var prev = _lastDictCnt[cat.name];
+            if (prev !== undefined && cnt < prev)
+                wblog(cat.name + "._localizedTextData 由 " + prev + " 条降到 " + cnt + " 条 (游戏重建过)");
+            _lastDictCnt[cat.name] = cnt;
+        }
+        catch (e0) { }
+        var stMap = wbData.states[cat.name] || {};
+        if (!Object.keys(stMap).length)
+            return 0;
+        // 核对"页面即将渲染的键"(_state 里的每条): mod 条目用 mod 文本, 原版条目从游戏 Data 重建。
+        // 旧实现只补 mod 条目 (非 mod 直接 continue) —— 原版键缺了不管, 那正是 2026-09-25 图鉴打不开的原因。
+        var fixedN = healStateKeys(page, cat);
+        if (fixedN)
+            wblog(cat.name + "._localizedTextData 补填 " + fixedN + " 条 (游戏重建过字典)");
+        return fixedN;
+    }
+    catch (e) {
+        error("ensureStateEntriesDict err: " + e);
+        return 0;
     }
 }
 // 向 _itemIds (string[]) 追加纯新 mod ID (原版 UpdateVersion 检查 Contains)
@@ -10500,7 +10840,12 @@ export function appendItemIds(page, cat) {
         for (var i = 0; i < newIds.length; i++)
             arr.add(0x20 + i * 8).writePointer(makeS(newIds[i]));
         page.add(idsField).writePointer(arr);
-        wblog(cat.name + "Page._itemIds: +" + appended + " 纯新 ID, 共 " + newIds.length);
+        // 条目数 vs 唯一数: 同一 id 的多个版本在 _itemIds 里各占一条 (游戏自身也是按 map 条目记的),
+        // 所以"有重复"本身不代表有重复按钮。打出来是为了下次运行时能直接核对 (A4)。
+        var uniq = {};
+        for (var u = 0; u < newIds.length; u++)
+            uniq[newIds[u]] = 1;
+        wblog(cat.name + "Page._itemIds: +" + appended + " 纯新 ID, 共 " + newIds.length + " (唯一 " + Object.keys(uniq).length + ")");
     }
     catch (e) {
         error("appendItemIds err: " + e);
@@ -10536,7 +10881,17 @@ export function applyStates(page, cat) {
             }
         }
         wbData.pendingStates[cat.name] = {};
-        wblog(cat.name + "Page 状态应用 " + applied + " 条");
+        // 顺带回报 _state._list 的条目数 (B2 待确认项: SetVersion 是否真的写进了 _list。
+        // 源码结构: VersionedState 只有 _list 一个存储字段 (List<IdVersionPair>, 各分类 State 无额外字段),
+        // 所以"应用 N 条但 _list 恒为 0"只可能是读到别的实例/时机, 这条日志可以一次性判定。)
+        var listN = -1;
+        try {
+            var stList2 = state.add(fieldOffset(wbCls.versionedState, "_list", 0x10)).readPointer();
+            if (!stList2.isNull())
+                listN = stList2.add(0x18).readS32();
+        }
+        catch (e2) { }
+        wblog(cat.name + "Page 状态应用 " + applied + " 条 (_state._list=" + listN + ")");
     }
     catch (e) {
         error("applyStates err: " + e);
@@ -10553,7 +10908,10 @@ export function getFirstDictValue(dict) {
         var cnt = ents.add(0x18).readS32();
         for (var i = 0; i < cnt; i++) {
             try {
-                var v = ents.add(0x20 + i * 24 + 16).readPointer();
+                var en = ents.add(0x20 + i * 24);
+                if (en.readS32() < 0)
+                    continue; // 已删除残留 (hashCode=-1): 它的 value 指针可能是旧对象, 不能拿
+                var v = en.add(16).readPointer();
                 if (v && !v.isNull())
                     return v;
             }
@@ -10734,7 +11092,7 @@ export function registerLocalizedDict(page, b) {
 var _refreshHookedPages = {};
 export function hookRefreshLocalized() {
     try {
-        var catNames = ["clue", "rule", "note"]; // 这三类用 LocalizedTexts dict
+        var catNames = ["clue", "rule", "note", "profile"]; // profile 的字典值是 string, 由 registerLocalizedDict 的 locKind==="str" 分支处理
         for (var i = 0; i < catNames.length; i++) {
             var cat = wbCats[catNames[i]];
             var pageCls = wbCls.pages[cat.name];
@@ -10792,7 +11150,7 @@ export function hookRefreshLocalized() {
 // 镜像 Windows ModClueLoader + ModWitchBookPatch: mod 切换/回标题时从原版基座重建, 防残留继承
 import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, findFirstObjectOfType, findSvc, getGenericArgClass, getSystemClass, invoke, invokeOk, listContainsId, makeS, readStr, wblog, error, warn } from "../utils.js";
 import { wbCats, currentModSet, localeValue, makeIdVersionPair, unionLocaleKeys } from "./data.js";
-import { initCatStateMaps, setWbCurrentMod, setWbDefaultsCaptured, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbDefaultsCaptured, wbPageDefaults, wbVanillaMap } from "./state.js";
+import { initCatStateMaps, resetWbOverrides, setWbCurrentMod, setWbDefaultsCaptured, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbDefaultsCaptured, wbPageDefaults, wbVanillaMap } from "./state.js";
 import { getFirstDictValue } from "./pages.js";
 import { tryInjectWitchBook } from "./index.js";
 // 从 ScriptLoader.Load 的路径识别当前 mod (匹配 modList 的 Enter; 原版默认路径 → __vanilla__)
@@ -10828,6 +11186,7 @@ export function resetWitchBookSession() {
     wbData.pendingStates = {};
     wbData.texCache = {};
     initCatStateMaps();
+    resetWbOverrides(); // 换血记账作废 (页面上那些条目地址不再有效)
     // 整页重建 (回原版基座) + 重置状态/面板 (防止残留继承)
     try {
         if (wbCls && wbCls.pages) {
@@ -10841,8 +11200,11 @@ export function resetWitchBookSession() {
 }
 // ===== Override 处理: mod 定义的原版同 id 条目应覆盖原版显示 (镜像 Windows modXxxOverrideIds) =====
 // 检测 id 是否为原版 (存在于 Data._items, 而非仅 mod 注入)
-export function isVanillaId(cat, id) {
+// idx 可选: readDataItemsIndex() 的结果 (批量判定走索引, 免去每条 id 各扫一遍 Data 列表)
+export function isVanillaId(cat, id, idx) {
     try {
+        if (idx)
+            return !!idx.first[id];
         var dataCls = wbCls.datas[cat.name];
         if (!dataCls || dataCls.isNull())
             return false;
@@ -10859,6 +11221,51 @@ export function isVanillaId(cat, id) {
     }
     catch (e) {
         return false;
+    }
+}
+// 读 Data 资产 (缓存的 ScriptableObject, 与页面同寿命) 的 _items 索引:
+//   first: id -> item        (该 id 的第一条, 回退用)
+//   byVer: "id@ver" -> item  (精确到版本)
+// 用途: ① isVanillaId 的批量快路径  ② 整页重建时按 id 取回原版 item (A3: 快照 item 悬空时的复用来源)
+// dataClsOverride: 给 wbCats 之外的分类用 (例: Map 分类 mod 不接管, 但 MapData 的条目要能读)
+export function readDataItemsIndex(cat, dataClsOverride) {
+    try {
+        var dataCls = dataClsOverride || wbCls.datas[cat.name];
+        if (!dataCls || dataCls.isNull())
+            return null;
+        var inst = findFirstObjectOfType(dataCls);
+        if (!inst)
+            return null;
+        var items = inst.add(fieldOffset(dataCls, "_items", 0x18)).readPointer();
+        if (items.isNull())
+            return null;
+        var vItemCls = getGenericArgClass(A.ogc(items), 0);
+        if (!vItemCls || vItemCls.isNull())
+            return null;
+        var idOff = fieldOffset(vItemCls, "_id", 0x10);
+        var verOff = fieldOffset(vItemCls, "_version", 0x18);
+        var itemOff = fieldOffset(vItemCls, "_item", 0x20);
+        var cnt = items.add(0x18).readS32(), arr = items.add(0x10).readPointer();
+        if (arr.isNull() || cnt < 0 || cnt > 100000)
+            return null;
+        var first = {}, byVer = {};
+        for (var i = 0; i < cnt; i++) {
+            var e = arr.add(0x20 + i * 8).readPointer();
+            if (e.isNull())
+                continue;
+            var id = readStr(e.add(idOff).readPointer());
+            if (!id)
+                continue;
+            var item = e.add(itemOff).readPointer();
+            var ver = e.add(verOff).readS32();
+            byVer[id + "@" + ver] = item;
+            if (!first[id])
+                first[id] = item;
+        }
+        return { first: first, byVer: byVer };
+    }
+    catch (e) {
+        return null;
     }
 }
 // 把 vanilla Data 里 id∈ids 的条目恢复到页面 (map + _localizedTextData + _itemIds)
@@ -10885,7 +11292,36 @@ export function rebuildItemIdsFromMap(page, pageCls, mapList, vItemCls, idOff) {
     }
     catch (e) { }
 }
+// 在字典的 entries 里找 (id, ver) 对应的**键实例** (IdVersionPair 指针)。
+// 含"已删除的残留": .NET Dictionary 的 Remove 只把 hashCode 置 -1, 键的指针仍留在数组里, 且那正是
+// 游戏原样用过的实例。为什么关键 (2026-09-25 实证): 页面字典按**实例**匹配 (identity 哈希) ——
+// 我们自己 new 出来的值相等的 IdVersionPair **查不到**, 于是"补了等于没补", 而且我们基于值相等的
+// 存在性判定全部误报。复用字典自己的键实例才能被游戏的查询命中。
+export function dictFindKeyInstance(dict, id, ver) {
+    try {
+        var ents = dict.add(0x18).readPointer();
+        if (ents.isNull())
+            return null;
+        var cnt = ents.add(0x18).readS32();
+        for (var i = 0; i < cnt; i++) {
+            try {
+                var k = ents.add(0x20 + i * 24 + 8).readPointer();
+                if (k.isNull())
+                    continue;
+                if (readStr(k.add(0x10).readPointer()) === id && k.add(0x18).readS32() === ver)
+                    return k;
+            }
+            catch (e2) { }
+        }
+    }
+    catch (e) { }
+    return null;
+}
 // 字典是否已有 (id, version) 条目 (IdVersionPair: Id@0x10, Version@0x18)
+// ✱ 必须同时判"条目存活": .NET Dictionary 的 Entry = { hashCode@0, next@4, key@8, value@16 },
+//   Remove() 只把 hashCode 置 -1, **键的指针留在数组里** → 只看键会把这些"已删除的残留"当成存在,
+//   于是"缺键就补"的每一层判断都被骗过 (2026-09-25 实证: 图鉴崩在 '10-1' v2, 而我们的扫描说它存在)。
+//   插入时 hashCode = comparer.GetHashCode(key) & 0x7FFFFFFF ⇒ 非负; 负数只可能是已删除 ✓
 export function dictHasIdVer(dict, id, ver) {
     try {
         var ents = dict.add(0x18).readPointer();
@@ -10895,6 +11331,8 @@ export function dictHasIdVer(dict, id, ver) {
         for (var i = 0; i < cnt; i++) {
             try {
                 var en = ents.add(0x20 + i * 24);
+                if (en.readS32() < 0)
+                    continue; // 已删除 (hashCode = -1)
                 var k = en.add(8).readPointer();
                 if (k.isNull())
                     continue;
@@ -10911,7 +11349,7 @@ export function dictHasIdVer(dict, id, ver) {
 // 不复用旧指针 —— VersionedItem 是页面加载期由游戏创建的托管对象, 游戏重建页面/GC 之后旧指针悬空,
 // 直接 Add 回去会让容器里出现"内存已被复用(往往是复用成字符串)的伪条目" → 渲染时按字典键比较即崩
 // (2026-09-25 定位: 崩溃地址 = 一个 String 的 length+chars 被当 IdVersionPair 用)。
-function buildVanillaItem(vItemCls, rec) {
+export function buildVanillaItem(vItemCls, rec) {
     var vi = A.on(vItemCls);
     vi.add(fieldOffset(vItemCls, "_id", 0x10)).writePointer(makeS(rec.id));
     vi.add(fieldOffset(vItemCls, "_version", 0x18)).writeS32(rec.ver | 0);
@@ -10940,14 +11378,25 @@ export function restorePageFromData(page, pageCls, cat) {
         // 从 map 的 vItemCls 取字段偏移
         var vItemCls = getGenericArgClass(A.ogc(mapList), 0);
         var expectItemCls = wbCls.items[cat.name]; // item 指针的类校验基准 (悬空则类名对不上)
-        var added = 0, bad = 0;
+        // 页面字典 (重建时用它里面的键实例, 见下)
+        var pageDict = null;
+        try {
+            pageDict = page.add(fieldOffset(pageCls, "_localizedTextData", cat.locOff)).readPointer();
+            if (pageDict.isNull())
+                pageDict = null;
+        }
+        catch (e8) {
+            pageDict = null;
+        }
+        var added = 0, bad = 0, refetched = 0, dataIdx = null;
         for (var i = 0; i < recs.length; i++) {
             var rc = recs[i];
             if (!rc || !rc.id) {
                 bad++;
                 continue;
             }
-            // item 由 Data 资产持有 (长命), 但仍校验类: 指针悬空时它读出来的 klass 会对不上 → 丢弃该条
+            var use = rc;
+            // item 由 Data 资产持有 (长命), 但仍校验类: 指针悬空时它读出来的 klass 会对不上
             if (rc.item && !rc.item.isNull() && expectItemCls && !expectItemCls.isNull()) {
                 var okCls = false;
                 try {
@@ -10955,16 +11404,42 @@ export function restorePageFromData(page, pageCls, cat) {
                 }
                 catch (e4) { }
                 if (!okCls) {
-                    bad++;
-                    continue;
+                    // A3: 悬空不要丢 —— 按 id 从 Data._items 把原版 item 取回来复用 (Data 才是权威来源,
+                    // 且与页面同寿命)。版本号仍用快照里的值 (它是捕获时读出的整数, 不会悬空),
+                    // 只换 item: 否则会改变 map 里存在的版本集合 → 反而制造重复 (id,ver)。
+                    if (!dataIdx)
+                        dataIdx = readDataItemsIndex(cat);
+                    var dItem = dataIdx ? (dataIdx.byVer[rc.id + "@" + rc.ver] || dataIdx.first[rc.id]) : null;
+                    var dOk = false;
+                    try {
+                        dOk = !!dItem && !dItem.isNull() && A.ogc(dItem).toString() === expectItemCls.toString();
+                    }
+                    catch (e6) { }
+                    if (!dOk) {
+                        bad++;
+                        continue;
+                    } // Data 里也没有这个 id → 它本来就不是原版条目
+                    use = { id: rc.id, ver: rc.ver, item: dItem };
+                    refetched++;
                 }
             }
-            var vi = buildVanillaItem(vItemCls, rc);
+            var vi = buildVanillaItem(vItemCls, use);
+            // ✱ 重建的条目要沿用"字典里那个键实例"作为 _idVersionPair ——
+            // 页面字典按实例匹配, 我们 new 出来的等价实例会让游戏后续查字典 MISS (KNF 的根因之一)。
+            if (vi && !vi.isNull() && pageDict) {
+                try {
+                    var ki = dictFindKeyInstance(pageDict, use.id, use.ver);
+                    if (ki && !ki.isNull())
+                        vi.add(fieldOffset(vItemCls, "_idVersionPair", 0x28)).writePointer(ki);
+                }
+                catch (e7) { }
+            }
             if (vi && !vi.isNull() && addMi && !addMi.isNull() && invokeOk(addMi, mapList, [vi]).ok)
                 added++;
         }
-        if (bad)
-            warn(cat.name + " 整页重建: 丢弃无效快照 " + bad + " 条 (item 指针类不匹配)");
+        if (refetched || bad)
+            warn(cat.name + " 整页重建: 快照 item 悬空 " + refetched + " 条已从 Data 取回" +
+                (bad ? ", " + bad + " 条 Data 无此 id 已丢弃" : ""));
         var idOff = fieldOffset(vItemCls, "_id", 0x10);
         var verOff = fieldOffset(vItemCls, "_version", 0x18);
         rebuildItemIdsFromMap(page, pageCls, mapList, vItemCls, idOff);
@@ -11016,7 +11491,7 @@ export function rebuildAllPages() {
         error("rebuildAllPages err: " + e);
     }
 }
-// 为恢复的原版条目构建 _localizedTextData 字典项
+// 为恢复的原版条目构建 _localizedTextData 字典项 (从 VersionedItem 包装读 id/ver/item/ivp)
 export function restoreVanillaDict(page, pageCls, cat, vi, vItemCls) {
     try {
         var id = readStr(vi.add(fieldOffset(vItemCls, "_id", 0x10)).readPointer());
@@ -11025,21 +11500,42 @@ export function restoreVanillaDict(page, pageCls, cat, vi, vItemCls) {
         var ivp = vi.add(fieldOffset(vItemCls, "_idVersionPair", 0x28)).readPointer();
         if (ivp.isNull())
             ivp = makeIdVersionPair(id, ver);
-        var outer = page.add(fieldOffset(pageCls, "_localizedTextData", cat.locOff)).readPointer();
-        if (outer.isNull())
+        writeLocalizedDictEntry(page, pageCls, cat, id, ver, item, ivp, null);
+    }
+    catch (e) {
+        error("restoreVanillaDict err: " + e);
+    }
+}
+// 真正写字典项: 由 (id, ver, item, ivp) 构建内层字典并写进 page._localizedTextData[ivp]
+// outerOverride: 直接写给定字典对象 (传 null 则按页面字段取)。
+// 返回: 实际使用的键实例 (字典已有的那个; 没有才用传入的/新建的)
+export function writeLocalizedDictEntry(page, pageCls, cat, id, ver, item, ivp, outerOverride) {
+    try {
+        var outer = outerOverride && !outerOverride.isNull() ? outerOverride
+            : page.add(fieldOffset(pageCls, "_localizedTextData", cat.locOff)).readPointer();
+        if (outer.isNull() || !item || item.isNull())
             return;
+        // ✱ 键实例: 优先复用字典里已有的那一个 —— 页面字典按实例匹配, 自己 new 的等价实例游戏查不到
+        var keyInst = dictFindKeyInstance(outer, id, ver);
+        if (keyInst && !keyInst.isNull())
+            ivp = keyInst;
         var outerCls = A.ogc(outer);
         var sample = getFirstDictValue(outer);
-        if (!sample)
-            return;
+        if (!sample) {
+            warn(cat.name + " 字典无现有值, 无法偷内层字典类, 跳过 '" + id + "'");
+            return null;
+        }
         var innerCls = A.ogc(sample);
         var addInner = A.cgm(innerCls, Memory.allocUtf8String("Add"), 2);
         var inner = A.on(innerCls);
         if (!invokeOk(A.cgm(innerCls, Memory.allocUtf8String(".ctor"), 0), inner, []).ok)
-            return;
-        // 读 DataItem 的 LocalizedText[] 字段
-        var lts = readLocalizedArray(item, cat.name === "clue" ? 0x10 : cat.name === "profile" ? 0x10 : cat.name === "rule" ? 0x18 : 0x10);
-        if (cat.name === "profile") {
+            return null;
+        // 读 DataItem 的 LocalizedText[] 字段 (clue: _name@0x10 / profile: _description@0x10 /
+        // rule: _subtitle@0x18 / note: _title@0x10 / map: _buttonText@0x10)
+        var lts = readLocalizedArray(item, cat.name === "rule" ? 0x18 : 0x10);
+        // locKind === "str" 的值是 Dictionary<LocaleKind, string> (profile / map 的按钮文本);
+        // 其余分类是 Dictionary<LocaleKind, XxxPage.LocalizedTexts> 二元组
+        if (cat.locKind === "str") {
             // Dictionary<LocaleKind, string>
             var keys = Object.keys(lts);
             for (var i = 0; i < keys.length; i++) {
@@ -11065,9 +11561,10 @@ export function restoreVanillaDict(page, pageCls, cat, vi, vItemCls) {
         var addOuter = A.cgm(outerCls, Memory.allocUtf8String("Add"), 2);
         if (addOuter && !addOuter.isNull())
             invokeOk(addOuter, outer, [ivp, inner]);
+        return ivp; // 返回实际使用的键实例 (调用方用它做端到端核对)
     }
     catch (e) {
-        error("restoreVanillaDict err: " + e);
+        error("writeLocalizedDictEntry err '" + id + "': " + e);
     }
 }
 // 读 LocalizedText[] (LocalizedText: _locale@0x10 int, _text@0x18 string) → {localeTag: text}
@@ -11312,7 +11809,7 @@ export function capturePageDefaults(page) {
         if (wbPageDefaults[key])
             return;
         var pageCls = cls, clsName = A.cgn(pageCls).readCString();
-        var d = { labels: {}, defaultTex: ptr(0) };
+        var d = { labels: {} };
         var labelFields = (clsName === "CluePage") ? ["_subjectLabel", "_descriptionLabel"] :
             (clsName === "ProfilePage") ? ["_authorLabel", "_descriptionLabel"] :
                 (clsName === "RulePage") ? ["_titleNumLabel", "_subtitleLabel", "_descriptionLabel"] :
@@ -11343,19 +11840,8 @@ export function capturePageDefaults(page) {
             }
             catch (e) { }
         });
-        // 缩略图默认纹理 (_defaultTexture)
-        try {
-            var thf = A.gf(pageCls, Memory.allocUtf8String("_thumbnail"));
-            if (thf && !thf.isNull()) {
-                var th = page.add(A.fo(thf)).readPointer();
-                if (!th.isNull()) {
-                    var dtf = A.gf(wbCls.witchBookItemThumbnail, Memory.allocUtf8String("_defaultTexture"));
-                    if (dtf && !dtf.isNull())
-                        d.defaultTex = th.add(A.fo(dtf)).readPointer();
-                }
-            }
-        }
-        catch (e) { }
+        // 默认纹理不在这里缓存: _defaultTexture 由 WitchBookItemThumbnail.Awake/Reset 设定后不再改动,
+        // 恢复时从活着的缩略图对象上现读即可 (缓存裸指针在页面重建后会悬空 → C1)
         wbPageDefaults[key] = d;
         wblog("已捕获 " + clsName + " 面板默认值 (" + Object.keys(d.labels).length + " 标签)");
     }
@@ -11398,13 +11884,18 @@ export function restorePageDefaults(page) {
             var thf = A.gf(pageCls, Memory.allocUtf8String("_thumbnail"));
             if (thf && !thf.isNull()) {
                 var th = page.add(A.fo(thf)).readPointer();
-                if (!th.isNull() && d.defaultTex && !d.defaultTex.isNull()) {
-                    var raw = th.add(fieldOffset(wbCls.witchBookItemThumbnail, "_rawImage", 0x28)).readPointer();
-                    if (!raw.isNull()) {
-                        var rc = A.ogc(raw);
-                        var mi = A.cgm(rc, Memory.allocUtf8String("set_texture"), 1);
-                        if (mi && !mi.isNull())
-                            invokeOk(mi, raw, [d.defaultTex]);
+                if (!th.isNull()) {
+                    // C1: 默认纹理现读现用 —— 活对象上的 _defaultTexture 就是原版默认值, 永不悬空
+                    var dtf = A.gf(wbCls.witchBookItemThumbnail, Memory.allocUtf8String("_defaultTexture"));
+                    var tex = (dtf && !dtf.isNull()) ? th.add(A.fo(dtf)).readPointer() : null;
+                    if (tex && !tex.isNull()) {
+                        var raw = th.add(fieldOffset(wbCls.witchBookItemThumbnail, "_rawImage", 0x28)).readPointer();
+                        if (!raw.isNull()) {
+                            var rc = A.ogc(raw);
+                            var mi = A.cgm(rc, Memory.allocUtf8String("set_texture"), 1);
+                            if (mi && !mi.isNull())
+                                invokeOk(mi, raw, [tex]);
+                        }
                     }
                 }
             }
@@ -11644,10 +12135,13 @@ export var wbCurrentMod = null; // 当前激活的 mod key (经 ScriptLoader.Loa
 export var wbPrevMod = null; // 上次注入时的 mod key (用于切换检测)
 export var wbCls = null; // 解析好的类表 (index.js resolveWitchBookClasses)
 export var wbReady = false;
-export var wbOverrides = { clue: {}, profile: {}, rule: {}, note: {} }; // 当前 mod 覆写的原版 id
+// 覆写换血记账: catName -> id -> {page: 页面实例地址, e: 我们注入的 VersionedItem 地址, ivp: 该条目的 IdVersionPair 地址}
+// 用途: 幂等判定 —— 页面 map 里那条还是不是我们注入的那一个。地址只做身份比较, 不解引用;
+// 条目由 map 持有, 只要还命中就必然存活 (与 wbVanillaMap 存值的理由不同: 那里存包装对象指针会悬空)。
+export var wbOverrides = { clue: {}, profile: {}, rule: {}, note: {} };
 export var wbVanillaMap = {}; // catName -> {page: 页面指针, items: [{id, ver, item}]} (整页重建基座快照)
-// items 只存值, 不存 VersionedItem 包装对象指针 (悬空会导致重建出"伪条目"→渲染崩溃)
-export var wbPageDefaults = {}; // pageClass ptr -> {labels:{字段:文本}, defaultTex:ptr}
+// items 只存值; item 由 Data 资产持有, 悬空时按 id 从 Data 重取 (见 session.js)
+export var wbPageDefaults = {}; // pageClass ptr -> {labels:{字段:文本}} (默认纹理不缓存, 用得时候现读, 见 session.js)
 export var wbDefaultsCaptured = false;
 // setter (ES modules import 绑定只读, 赋值必须在模块内)
 export function setWbCurrentMod(v) { wbCurrentMod = v; }
@@ -11663,6 +12157,13 @@ export function initCatStateMaps() {
         if (!wbData.pendingStates[cn[i]])
             wbData.pendingStates[cn[i]] = {};
     }
+}
+// 清空覆写记账 (原地换掉每个分类的对象, 保持导出绑定不变)。会话/剧本切换时调用:
+// 上一会话的条目地址在新页面里不再命中 → 换血会重新执行 (判定本就以命中为准, 这里只是防地址复用误命中)
+export function resetWbOverrides() {
+    var cn = Object.keys(wbOverrides);
+    for (var i = 0; i < cn.length; i++)
+        wbOverrides[cn[i]] = {};
 }
 
 ✄

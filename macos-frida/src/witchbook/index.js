@@ -12,7 +12,7 @@
 //      _subjectLabel/_descriptionLabel/_thumbnail (绕开 _localizedTextData 的 KeyNotFoundException)。
 // 数据来源: 运行时读 <MOD_ROOT>/<modKey>/info.json 的 Clues 字段 + 扫 WitchBook/Clues/*.png。
 import { A, dbg, ensureItemIdsString, fieldOffset, findAllObjectOfType, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, wblog, error, warn } from "../utils.js";
-import { initCatStateMaps, setWbCls, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbPrevMod } from "./state.js";
+import { initCatStateMaps, resetWbOverrides, setWbCls, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbPrevMod } from "./state.js";
 import { isCurrentModItem, loadWitchBookData, wbCatByIdx, wbCats } from "./data.js";
 import { clearAllWitchBookPages, clearBookViaVanilla, detectCurrentMod, findAllPages, hookClearState, rebuildAllPages } from "./session.js";
 import { injectPage, hookRefreshLocalized } from "./pages.js";
@@ -155,6 +155,7 @@ export function tryInjectWitchBook() {
             clearAllWitchBookPages();           // 清各页面状态 + 恢复原版默认面板
             wbData.states = {}; wbData.pendingStates = {};
             initCatStateMaps();
+            resetWbOverrides();
             setWbPrevMod(wbCurrentMod);
             wblog("mod 切换 → 整页重建 + 状态重置, 注入范围: " + (wbCurrentMod ? "'" + wbCurrentMod + "'" : "无"));
         }

@@ -383,10 +383,29 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                     }
                     return s;
                 }
-                try {
-                    var full = collectUtf16(0x14, 2000);
-                    if (full) logLevel(level, "[v3] " + tag + " FULL: " + full);
-                } catch (e) {}
+                // 异常对象另当别论: 它的字符串成员是**引用** (_message / _stackTraceString),
+                // 直接读对象内存只会读到 _className 一个字符串的内容 (之前的 '歀惠' 就是这么来的)。
+                // 这里扫实例里的字符串字段指针 (偏移随 IL2CPP/Unity 版本有出入 → 按"指向 System.String"
+                // 识别, 不硬编码): 能拿到异常 message (含缺失的字典键) 与托管栈 (含抛出的方法名)。
+                var isExc = cn && cn.indexOf("Exception") >= 0;
+                if (isExc) {
+                    for (var eo = 0x10; eo <= 0x50; eo += 8) {
+                        try {
+                            var sp = obj.add(eo).readPointer();
+                            if (sp.isNull() || !Process.findRangeByAddress(sp)) continue;
+                            var spc = A.cgn(A.ogc(sp));
+                            // 注意: A.cgn 给的是**不带命名空间**的类名 → 是 "String" 而不是 "System.String"
+                            if (!spc || spc.isNull() || spc.readCString() !== "String") continue;
+                            var stxt = readStr(sp);
+                            if (stxt) logLevel(level, "[v3] " + tag + " [+0x" + eo.toString(16) + "] " + stxt);
+                        } catch (e5) {}
+                    }
+                } else {
+                    try {
+                        var full = collectUtf16(0x14, 2000);
+                        if (full) logLevel(level, "[v3] " + tag + " FULL: " + full);
+                    } catch (e) {}
+                }
                 // 移除多偏移 UTF-16 尝试 (0x08/0x10/0x18/0x0C): C# 字符串是引用类型,
                 // 直接从对象实例内存读 UTF-16 是错的 — 读到的全是垃圾 (如 KeyNotFoundException
                 // 日志里的 '歀惠' 是误读, 无意义). 必要信息已在 hex + class + full 中.
@@ -428,6 +447,47 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                 dbg("[v3] UnityEngine.CoreModule image NOT FOUND");
             }
         } catch (e) { dbg("[v3] Debug hook err: " + e); }
+
+        // KeyNotFoundException 抛出点诊断 (2026-09-25 图鉴打不开时加的取证):
+        // 异常对象的字段布局在 macOS IL2CPP 上与 Windows dump 不完全一致 (读实例内存拿不稳 message),
+        // 所以在**构造那一刻**抓参数 —— 消息 + 原生调用栈 (模块+偏移, 可离线 objdump 对回去)。
+        // 只在真抛异常时触发, 无常态开销。
+        try {
+            var knfCls = null;
+            var knfNames = [["System.Collections.Generic", "KeyNotFoundException"], ["System", "KeyNotFoundException"]];
+            for (var ki = 0; ki < allImgs.length && !knfCls; ki++) {
+                for (var kj = 0; kj < knfNames.length; kj++) {
+                    try {
+                        var kc = A.cfn(allImgs[ki], Memory.allocUtf8String(knfNames[kj][0]), Memory.allocUtf8String(knfNames[kj][1]));
+                        if (kc && !kc.isNull()) { knfCls = kc; break; }
+                    } catch (eK) {}
+                }
+            }
+            if (!knfCls) dbg("[v3] KeyNotFoundException 类未找到");
+            else {
+                for (var ka = 0; ka <= 2; ka++) {
+                    var kmi = A.cgm(knfCls, Memory.allocUtf8String(".ctor"), ka);
+                    if (!kmi || kmi.isNull()) continue;
+                    (function (narg) {
+                        Interceptor.attach(kmi.readPointer(), {
+                            onEnter: function (args) {
+                                try {
+                                    var msg = (narg >= 1) ? readStr(args[1]) : "<无参 ctor>";
+                                    var bt = Thread.backtrace(this.context, Backtracer.ACCURATE).slice(0, 6).map(function (a) {
+                                        try {
+                                            var md = Process.findModuleByAddress(a);
+                                            return md ? (md.name + "+0x" + a.sub(md.base).toString(16)) : a.toString();
+                                        } catch (eB) { return "?"; }
+                                    }).join(" ← ");
+                                    wblog("KeyNotFoundException 抛出 (argc=" + narg + "): " + msg + " | 栈: " + bt);
+                                } catch (eM) {}
+                            }
+                        });
+                    })(ka);
+                }
+                dbg("[v3] KeyNotFoundException ctor hook 完成");
+            }
+        } catch (e) { dbg("[v3] KeyNotFoundException hook err: " + e); }
 
         // Movie 支持钩子 (URL 流式)
         setupMovieHooks();
