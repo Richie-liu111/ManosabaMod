@@ -11,14 +11,14 @@
 15046 /src/menu.js
 5211 /src/movie.js
 15229 /src/providers.js
-13403 /src/scripttext.js
+13453 /src/scripttext.js
 25191 /src/utils.js
 21084 /src/witchbook/characters.js
 14658 /src/witchbook/data.js
-15032 /src/witchbook/index.js
-18383 /src/witchbook/pages.js
-31811 /src/witchbook/session.js
-1742 /src/witchbook/state.js
+18944 /src/witchbook/index.js
+19689 /src/witchbook/pages.js
+35785 /src/witchbook/session.js
+1843 /src/witchbook/state.js
 6346 /src/witchbook/textures.js
 ✄
 import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, wblog } from "./utils.js";
@@ -8420,7 +8420,7 @@ function dumpChoiceState(cs, tag) {
                 info += " [" + i + "] " + (pid || "") + "='" + (ptxt || "") + "'";
             }
         }
-        wblog("剧本引号修复: " + info);
+        dbg("[v3] 剧本引号修复: " + info); // 每个选项都打 → 降 dbg (2026-09-25)
     }
     catch (e) {
         dbg("[v3] scripttext dumpChoiceState err: " + e);
@@ -10045,7 +10045,7 @@ export function injectVersions(list, addMi, vItemCls, cat, id, rec, page) {
 //   3. 显示: Interceptor.replace CluePage.RefreshPageContent / SetupItemButton —— mod 线索直接设
 //      _subjectLabel/_descriptionLabel/_thumbnail (绕开 _localizedTextData 的 KeyNotFoundException)。
 // 数据来源: 运行时读 <MOD_ROOT>/<modKey>/info.json 的 Clues 字段 + 扫 WitchBook/Clues/*.png。
-import { A, dbg, ensureItemIdsString, fieldOffset, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, wblog, error, warn } from "../utils.js";
+import { A, dbg, ensureItemIdsString, fieldOffset, findAllObjectOfType, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, wblog, error, warn } from "../utils.js";
 import { initCatStateMaps, setWbCls, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbPrevMod } from "./state.js";
 import { isCurrentModItem, loadWitchBookData, wbCatByIdx, wbCats } from "./data.js";
 import { clearAllWitchBookPages, clearBookViaVanilla, detectCurrentMod, findAllPages, hookClearState, rebuildAllPages } from "./session.js";
@@ -10234,6 +10234,7 @@ export function tryInjectWitchBook() {
         for (var i = 0; i < cn2.length; i++) {
             injectPage(wbCats[cn2[i]]);
         }
+        wbDirtyCats = {}; // 全量注入已覆盖全部分类 → 清空 ① 的合帧待办
         // 新角色 (Profile 显示名: CharacterData 基本数据 + AuthorData 名称模板)
         // injectCharacterData();   // 临时禁用: 角色档案数据注入可能破坏场景 (5 个 ArgumentException)
         // injectAuthorData();
@@ -10289,6 +10290,63 @@ function dumpPageFieldTypes() {
         error("dumpPageFieldTypes err: " + e);
     }
 }
+// ===== ①② @update 合帧去抖 + 按分类收敛 (2026-09-25) =====
+// 背景: Twilight_TestMod005/Scripts/Twilight_TestMod005/Main 第 2 行起 28 条 @update 连排,
+//   旧实现每条都跑一次全量 tryInjectWitchBook (5 分类全页 remove/add + 纹理注册),
+//   实测 28 × 55~80 ms ≈ 2.12 s 主线程冻结 (modlog 2026-09-25 13:01:16.338→18.460)。
+// 现改为:
+//   ① 同一"突发"内的多条 @update 合并成一次补注入 —— 突发 = 与上一条 @update 间隔 < WB_BURST_GAP_MS。
+//      用 JS 时钟判定而不用 Time.frameCount: 项目里 directCall 的先例全是实例方法, 静态 extern
+//      属性走直调风险不划算; 窗口法零额外 FFI, 失败模式也只是提前/推迟一次注入, 不改变结果。
+//   ② 只重注入被 @update 触及的分类 (旧实现无论哪一类都重注入全部 5 类)。
+// 不变式 (见文件头): 游戏自身 UpdateVersion 对 _itemIds 之外的 id 不处理, 而且本次调用立刻要用到,
+//   所以"本帧新引入的 id"必须当场就位 → isItemIdInPage 为假时仍立即注入该分类; 已在页面里的
+//   (含原版同 id 覆写: 原版条目本就在 _itemIds 内) 则把换血/状态补写推迟到合帧注入。
+// 兜底: 图鉴打开 (BeginToPresent/InitializePages) 仍走全量 tryInjectWitchBook, 所以即使某次突发
+//   之后再也没有 @update, 显示也不会停在旧状态。
+var WB_BURST_GAP_MS = 100;
+var wbDirtyCats = {}; // 分类名 → true, 待合帧补注入
+var wbLastUpdateAt = 0; // 上一条 @update 的 JS 时刻
+// id 是否已在"本分类页面"的 _itemIds 内 (游戏 UpdateVersion 的处理门槛)
+function isItemIdInPage(cat, id) {
+    try {
+        var pageCls = wbCls.pages[cat.name];
+        var pages = findAllObjectOfType(pageCls);
+        if (!pages.length)
+            return false;
+        var arr = pages[0].add(fieldOffset(pageCls, "_itemIds", 0x98)).readPointer();
+        if (arr.isNull())
+            return false;
+        var n = arr.add(0x18).readS32();
+        if (n < 0 || n > 100000)
+            return false;
+        for (var i = 0; i < n; i++)
+            if (readStr(arr.add(0x20 + i * 8).readPointer()) === id)
+                return true;
+    }
+    catch (e) { }
+    return false;
+}
+// 合帧补注入: 只重注入脏分类 + 补一次纹理 (对比 tryInjectWitchBook: 全分类 + mod 切换处理)
+export function flushWitchBookDirty(reason) {
+    var names = Object.keys(wbDirtyCats);
+    if (!names.length)
+        return;
+    wbDirtyCats = {};
+    try {
+        for (var i = 0; i < names.length; i++)
+            if (wbCats[names[i]])
+                injectPage(wbCats[names[i]]);
+        registerTexturesInto(null);
+        var ps = findAllPages();
+        if (ps.length)
+            registerTexturesInto(ps[0].add(fieldOffset(A.ogc(ps[0]), "_addressableAssetLoader", 0x50)).readPointer());
+        dbg("[v3][WitchBook] 合帧补注入 (" + reason + "): " + names.join(","));
+    }
+    catch (e) {
+        error("flushWitchBookDirty err: " + e);
+    }
+}
 // @update 拦截: 按 WitchBookCategory 路由 (Clue=0 Profile=1 Map=2 Rule=3 Note=4)
 export function onWitchBookUpdate(args) {
     try {
@@ -10307,7 +10365,18 @@ export function onWitchBookUpdate(args) {
             return;
         wbData.states[cat.name][id] = ver;
         wblog(">>> @update 拦截: category=" + cat.name + " id='" + id + "' version=" + ver);
-        tryInjectWitchBook();
+        // ① 新突发 (与上一条 @update 间隔超阈值) → 上一批已结束, 先把攒下的补上;
+        //    ①b 同突发内切到别的分类 ⇒ 前一批该分类已完成 → 也立刻补上 (延迟收紧到"分类边界")
+        var now = Date.now();
+        if (now - wbLastUpdateAt > WB_BURST_GAP_MS)
+            flushWitchBookDirty("突发结束");
+        else if (Object.keys(wbDirtyCats).length && !wbDirtyCats[cat.name])
+            flushWitchBookDirty("分类切换");
+        wbLastUpdateAt = now;
+        // 本次调用立刻需要该 id 在位 → 缺则就地注入本分类; 已在则推迟到合帧
+        if (!isItemIdInPage(cat, id))
+            injectPage(cat);
+        wbDirtyCats[cat.name] = true; // ② 只标这一条分类
         dbg(">>> onWitchBookUpdate 返回");
     }
     catch (e) {
@@ -10318,9 +10387,26 @@ export function onWitchBookUpdate(args) {
 ✄
 // ============ WitchBook 页面注入域: 注入 Page._loadedDataItemMap + _itemIds + _state + 本地化字典预填 ============
 import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, getGenericArgClass, getSystemClass, invokeBool, invokeOk, listContainsId, makeS, readStr, wblog, dbg, error, warn } from "../utils.js";
+import { fileExists } from "../io.js";
 import { wbCls, wbData, wbOverrides } from "./state.js";
 import { currentModIds, fullLocaleTags, injectVersions, isCurrentModItem, localeValue, pickLocaleText, resolveLocale, wbCats } from "./data.js";
 import { clearModItemsFromPage, isVanillaId } from "./session.js";
+// 旗标文件 <MOD_ROOT>/.wb_no_override 存在 → 跳过"原版同 id 覆写" (= 上游 AddRichCharacter 语义)。
+// 用于 A/B 定位覆写机制是否与崩溃相关; 缓存在首次调用时读一次 (旗标只在启动前有意义)。
+var _wbNoOverride = null;
+function wbNoOverride() {
+    if (_wbNoOverride === null) {
+        try {
+            _wbNoOverride = (typeof MOD_ROOT !== "undefined" && MOD_ROOT) ? fileExists(MOD_ROOT + "/.wb_no_override") : false;
+        }
+        catch (e) {
+            _wbNoOverride = false;
+        }
+        if (_wbNoOverride)
+            wblog("WB_NO_OVERRIDE 生效: 跳过原版同 id 覆写 (改名失效)");
+    }
+    return _wbNoOverride;
+}
 // 2) 注入 Page._loadedDataItemMap + _itemIds + _state
 export function injectPage(cat) {
     try {
@@ -10346,6 +10432,13 @@ export function injectPage(cat) {
                     var id = ids[i];
                     // override: mod 定义的原版同 id → 移除原版条目再注入 mod 版 (镜像 Windows)
                     if (isVanillaId(cat, id)) {
+                        // WB_NO_OVERRIDE (旗标文件 <MOD_ROOT>/.wb_no_override): 跳过覆写, 等价上游
+                        // ModResourceLoader.AddRichCharacter 的 ContainsId→return (mod 的改名失效, 原版数据不动)。
+                        // 用途: A/B 判断覆写机制是否为崩溃触发点; 也是可发布的规避方案。
+                        if (wbNoOverride()) {
+                            dbg("[WitchBook] WB_NO_OVERRIDE: 跳过原版同 id 覆写 '" + id + "'");
+                            continue;
+                        }
                         var oSet = {};
                         oSet[id] = 1;
                         clearModItemsFromPage(page, pageCls, oSet);
@@ -10814,13 +10907,25 @@ export function dictHasIdVer(dict, id, ver) {
     catch (e) { }
     return false;
 }
+// 用快照值新建 VersionedItem<TItem> 包装对象。
+// 不复用旧指针 —— VersionedItem 是页面加载期由游戏创建的托管对象, 游戏重建页面/GC 之后旧指针悬空,
+// 直接 Add 回去会让容器里出现"内存已被复用(往往是复用成字符串)的伪条目" → 渲染时按字典键比较即崩
+// (2026-09-25 定位: 崩溃地址 = 一个 String 的 length+chars 被当 IdVersionPair 用)。
+function buildVanillaItem(vItemCls, rec) {
+    var vi = A.on(vItemCls);
+    vi.add(fieldOffset(vItemCls, "_id", 0x10)).writePointer(makeS(rec.id));
+    vi.add(fieldOffset(vItemCls, "_version", 0x18)).writeS32(rec.ver | 0);
+    vi.add(fieldOffset(vItemCls, "_item", 0x20)).writePointer(rec.item && !rec.item.isNull() ? rec.item : ptr(0));
+    vi.add(fieldOffset(vItemCls, "_idVersionPair", 0x28)).writePointer(makeIdVersionPair(rec.id, rec.ver | 0));
+    return vi;
+}
 // 整页重建: 清空页面 _loadedDataItemMap, 从捕获的原版快照重添全部条目,
 // 重建 _itemIds, 并为缺 dict 项的条目补建。mod 切换/回标题时调用 → 每次会话从原版基座开始。
 export function restorePageFromData(page, pageCls, cat) {
     try {
         var snap = wbVanillaMap[cat.name];
-        var ptrs = snap ? snap.items : null;
-        if (!ptrs || !ptrs.length) {
+        var recs = snap ? snap.items : null;
+        if (!recs || !recs.length) {
             warn(cat.name + " 整页重建跳过 (快照未捕获)");
             return;
         }
@@ -10832,15 +10937,34 @@ export function restorePageFromData(page, pageCls, cat) {
         if (clMi && !clMi.isNull())
             invokeOk(clMi, mapList, []);
         var addMi = A.cgm(mapListCls, Memory.allocUtf8String("Add"), 1);
-        var added = 0;
-        for (var i = 0; i < ptrs.length; i++) {
-            if (addMi && !addMi.isNull()) {
-                if (invokeOk(addMi, mapList, [ptrs[i]]).ok)
-                    added++;
-            }
-        }
         // 从 map 的 vItemCls 取字段偏移
         var vItemCls = getGenericArgClass(A.ogc(mapList), 0);
+        var expectItemCls = wbCls.items[cat.name]; // item 指针的类校验基准 (悬空则类名对不上)
+        var added = 0, bad = 0;
+        for (var i = 0; i < recs.length; i++) {
+            var rc = recs[i];
+            if (!rc || !rc.id) {
+                bad++;
+                continue;
+            }
+            // item 由 Data 资产持有 (长命), 但仍校验类: 指针悬空时它读出来的 klass 会对不上 → 丢弃该条
+            if (rc.item && !rc.item.isNull() && expectItemCls && !expectItemCls.isNull()) {
+                var okCls = false;
+                try {
+                    okCls = (A.ogc(rc.item).toString() === expectItemCls.toString());
+                }
+                catch (e4) { }
+                if (!okCls) {
+                    bad++;
+                    continue;
+                }
+            }
+            var vi = buildVanillaItem(vItemCls, rc);
+            if (vi && !vi.isNull() && addMi && !addMi.isNull() && invokeOk(addMi, mapList, [vi]).ok)
+                added++;
+        }
+        if (bad)
+            warn(cat.name + " 整页重建: 丢弃无效快照 " + bad + " 条 (item 指针类不匹配)");
         var idOff = fieldOffset(vItemCls, "_id", 0x10);
         var verOff = fieldOffset(vItemCls, "_version", 0x18);
         rebuildItemIdsFromMap(page, pageCls, mapList, vItemCls, idOff);
@@ -11033,7 +11157,8 @@ export function clearModItemsFromPage(page, pageCls, idSet) {
             var rmD = A.cgm(outerCls, Memory.allocUtf8String("Remove"), 1);
             if (rmD && !rmD.isNull()) {
                 // 先收集要删的 key (边遍历边 Remove 会 rehash 使数组失效)
-                var toDel = [];
+                var toDel = [], alien = 0;
+                var idPairCls = wbCls.idVersionPair;
                 var ents = outer.add(0x18).readPointer();
                 var ecnt = ents.isNull() ? 0 : ents.add(0x18).readS32();
                 for (var ei = 0; ei < ecnt; ei++) {
@@ -11042,12 +11167,29 @@ export function clearModItemsFromPage(page, pageCls, idSet) {
                         var k = en.add(8).readPointer();
                         if (k.isNull())
                             continue;
-                        var kid = readStr(k);
+                        // 键是 IdVersionPair (Id@0x10 / Version@0x18)。2026-09-25 修:
+                        // 旧代码写成 readStr(k) —— 把 pair 当字符串读, readStr 的长度守卫让它静默返回 null,
+                        // 于是这段"清理旧词条"从未生效 (覆写过的 id 残留旧 dict 项)。
+                        // 顺带按类过滤: 若键不是 IdVersionPair (容器被污染过), 跳过而不是去解引用它。
+                        if (idPairCls && !idPairCls.isNull()) {
+                            var kcls = null;
+                            try {
+                                kcls = A.ogc(k);
+                            }
+                            catch (e3) { }
+                            if (!kcls || kcls.toString() !== idPairCls.toString()) {
+                                alien++;
+                                continue;
+                            }
+                        }
+                        var kid = readStr(k.add(0x10).readPointer());
                         if (kid && idSet[kid])
                             toDel.push(k);
                     }
                     catch (e2) { }
                 }
+                if (alien)
+                    warn("clearModItemsFromPage: " + alien + " 个非 IdVersionPair 字典键已跳过 (容器曾被污染?)");
                 for (var di = 0; di < toDel.length; di++)
                     invokeOk(rmD, outer, [toDel[di]]);
             }
@@ -11318,14 +11460,28 @@ export function findAllPages() {
                 if (mlist.isNull())
                     break;
                 var mcnt = mlist.add(0x18).readS32(), marr = mlist.add(0x10).readPointer();
-                var ptrs = [];
+                // 只快照"值"(id/version/item), 不存 VersionedItem 裸指针 —— 那些包装对象在游戏重建页面/GC
+                // 后悬空, 重建时 Add 回去会制造"伪条目"→ 渲染期崩溃 (2026-09-25 根因)。
+                var cvi = null;
+                try {
+                    cvi = getGenericArgClass(A.ogc(mlist), 0);
+                }
+                catch (e5) { }
+                var cIdOff = (cvi && !cvi.isNull()) ? fieldOffset(cvi, "_id", 0x10) : 0x10;
+                var cVerOff = (cvi && !cvi.isNull()) ? fieldOffset(cvi, "_version", 0x18) : 0x18;
+                var cItemOff = (cvi && !cvi.isNull()) ? fieldOffset(cvi, "_item", 0x20) : 0x20;
+                var recs = [];
                 for (var mi = 0; mi < mcnt; mi++) {
                     var e = marr.add(0x20 + mi * 8).readPointer();
-                    if (e && !e.isNull())
-                        ptrs.push(e);
+                    if (e.isNull())
+                        continue;
+                    var rid = readStr(e.add(cIdOff).readPointer());
+                    if (!rid)
+                        continue;
+                    recs.push({ id: rid, ver: e.add(cVerOff).readS32(), item: e.add(cItemOff).readPointer() });
                 }
-                wbVanillaMap[ccat.name] = { page: out[c].toString(), items: ptrs };
-                wblog(ccat.name + " 捕获原版基座 " + ptrs.length + " 条");
+                wbVanillaMap[ccat.name] = { page: out[c].toString(), items: recs };
+                wblog(ccat.name + " 捕获原版基座 " + recs.length + " 条");
             }
         }
         catch (e) { }
@@ -11489,7 +11645,8 @@ export var wbPrevMod = null; // 上次注入时的 mod key (用于切换检测)
 export var wbCls = null; // 解析好的类表 (index.js resolveWitchBookClasses)
 export var wbReady = false;
 export var wbOverrides = { clue: {}, profile: {}, rule: {}, note: {} }; // 当前 mod 覆写的原版 id
-export var wbVanillaMap = {}; // catName -> {page: 页面指针, items: [原版 VersionedItem 指针]} (整页重建基座快照)
+export var wbVanillaMap = {}; // catName -> {page: 页面指针, items: [{id, ver, item}]} (整页重建基座快照)
+// items 只存值, 不存 VersionedItem 包装对象指针 (悬空会导致重建出"伪条目"→渲染崩溃)
 export var wbPageDefaults = {}; // pageClass ptr -> {labels:{字段:文本}, defaultTex:ptr}
 export var wbDefaultsCaptured = false;
 // setter (ES modules import 绑定只读, 赋值必须在模块内)
