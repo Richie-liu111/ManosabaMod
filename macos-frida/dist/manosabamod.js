@@ -15,9 +15,9 @@
 26595 /src/utils.js
 21084 /src/witchbook/characters.js
 14658 /src/witchbook/data.js
-6919 /src/witchbook/dictheal.js
+6922 /src/witchbook/dictheal.js
 18994 /src/witchbook/index.js
-26690 /src/witchbook/pages.js
+26755 /src/witchbook/pages.js
 43343 /src/witchbook/session.js
 2673 /src/witchbook/state.js
 6346 /src/witchbook/textures.js
@@ -10152,7 +10152,7 @@ export function injectVersions(list, addMi, vItemCls, cat, id, rec, page) {
 //   字典已有的键实例。本模块只保留"缺了就补"的那一条主干 (补时同样复用键实例, 所以补得上)。
 // 顺带记录的第二个坑: .NET Dictionary 的 Remove 只把 Entry.hashCode 置 -1, **键的指针留在数组里**
 //   → 只看键会把这些"已删除残留"当成存在 (dictHasIdVer 已按 hashCode >= 0 判定存活)。
-import { A, fieldOffset, findAllObjectOfType, findClassAcrossImages, getGenericArgClass, invokeBool, readStr, wblog, warn, error } from "../utils.js";
+import { A, dbg, fieldOffset, findAllObjectOfType, findClassAcrossImages, getGenericArgClass, invokeBool, readStr, wblog, warn, error } from "../utils.js";
 import { wbCls, wbData } from "./state.js";
 import { isCurrentModItem, makeIdVersionPair, wbCats } from "./data.js";
 import { dictHasIdVer, readDataItemsIndex, writeLocalizedDictEntry } from "./session.js";
@@ -10230,7 +10230,7 @@ export function healDictKey(dict, spec, id, ver, ivp) {
         try {
             var ck = A.cgm(A.ogc(dict), Memory.allocUtf8String("ContainsKey"), 1);
             if (ck && !ck.isNull() && usedKey && !usedKey.isNull()) {
-                wblog("[WitchBook] " + spec.key + " 补后核对 ContainsKey=" + invokeBool(ck, dict, [usedKey]));
+                dbg("[WitchBook] " + spec.key + " 补后核对 ContainsKey=" + invokeBool(ck, dict, [usedKey]));
             }
         }
         catch (e4) { }
@@ -10798,7 +10798,7 @@ export function ensureStateEntriesDict(page, cat) {
         // 旧实现只补 mod 条目 (非 mod 直接 continue) —— 原版键缺了不管, 那正是 2026-09-25 图鉴打不开的原因。
         var fixedN = healStateKeys(page, cat);
         if (fixedN)
-            wblog(cat.name + "._localizedTextData 补填 " + fixedN + " 条 (游戏重建过字典)");
+            dbg(cat.name + "._localizedTextData 补填 " + fixedN + " 条 (游戏重建过字典)"); // 每次开会重填, 常态噪音 → dbg
         return fixedN;
     }
     catch (e) {
@@ -10891,7 +10891,7 @@ export function applyStates(page, cat) {
                 listN = stList2.add(0x18).readS32();
         }
         catch (e2) { }
-        wblog(cat.name + "Page 状态应用 " + applied + " 条 (_state._list=" + listN + ")");
+        dbg(cat.name + "Page 状态应用 " + applied + " 条 (_state._list=" + listN + ")"); // B2 已结案: 降 dbg
     }
     catch (e) {
         error("applyStates err: " + e);

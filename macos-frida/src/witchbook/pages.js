@@ -142,7 +142,7 @@ export function ensureStateEntriesDict(page, cat) {
         // 核对"页面即将渲染的键"(_state 里的每条): mod 条目用 mod 文本, 原版条目从游戏 Data 重建。
         // 旧实现只补 mod 条目 (非 mod 直接 continue) —— 原版键缺了不管, 那正是 2026-09-25 图鉴打不开的原因。
         var fixedN = healStateKeys(page, cat);
-        if (fixedN) wblog(cat.name + "._localizedTextData 补填 " + fixedN + " 条 (游戏重建过字典)");
+        if (fixedN) dbg(cat.name + "._localizedTextData 补填 " + fixedN + " 条 (游戏重建过字典)");   // 每次开会重填, 常态噪音 → dbg
         return fixedN;
     } catch (e) { error("ensureStateEntriesDict err: " + e); return 0; }
 }
@@ -208,7 +208,7 @@ export function applyStates(page, cat) {
             var stList2 = state.add(fieldOffset(wbCls.versionedState, "_list", 0x10)).readPointer();
             if (!stList2.isNull()) listN = stList2.add(0x18).readS32();
         } catch (e2) {}
-        wblog(cat.name + "Page 状态应用 " + applied + " 条 (_state._list=" + listN + ")");
+        dbg(cat.name + "Page 状态应用 " + applied + " 条 (_state._list=" + listN + ")");   // B2 已结案: 降 dbg
     } catch (e) { error("applyStates err: " + e); }
 }
 

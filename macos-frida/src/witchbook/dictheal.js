@@ -10,7 +10,7 @@
 //   字典已有的键实例。本模块只保留"缺了就补"的那一条主干 (补时同样复用键实例, 所以补得上)。
 // 顺带记录的第二个坑: .NET Dictionary 的 Remove 只把 Entry.hashCode 置 -1, **键的指针留在数组里**
 //   → 只看键会把这些"已删除残留"当成存在 (dictHasIdVer 已按 hashCode >= 0 判定存活)。
-import { A, fieldOffset, findAllObjectOfType, findClassAcrossImages, getGenericArgClass, invokeBool, readStr, wblog, warn, error } from "../utils.js";
+import { A, dbg, fieldOffset, findAllObjectOfType, findClassAcrossImages, getGenericArgClass, invokeBool, readStr, wblog, warn, error } from "../utils.js";
 import { wbCls, wbData } from "./state.js";
 import { isCurrentModItem, makeIdVersionPair, wbCats } from "./data.js";
 import { dictHasIdVer, readDataItemsIndex, writeLocalizedDictEntry } from "./session.js";
@@ -76,7 +76,7 @@ export function healDictKey(dict, spec, id, ver, ivp) {
         try {
             var ck = A.cgm(A.ogc(dict), Memory.allocUtf8String("ContainsKey"), 1);
             if (ck && !ck.isNull() && usedKey && !usedKey.isNull()) {
-                wblog("[WitchBook] " + spec.key + " 补后核对 ContainsKey=" + invokeBool(ck, dict, [usedKey]));
+                dbg("[WitchBook] " + spec.key + " 补后核对 ContainsKey=" + invokeBool(ck, dict, [usedKey]));
             }
         } catch (e4) {}
         return true;
