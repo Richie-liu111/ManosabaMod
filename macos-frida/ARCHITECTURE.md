@@ -296,6 +296,14 @@ RVA 0x3404d4 完全一致; 不加载任何 mod 也会发生, 加载 mod 后概�
 - **排查经验**: 新写代码读 float/bool 一律 directCall; 读 Vector2/Rect 必须守卫;
   怀疑此类问题时先 grep `readFloat`/`readS32` 检查返回值来源。
 
+**补充 — bool 返回值的另一条岔路 (2026-09-25)**: 同一个"bool 读法"有三种上下文, 别混:
+| 上下文 | 正确读法 | 错误写法后果 |
+|---|---|---|
+| `il2cpp_runtime_invoke` 返回 bool | **`invokeBool()`** (返回值是**装箱 Boolean 对象指针**, 真值在 `+0x10` 的 1 字节) | `ret.toInt32() === 1` 永远不成立 → 守卫静默失效 (见 7.6) |
+| `Interceptor.onLeave(ret)` 取 bool | `ret.toInt32() === 1` (**原始返回寄存器**, 无装箱) | 误用 invokeBool 反而读错 |
+| `directCall(mi,'bool',...)` | 直接用返回值 | — |
+`movie.js` 的 `get_UrlStreaming` 属第二种, 写法正确; `characters.js` / `providers.js` 的守卫属第一种。
+
 ### 7.5 语言切换击穿 mod 资源加载 — 已修复 (2026-08-18), 残留: 切语言卡顿
 
 **现象** (修复前): 游戏内切语言 (zh-Hans ↔ ja) 后:
@@ -349,6 +357,76 @@ KERN_PROTECTION_FAILURE / 垃圾指针解引用)。改为 onLeave 同步重注�
 name/desc 空白。`registerLocalizedDict` (witchbook/pages.js) 补全全部 7 种游戏语言
 (ja/en-US/zh-Hans/zh-Hant/ko/fr/es), 缺失回退 `pickLocaleText` (zh-Hans→ja→任意),
 与游戏 .txt "Missing translation → source locale" 语义一致。
+
+### 7.6 角色元数据守卫失效 → 原版角色被 mod 覆写 (2026-09-25)
+
+**现象**: 装了 **Twilight_TestMod005** (info.json 用**原版角色 id** `Hiro/Warden/…`
+声明 `Characters`) 后, 原版剧本 `@char Hiro.Arms3,Eyes1_Normal_Open5,Default` /
+`@char Warden.1` 在预加载时报 `Naninovel.Error: Failed to load '<外观>' resource`;
+卸载该 mod 后日志 0 条 (modlog1/modlog2 对照)。
+
+**根因**: `witchbook/characters.js` 的 `ContainsId` 守卫写成 `r.ret.toInt32() === 1`
+(7.4 补充表第一种) → 守卫永不生效 → `AddRecord` 把原版 `CharacterMetadata`
+(LayeredCharacter) 覆盖成 `SpriteCharacter + PathPrefix=<mod>/Characters`。
+上游 `ModResourceLoader.AddRichCharacter` 有 `if (ContainsId) return;`。
+`providersMap.ContainsKey` 是同一份错误写法的第二处 (modlog2 留下重复 `Add`
+的 ArgumentException 实证)。
+
+**修复**: 两处改用 `invokeBool()`。修复后日志给出 `addCharacterProviders:
+mod 'Twilight_TestMod005' 新注册 13 个角色, 跳过 16 个已存在 ID`
+(29 条声明 = 16 撞原版 + 13 自有) —— 这行现在是"mod 声明原版 id"的可观测信号。
+注: `choice.js:chBool` 是 `invokeBool` 的重复实现 (S2 待清理)。
+
+### 7.7 `@update` 连排 → 主线程冻结 2.1 s — 合帧去抖 + 按分类收敛 (2026-09-25)
+
+**现象**: 进入 Twilight 剧本时主线程冻结 **2.12 s** (日志 13:01:16.338→18.460,
+1343 行, 占全会话日志 76%)。触发点是 `Twilight_TestMod005/Scripts/…/Main.nani`
+第 2 行起 **28 条 `@update` 连排** (15 Profile + 3 Rule + 9 Note + 1 Clue), 同一帧内执行。
+
+**根因**: `onWitchBookUpdate` 每命中一条 `@update` 就调用一次**全量**
+`tryInjectWitchBook()` (5 分类逐页 remove/add + 纹理注册), 实测每轮 55~80 ms。
+
+**修复** (`witchbook/index.js`, `pages.js`):
+- **① 合帧去抖**: 突发 = 与上一条 `@update` 间隔 < `WB_BURST_GAP_MS`(100ms), 或同突发内
+  切换到别的分类 ⇒ 才补注入。用 JS 时钟而不是 `Time.frameCount`: 项目里 `directCall`
+  的先例全是实例方法, 静态 extern 属性走直调风险不划算; 窗口法零额外 FFI, 失败模式
+  只是提前/推迟一次注入。
+- **② 按分类收敛**: 只重注入被 `@update` 触及的分类。
+- **不变式 (关键)**: 游戏自身 `UpdateVersion` 对 `_itemIds` **之外**的 id 不处理, 而且
+  本次调用立刻要用到 → `isItemIdInPage()` 为假时**当场**注入该分类; 只有已在页面里的
+  (含原版同 id 覆写: 原版条目本就在 `_itemIds` 内) 才推迟。
+- **兜底**: 开图鉴 (BeginToPresent/InitializePages) 仍走全量 → 某次突发后再无 `@update`
+  也不会停在旧状态。
+- 实测: 同 28 条突发 2.12s → **55ms**; `tryInjectWitchBook 完成` 29→4;
+  `清除旧 mod 条目` 798→132。
+
+### 7.8 跨帧持有托管对象指针 → 点开图鉴闪退 (2026-09-25, 与 7.5 的"悬垂指针"同一族)
+
+**现象**: Twilight 会话中 **回标题 → 再进 mod → 点开魔女图鉴** 必闪退 (首次进 mod
+直接点则不崩)。`.ips`: `EXC_BAD_ACCESS / KERN_INVALID_ADDRESS at 0x6f004d00000018`。
+
+**取证**: 反汇编崩溃 PC (`GameAssembly+0x4313D8`) 是一段**字符串内容比较**
+(length@0x10 / chars@0x14 = IL2CPP `System.String` 布局), 而 `x1+0x10` 被当成
+string 指针的值是 `{len=8,"Mo"}` —— 即**一个 `System.String` 被当作 `IdVersionPair`**
+(`Id@0x10 / Version@0x18`) 参与字典键比较。
+
+**根因**: `session.js` 的"原版基座快照" `wbVanillaMap[cat].items` 存的是原版
+**`VersionedItem` 包装对象的裸指针**(托管对象); "整页重建"(mod 切换/回标题) 再把
+这些旧指针 `Add` 回容器。而快照只在**页面实例指针变化**时才重捕获 —— 回标题时页面
+对象没被销毁(只隐藏), 指针没变 ⇒ 不重捕获, 但游戏已重建过 map、老对象被 GC 回收/复用
+⇒ 重建把**悬空指针**塞进容器 ⇒ 内存已被复用(常复用成字符串)的伪条目 → 渲染崩溃。
+
+**修复**: 快照**只存值** `{id, ver, item}`, 重建时 `buildVanillaItem()` **新建包装对象**;
+`item` 指针(由 Data 资产持有)仍做 **klass 校验**, 不匹配即丢弃 + warn。
+**运行时验证**: 修复后日志出现 `profile 整页重建: 丢弃无效快照 123 条 (item 指针类不匹配)`
+→ 悬空被实证 (clue/rule/note 零丢弃, 说明校验准确; profile 页实例跨标题存活所以独中招)。
+丢弃的 123 条恰好是被覆写的 15 个原版 id 的条目 = 覆写本来就要替换的, 无语义损失。
+
+**通用规则 (本项目第一条铁律)**: **跨帧只存值, 不存托管对象指针**。必须存指针时:
+① 用前做 `A.ogc(ptr).toString() === 期望类` 校验, 失效视为可恢复 (重建/丢弃 + warn);
+② 参考 7.5 那条"LRP 只被 JS 引用会被 GC 回收→悬垂指针"的同类教训。
+**待审同类点**: `state.js` 的 `wbPageDefaults[cls].defaultTex` (纹理指针, 只在首次捕获)、
+`wbData.texCache` (我们加载的 Texture2D 是否被游戏侧对象 root)。
 
 ## 八、日志系统 (2026-08-10 引入)
 
