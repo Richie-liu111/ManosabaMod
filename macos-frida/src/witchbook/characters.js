@@ -1,6 +1,6 @@
 // ============ WitchBook 角色域: 立绘 provider 注册 + CharacterData/AuthorData 注入 + Profile 姓名覆写 ============
 // 镜像 Windows AddRichCharacter/AddSimpleCharacter + TryInjectCharacterData + TryInjectAuthorData + ProfilePageRefreshContent_Patch
-import { A, dbg, fieldOffset, findClassAcrossImages, findFirstObjectOfType, findSvc, invoke, invokeOk, listContainsId, makeLocalResourceProvider, makeS, populateConvertersDict, readStr, wblog, error, warn } from "../utils.js";
+import { A, dbg, fieldOffset, findClassAcrossImages, findFirstObjectOfType, findSvc, invoke, invokeBool, invokeOk, listContainsId, makeLocalResourceProvider, makeS, populateConvertersDict, readStr, wblog, error, warn } from "../utils.js";
 import { wbCls, wbCurrentMod, wbData } from "./state.js";
 import { buildLocalizedTextArray, localeValue, pickLocaleText, resolveLocale, unionLocaleKeys } from "./data.js";
 import { getCurrentLocale, syncLocaleFromEngine } from "../locale.js";
@@ -42,8 +42,10 @@ export function addCharacterProviders(root, prefix) {
                     var containsMi = A.cgm(pmCls, Memory.allocUtf8String("ContainsKey"), 1);
                     var already = false;
                     if (containsMi && !containsMi.isNull()) {
-                        var r = invokeOk(containsMi, pm, [makeS(prefix)]);
-                        already = r.ok && r.ret && r.ret.toInt32() === 1;
+                        // ContainsKey 返回 bool → il2cpp_runtime_invoke 返回的是装箱 Boolean 对象指针,
+                        // 值在 +0x10。旧写法 r.ret.toInt32() === 1 永远不成立 → 守卫失效 → 重复 Add 抛
+                        // ArgumentException (modlog2 实证: characters.js:53)。
+                        already = invokeBool(containsMi, pm, [makeS(prefix)]);
                     }
                     if (!already) {
                         var addMi = A.cgm(pmCls, Memory.allocUtf8String("Add"), 2);
@@ -85,14 +87,19 @@ export function addCharacterProviders(root, prefix) {
         var metaCtor = A.cgm(metaCls, Memory.allocUtf8String(".ctor"), 0);
         var loaderCtor = A.cgm(loaderCls, Memory.allocUtf8String(".ctor"), 0);
         var implStr = "Naninovel.SpriteCharacter, Elringus.Naninovel.Runtime, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null";   // 完整 AQN (IL2CPP Type.GetType 需全名)
-        var ids = Object.keys(wbData.characters), added = 0;
+        var ids = Object.keys(wbData.characters), added = 0, skipped = 0;
         for (var i = 0; i < ids.length; i++) {
             var cc = wbData.characters[ids[i]];
             if (cc.key !== prefix) continue;
-            // 已注册则跳过 (TitleUi 可能多次触发)
-            if (containsIdMi && !containsIdMi.isNull()) {
-                var cr = invokeOk(containsIdMi, metaMap, [makeS(ids[i])]);
-                if (cr.ok && cr.ret && cr.ret.toInt32() === 1) continue;
+            // 已存在则跳过 — 两层含义: ① TitleUi 可能多次触发 ② 该 ID 已被原版或其它 mod 占用。
+            //   ② 是上游 ModResourceLoader.AddRichCharacter 的核心守卫: 声明原版角色 ID 的 mod
+            //   (如 Twilight_TestMod005 声明 Hiro/Warden/... 想改名) 必须整体跳过, 否则 AddRecord
+            //   会把原版 LayeredCharacter 记录换成 SpriteCharacter + PathPrefix=<mod>/Characters,
+            //   之后原版剧本 @char Hiro.<组合外观> 全部 "Failed to load" (2026-09-25 实证)。
+            // ContainsId 返回 bool → 走装箱读取, 不能用 r.ret.toInt32() (永远 ≠ 1, 守卫失效)。
+            if (containsIdMi && !containsIdMi.isNull() && invokeBool(containsIdMi, metaMap, [makeS(ids[i])])) {
+                skipped++;
+                continue;
             }
             try {
                 var meta = A.on(metaCls);
@@ -120,7 +127,9 @@ export function addCharacterProviders(root, prefix) {
                 if (invokeOk(addRecMi, metaMap, [makeS(ids[i]), meta]).ok) added++;
             } catch (e) { dbg("[v3] 角色注册 err '" + ids[i] + "': " + e); }
         }
-        dbg("[v3] addCharacterProviders: 注册 " + added + " 个角色 (mod '" + prefix + "')");
+        var summary = "addCharacterProviders: mod '" + prefix + "' 新注册 " + added + " 个角色" +
+            (skipped ? ", 跳过 " + skipped + " 个已存在 ID (原版/其它 mod 占用, 改名无效)" : "");
+        if (skipped) wblog(summary); else dbg("[v3] " + summary);   // 无冲突时保持静默 (原为 dbg)
     } catch (e) { dbg("[v3] addCharacterProviders err: " + e); }
 }
 // "#ffd1d9" → [r,g,b,a] float (Unity Color 顺序)
