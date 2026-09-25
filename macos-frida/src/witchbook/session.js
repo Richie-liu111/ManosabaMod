@@ -89,25 +89,48 @@ export function dictHasIdVer(dict, id, ver) {
     } catch (e) {}
     return false;
 }
+// 用快照值新建 VersionedItem<TItem> 包装对象。
+// 不复用旧指针 —— VersionedItem 是页面加载期由游戏创建的托管对象, 游戏重建页面/GC 之后旧指针悬空,
+// 直接 Add 回去会让容器里出现"内存已被复用(往往是复用成字符串)的伪条目" → 渲染时按字典键比较即崩
+// (2026-09-25 定位: 崩溃地址 = 一个 String 的 length+chars 被当 IdVersionPair 用)。
+function buildVanillaItem(vItemCls, rec) {
+    var vi = A.on(vItemCls);
+    vi.add(fieldOffset(vItemCls, "_id", 0x10)).writePointer(makeS(rec.id));
+    vi.add(fieldOffset(vItemCls, "_version", 0x18)).writeS32(rec.ver | 0);
+    vi.add(fieldOffset(vItemCls, "_item", 0x20)).writePointer(rec.item && !rec.item.isNull() ? rec.item : ptr(0));
+    vi.add(fieldOffset(vItemCls, "_idVersionPair", 0x28)).writePointer(makeIdVersionPair(rec.id, rec.ver | 0));
+    return vi;
+}
 // 整页重建: 清空页面 _loadedDataItemMap, 从捕获的原版快照重添全部条目,
 // 重建 _itemIds, 并为缺 dict 项的条目补建。mod 切换/回标题时调用 → 每次会话从原版基座开始。
 export function restorePageFromData(page, pageCls, cat) {
     try {
         var snap = wbVanillaMap[cat.name];
-        var ptrs = snap ? snap.items : null;
-        if (!ptrs || !ptrs.length) { warn(cat.name + " 整页重建跳过 (快照未捕获)"); return; }
+        var recs = snap ? snap.items : null;
+        if (!recs || !recs.length) { warn(cat.name + " 整页重建跳过 (快照未捕获)"); return; }
         var mapList = page.add(fieldOffset(pageCls, "_loadedDataItemMap", 0x88)).readPointer();
         if (mapList.isNull()) return;
         var mapListCls = A.ogc(mapList);
         var clMi = A.cgm(mapListCls, Memory.allocUtf8String("Clear"), 0);
         if (clMi && !clMi.isNull()) invokeOk(clMi, mapList, []);
         var addMi = A.cgm(mapListCls, Memory.allocUtf8String("Add"), 1);
-        var added = 0;
-        for (var i = 0; i < ptrs.length; i++) {
-            if (addMi && !addMi.isNull()) { if (invokeOk(addMi, mapList, [ptrs[i]]).ok) added++; }
-        }
         // 从 map 的 vItemCls 取字段偏移
         var vItemCls = getGenericArgClass(A.ogc(mapList), 0);
+        var expectItemCls = wbCls.items[cat.name];   // item 指针的类校验基准 (悬空则类名对不上)
+        var added = 0, bad = 0;
+        for (var i = 0; i < recs.length; i++) {
+            var rc = recs[i];
+            if (!rc || !rc.id) { bad++; continue; }
+            // item 由 Data 资产持有 (长命), 但仍校验类: 指针悬空时它读出来的 klass 会对不上 → 丢弃该条
+            if (rc.item && !rc.item.isNull() && expectItemCls && !expectItemCls.isNull()) {
+                var okCls = false;
+                try { okCls = (A.ogc(rc.item).toString() === expectItemCls.toString()); } catch (e4) {}
+                if (!okCls) { bad++; continue; }
+            }
+            var vi = buildVanillaItem(vItemCls, rc);
+            if (vi && !vi.isNull() && addMi && !addMi.isNull() && invokeOk(addMi, mapList, [vi]).ok) added++;
+        }
+        if (bad) warn(cat.name + " 整页重建: 丢弃无效快照 " + bad + " 条 (item 指针类不匹配)");
         var idOff = fieldOffset(vItemCls, "_id", 0x10);
         var verOff = fieldOffset(vItemCls, "_version", 0x18);
         rebuildItemIdsFromMap(page, pageCls, mapList, vItemCls, idOff);
@@ -244,7 +267,8 @@ export function clearModItemsFromPage(page, pageCls, idSet) {
             var rmD = A.cgm(outerCls, Memory.allocUtf8String("Remove"), 1);
             if (rmD && !rmD.isNull()) {
                 // 先收集要删的 key (边遍历边 Remove 会 rehash 使数组失效)
-                var toDel = [];
+                var toDel = [], alien = 0;
+                var idPairCls = wbCls.idVersionPair;
                 var ents = outer.add(0x18).readPointer();
                 var ecnt = ents.isNull() ? 0 : ents.add(0x18).readS32();
                 for (var ei = 0; ei < ecnt; ei++) {
@@ -252,10 +276,20 @@ export function clearModItemsFromPage(page, pageCls, idSet) {
                         var en = ents.add(0x20 + ei * 24);
                         var k = en.add(8).readPointer();
                         if (k.isNull()) continue;
-                        var kid = readStr(k);
+                        // 键是 IdVersionPair (Id@0x10 / Version@0x18)。2026-09-25 修:
+                        // 旧代码写成 readStr(k) —— 把 pair 当字符串读, readStr 的长度守卫让它静默返回 null,
+                        // 于是这段"清理旧词条"从未生效 (覆写过的 id 残留旧 dict 项)。
+                        // 顺带按类过滤: 若键不是 IdVersionPair (容器被污染过), 跳过而不是去解引用它。
+                        if (idPairCls && !idPairCls.isNull()) {
+                            var kcls = null;
+                            try { kcls = A.ogc(k); } catch (e3) {}
+                            if (!kcls || kcls.toString() !== idPairCls.toString()) { alien++; continue; }
+                        }
+                        var kid = readStr(k.add(0x10).readPointer());
                         if (kid && idSet[kid]) toDel.push(k);
                     } catch (e2) {}
                 }
+                if (alien) warn("clearModItemsFromPage: " + alien + " 个非 IdVersionPair 字典键已跳过 (容器曾被污染?)");
                 for (var di = 0; di < toDel.length; di++) invokeOk(rmD, outer, [toDel[di]]);
             }
         }
@@ -460,10 +494,23 @@ export function findAllPages() {
                 var mlist = out[c].add(fieldOffset(ccls, "_loadedDataItemMap", 0x88)).readPointer();
                 if (mlist.isNull()) break;
                 var mcnt = mlist.add(0x18).readS32(), marr = mlist.add(0x10).readPointer();
-                var ptrs = [];
-                for (var mi = 0; mi < mcnt; mi++) { var e = marr.add(0x20 + mi * 8).readPointer(); if (e && !e.isNull()) ptrs.push(e); }
-                wbVanillaMap[ccat.name] = { page: out[c].toString(), items: ptrs };
-                wblog(ccat.name + " 捕获原版基座 " + ptrs.length + " 条");
+                // 只快照"值"(id/version/item), 不存 VersionedItem 裸指针 —— 那些包装对象在游戏重建页面/GC
+                // 后悬空, 重建时 Add 回去会制造"伪条目"→ 渲染期崩溃 (2026-09-25 根因)。
+                var cvi = null;
+                try { cvi = getGenericArgClass(A.ogc(mlist), 0); } catch (e5) {}
+                var cIdOff = (cvi && !cvi.isNull()) ? fieldOffset(cvi, "_id", 0x10) : 0x10;
+                var cVerOff = (cvi && !cvi.isNull()) ? fieldOffset(cvi, "_version", 0x18) : 0x18;
+                var cItemOff = (cvi && !cvi.isNull()) ? fieldOffset(cvi, "_item", 0x20) : 0x20;
+                var recs = [];
+                for (var mi = 0; mi < mcnt; mi++) {
+                    var e = marr.add(0x20 + mi * 8).readPointer();
+                    if (e.isNull()) continue;
+                    var rid = readStr(e.add(cIdOff).readPointer());
+                    if (!rid) continue;
+                    recs.push({ id: rid, ver: e.add(cVerOff).readS32(), item: e.add(cItemOff).readPointer() });
+                }
+                wbVanillaMap[ccat.name] = { page: out[c].toString(), items: recs };
+                wblog(ccat.name + " 捕获原版基座 " + recs.length + " 条");
             }
         } catch (e) {}
     }

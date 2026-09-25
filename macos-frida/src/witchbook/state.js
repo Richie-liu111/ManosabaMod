@@ -18,7 +18,8 @@ export var wbPrevMod = null;      // 上次注入时的 mod key (用于切换检
 export var wbCls = null;          // 解析好的类表 (index.js resolveWitchBookClasses)
 export var wbReady = false;
 export var wbOverrides = { clue: {}, profile: {}, rule: {}, note: {} };  // 当前 mod 覆写的原版 id
-export var wbVanillaMap = {};   // catName -> {page: 页面指针, items: [原版 VersionedItem 指针]} (整页重建基座快照)
+export var wbVanillaMap = {};   // catName -> {page: 页面指针, items: [{id, ver, item}]} (整页重建基座快照)
+                                // items 只存值, 不存 VersionedItem 包装对象指针 (悬空会导致重建出"伪条目"→渲染崩溃)
 export var wbPageDefaults = {};       // pageClass ptr -> {labels:{字段:文本}, defaultTex:ptr}
 export var wbDefaultsCaptured = false;
 
