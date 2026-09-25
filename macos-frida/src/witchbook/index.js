@@ -11,7 +11,7 @@
 //   3. 显示: Interceptor.replace CluePage.RefreshPageContent / SetupItemButton —— mod 线索直接设
 //      _subjectLabel/_descriptionLabel/_thumbnail (绕开 _localizedTextData 的 KeyNotFoundException)。
 // 数据来源: 运行时读 <MOD_ROOT>/<modKey>/info.json 的 Clues 字段 + 扫 WitchBook/Clues/*.png。
-import { A, dbg, ensureItemIdsString, fieldOffset, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, wblog, error, warn } from "../utils.js";
+import { A, dbg, ensureItemIdsString, fieldOffset, findAllObjectOfType, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, wblog, error, warn } from "../utils.js";
 import { initCatStateMaps, setWbCls, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbPrevMod } from "./state.js";
 import { isCurrentModItem, loadWitchBookData, wbCatByIdx, wbCats } from "./data.js";
 import { clearAllWitchBookPages, clearBookViaVanilla, detectCurrentMod, findAllPages, hookClearState, rebuildAllPages } from "./session.js";
@@ -166,6 +166,7 @@ export function tryInjectWitchBook() {
         for (var i = 0; i < cn2.length; i++) {
             injectPage(wbCats[cn2[i]]);
         }
+        wbDirtyCats = {};   // 全量注入已覆盖全部分类 → 清空 ① 的合帧待办
         // 新角色 (Profile 显示名: CharacterData 基本数据 + AuthorData 名称模板)
         // injectCharacterData();   // 临时禁用: 角色档案数据注入可能破坏场景 (5 个 ArgumentException)
         // injectAuthorData();
@@ -206,6 +207,51 @@ function dumpPageFieldTypes() {
         }
     } catch (e) { error("dumpPageFieldTypes err: " + e); }
 }
+// ===== ①② @update 合帧去抖 + 按分类收敛 (2026-09-25) =====
+// 背景: Twilight_TestMod005/Scripts/Twilight_TestMod005/Main 第 2 行起 28 条 @update 连排,
+//   旧实现每条都跑一次全量 tryInjectWitchBook (5 分类全页 remove/add + 纹理注册),
+//   实测 28 × 55~80 ms ≈ 2.12 s 主线程冻结 (modlog 2026-09-25 13:01:16.338→18.460)。
+// 现改为:
+//   ① 同一"突发"内的多条 @update 合并成一次补注入 —— 突发 = 与上一条 @update 间隔 < WB_BURST_GAP_MS。
+//      用 JS 时钟判定而不用 Time.frameCount: 项目里 directCall 的先例全是实例方法, 静态 extern
+//      属性走直调风险不划算; 窗口法零额外 FFI, 失败模式也只是提前/推迟一次注入, 不改变结果。
+//   ② 只重注入被 @update 触及的分类 (旧实现无论哪一类都重注入全部 5 类)。
+// 不变式 (见文件头): 游戏自身 UpdateVersion 对 _itemIds 之外的 id 不处理, 而且本次调用立刻要用到,
+//   所以"本帧新引入的 id"必须当场就位 → isItemIdInPage 为假时仍立即注入该分类; 已在页面里的
+//   (含原版同 id 覆写: 原版条目本就在 _itemIds 内) 则把换血/状态补写推迟到合帧注入。
+// 兜底: 图鉴打开 (BeginToPresent/InitializePages) 仍走全量 tryInjectWitchBook, 所以即使某次突发
+//   之后再也没有 @update, 显示也不会停在旧状态。
+var WB_BURST_GAP_MS = 100;
+var wbDirtyCats = {};          // 分类名 → true, 待合帧补注入
+var wbLastUpdateAt = 0;        // 上一条 @update 的 JS 时刻
+
+// id 是否已在"本分类页面"的 _itemIds 内 (游戏 UpdateVersion 的处理门槛)
+function isItemIdInPage(cat, id) {
+    try {
+        var pageCls = wbCls.pages[cat.name];
+        var pages = findAllObjectOfType(pageCls);
+        if (!pages.length) return false;
+        var arr = pages[0].add(fieldOffset(pageCls, "_itemIds", 0x98)).readPointer();
+        if (arr.isNull()) return false;
+        var n = arr.add(0x18).readS32();
+        if (n < 0 || n > 100000) return false;
+        for (var i = 0; i < n; i++) if (readStr(arr.add(0x20 + i * 8).readPointer()) === id) return true;
+    } catch (e) {}
+    return false;
+}
+// 合帧补注入: 只重注入脏分类 + 补一次纹理 (对比 tryInjectWitchBook: 全分类 + mod 切换处理)
+export function flushWitchBookDirty(reason) {
+    var names = Object.keys(wbDirtyCats);
+    if (!names.length) return;
+    wbDirtyCats = {};
+    try {
+        for (var i = 0; i < names.length; i++) if (wbCats[names[i]]) injectPage(wbCats[names[i]]);
+        registerTexturesInto(null);
+        var ps = findAllPages();
+        if (ps.length) registerTexturesInto(ps[0].add(fieldOffset(A.ogc(ps[0]), "_addressableAssetLoader", 0x50)).readPointer());
+        dbg("[v3][WitchBook] 合帧补注入 (" + reason + "): " + names.join(","));
+    } catch (e) { error("flushWitchBookDirty err: " + e); }
+}
 // @update 拦截: 按 WitchBookCategory 路由 (Clue=0 Profile=1 Map=2 Rule=3 Note=4)
 export function onWitchBookUpdate(args) {
     try {
@@ -218,7 +264,15 @@ export function onWitchBookUpdate(args) {
         if (wbData.states[cat.name][id] === ver) return;
         wbData.states[cat.name][id] = ver;
         wblog(">>> @update 拦截: category=" + cat.name + " id='" + id + "' version=" + ver);
-        tryInjectWitchBook();
+        // ① 新突发 (与上一条 @update 间隔超阈值) → 上一批已结束, 先把攒下的补上;
+        //    ①b 同突发内切到别的分类 ⇒ 前一批该分类已完成 → 也立刻补上 (延迟收紧到"分类边界")
+        var now = Date.now();
+        if (now - wbLastUpdateAt > WB_BURST_GAP_MS) flushWitchBookDirty("突发结束");
+        else if (Object.keys(wbDirtyCats).length && !wbDirtyCats[cat.name]) flushWitchBookDirty("分类切换");
+        wbLastUpdateAt = now;
+        // 本次调用立刻需要该 id 在位 → 缺则就地注入本分类; 已在则推迟到合帧
+        if (!isItemIdInPage(cat, id)) injectPage(cat);
+        wbDirtyCats[cat.name] = true;   // ② 只标这一条分类
         dbg(">>> onWitchBookUpdate 返回");
     } catch (e) { error("onWitchBookUpdate err: " + e); }
 }

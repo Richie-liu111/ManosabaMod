@@ -1,9 +1,22 @@
 // ============ WitchBook 页面注入域: 注入 Page._loadedDataItemMap + _itemIds + _state + 本地化字典预填 ============
 import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, getGenericArgClass, getSystemClass, invokeBool, invokeOk, listContainsId, makeS, readStr, wblog, dbg, error, warn } from "../utils.js";
+import { fileExists } from "../io.js";
 import { wbCls, wbData, wbOverrides } from "./state.js";
 import { currentModIds, fullLocaleTags, injectVersions, isCurrentModItem, localeValue, pickLocaleText, resolveLocale, wbCats } from "./data.js";
 import { clearModItemsFromPage, isVanillaId } from "./session.js";
 
+// 旗标文件 <MOD_ROOT>/.wb_no_override 存在 → 跳过"原版同 id 覆写" (= 上游 AddRichCharacter 语义)。
+// 用于 A/B 定位覆写机制是否与崩溃相关; 缓存在首次调用时读一次 (旗标只在启动前有意义)。
+var _wbNoOverride = null;
+function wbNoOverride() {
+    if (_wbNoOverride === null) {
+        try {
+            _wbNoOverride = (typeof MOD_ROOT !== "undefined" && MOD_ROOT) ? fileExists(MOD_ROOT + "/.wb_no_override") : false;
+        } catch (e) { _wbNoOverride = false; }
+        if (_wbNoOverride) wblog("WB_NO_OVERRIDE 生效: 跳过原版同 id 覆写 (改名失效)");
+    }
+    return _wbNoOverride;
+}
 // 2) 注入 Page._loadedDataItemMap + _itemIds + _state
 export function injectPage(cat) {
     try {
@@ -28,6 +41,10 @@ export function injectPage(cat) {
                     var id = ids[i];
                     // override: mod 定义的原版同 id → 移除原版条目再注入 mod 版 (镜像 Windows)
                     if (isVanillaId(cat, id)) {
+                        // WB_NO_OVERRIDE (旗标文件 <MOD_ROOT>/.wb_no_override): 跳过覆写, 等价上游
+                        // ModResourceLoader.AddRichCharacter 的 ContainsId→return (mod 的改名失效, 原版数据不动)。
+                        // 用途: A/B 判断覆写机制是否为崩溃触发点; 也是可发布的规避方案。
+                        if (wbNoOverride()) { dbg("[WitchBook] WB_NO_OVERRIDE: 跳过原版同 id 覆写 '" + id + "'"); continue; }
                         var oSet = {}; oSet[id] = 1;
                         clearModItemsFromPage(page, pageCls, oSet);
                         wbOverrides[cat.name][id] = true;

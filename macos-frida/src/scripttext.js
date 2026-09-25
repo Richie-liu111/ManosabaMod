@@ -110,7 +110,7 @@ function dumpChoiceState(cs, tag) {
                 info += " [" + i + "] " + (pid || "") + "='" + (ptxt || "") + "'";
             }
         }
-        wblog("剧本引号修复: " + info);
+        dbg("[v3] 剧本引号修复: " + info);   // 每个选项都打 → 降 dbg (2026-09-25)
     } catch (e) { dbg("[v3] scripttext dumpChoiceState err: " + e); }
 }
 // 从参数 idx 解析 LocalizableText → parts 数组并剥 (兼容按值/按指针两种传参形态)
