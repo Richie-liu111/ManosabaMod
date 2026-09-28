@@ -3,7 +3,7 @@
 > ⚠️ **试验性功能**（macOS 独有，上游 Windows 版 ManosabaMod 无此功能，稳定性未充分实测）。
 > 本教程面向 mod 作者：如何在自己的 mod 剧本里插入自定义致谢演出
 > （staff 主名单滚动 + 共犯者 Special Thanks 多屏翻页 + 製作段滚动）。
-> 机制细节（内部实现/踩坑）见 [ARCHITECTURE.md](ARCHITECTURE.md) 九节。
+> 机制细节（内部实现/踩坑）见 [ARCHITECTURE.md](../ARCHITECTURE.md) 九节。
 
 ## 1. 一句话原理
 

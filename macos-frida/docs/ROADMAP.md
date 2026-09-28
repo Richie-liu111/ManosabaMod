@@ -1,4 +1,4 @@
-# ManosabaMod macOS 移植 — 目标与差距文档
+# ManosabaMod macOS 移植 — 路线图与差距
 
 > 随代码演进更新。最后更新：2026-08-23（新增 macOS 自研致谢演出复刻 — ⚠️ 试验性, 上游无此功能, 见「差距」6）。
 
@@ -50,7 +50,7 @@
    - **现象**：游戏内切语言（zh-Hans ↔ ja）后：① 剧本内 `Failed to load 'zh-Hans' localization document for '<mod>/<script>'` ×N → `Failed to hold` 卡死；② 退出到标题黑屏（Rewind 覆盖标题脚本的 `@back EmaHiro` 等 mod 资产加载失败 → `Unity.LogException` → 死在 `@ShowUI TitleUI` 前 → TitleUi.Activate 永不触发 → 重注入钩子永不执行 → 自锁）。
    - **根因**：Naninovel 切语言时对**所有** `LocalizableResourceLoader<T>` 调用 `InitializeProvisionSources()` 重建 ProvisionSources 列表，抹掉 mod 注入的 provider（Scripts/Text/Audio/Voice/Backgrounds/Characters 全中）。macOS loader 唯一重注入点在 `TitleUi.Activate` hook（providers.js）→ 中途切换无恢复。**与 mod 内容无关**：`@print/@toast/@choice` 的 `|#ID|` 都只是"在错误时机被迫重载 doc"的触发器；此前把 `@choice |#ID|` 误判为根因，已排除（118 条 `@print |#ID|` 在 provider 被抹后同样 `Failed to hold`）。
    - **证据**（2026-08-18 modlog）：`RL.HandleLocaleChanged('ja')` ×几十 = 每个 loader 实例都在重建；随后 Backgrounds/Stills loader 只剩游戏自带 4 个 provider、`EmaHiro ResourceExists mp=0x0` → LogException。
-   - **修复**（2026-08-18，providers.js + choice.js，细节见 ARCHITECTURE.md 7.5）：hook `ResourceLoader<T>.HandleLocaleChanged`（FSG 共享体，一次覆盖所有 T 实例化）**onLeave → 主线程同步重注入**：遍历 modList 重跑 `addModLoader`；`insertProvisionSource` 带去重（同 prefix 幂等跳过）。覆盖全部 5 类 provider（Scripts/Text/Audio/Voice/Backgrounds(MainBackground|Stills|Tricks)/Characters），比上游 C# 版（仅 Text/Audio/Voice）更全——标题黑屏正是 Backgrounds。
+   - **修复**（2026-08-18，providers.js + choice.js，细节见 [PITFALLS.md](PITFALLS.md) 7.5）：hook `ResourceLoader<T>.HandleLocaleChanged`（FSG 共享体，一次覆盖所有 T 实例化）**onLeave → 主线程同步重注入**：遍历 modList 重跑 `addModLoader`；`insertProvisionSource` 带去重（同 prefix 幂等跳过）。覆盖全部 5 类 provider（Scripts/Text/Audio/Voice/Backgrounds(MainBackground|Stills|Tricks)/Characters），比上游 C# 版（仅 Text/Audio/Voice）更全——标题黑屏正是 Backgrounds。
    - **与上游 66e5388b 的差异 —— 不用 JS timer**：上游用 LocaleWatcherComponent（MonoBehaviour.Update）连续 ~10 帧重注入；macOS 初版镜像用 setTimeout 链，但 Frida timer 跑在**脚本线程**而非 Unity 主线程，与主线程异步 reload（UniTask 续体）竞争 → 2026-08-18 多次 SIGBUS/SIGSEGV 崩溃（GameAssembly 无符号偏移 +0xab2da0/0xb52c34/0xdc9988）。改 onLeave 同步重注入后，同一场景实测 **358 次重注入零崩溃**（主线程语义对齐上游）。
    - **已知残留 —— 切语言卡顿**：一次切换 ~200+ 次重注入（每个 loader 实例各一次，间隔 ~20ms≈每帧），每次全量 `addModLoader`（30 mod × 5 类）。去重只省 insert，findSvc / LRP 创建 / converters dict 填充仍每帧重复 → 主线程被占用数秒 → 肉眼卡顿。优化方向：① **verify-before-repair**——重注入前先扫各 loader 列表，全在则跳过（绝大多数重注入冗余）；② 按 loader 定向重注入——只补刚被 wipe 的 loader，最贴上游语义，但 LRP 若只被 JS 记录引用会被 IL2CPP GC 回收成悬垂指针，需额外 rooting。
    - **附带修复 —— WitchBook 缺语言条目**：mod 的 info.json 某条目缺某语言（如 Gapless 的 Clues 只有 zh-Hans）时，日文下图鉴查 `inner[ja]` → KeyNotFoundException → name/desc 空白。`registerLocalizedDict`（witchbook/pages.js）现在补全全部 7 种游戏语言，缺的用已有文本回退（`pickLocaleText`：zh-Hans→ja→任意），与游戏 .txt "Missing translation → source locale" 语义一致（2026-08-18 已修）。
@@ -64,7 +64,7 @@
      参数（bpm/拍数/_scrollSpeed）运行时读 director, 不硬编码。
    - **稳定性未经充分实测**: 依赖 CreditsDirectorAct2 运行时参数与 CreditsUI 场景结构,
      游戏版本更新可能失效。测试脚本/数据在仓库外（`test-tools/`）不随仓库分发。
-   - 机制细节与踩坑（主线程泵/breakpoint triggered/运行时字典不全）见 ARCHITECTURE.md 九节。
+   - 机制细节与踩坑（主线程泵/breakpoint triggered/运行时字典不全）见 [ARCHITECTURE.md](ARCHITECTURE.md) 九节。
 
 ## 已知开放项（非阻断）
 

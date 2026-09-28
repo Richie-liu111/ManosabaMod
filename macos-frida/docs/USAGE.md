@@ -1,4 +1,4 @@
-# ManosabaMod macOS 移植 (Frida)
+# macOS 版使用说明 (Frida)
 
 用 **Frida** 在 macOS (Apple Silicon) 上加载 ManosabaMod,不依赖 BepInEx。
 mod 剧本 / 本地化 / voice / audio / movie / 背景 / 立绘 已通过 provider 管线加载。
@@ -20,9 +20,13 @@ mod 剧本 / 本地化 / voice / audio / movie / 背景 / 立绘 已通过 provi
 ManosabaMod/
 ├── ManosabaLoader/                  ← 原版 Windows 加载器源码 (C#/BepInEx, 仅参考)
 └── macos-frida/
-    ├── README.md                    ← 使用说明 (本文件)
-    ├── ARCHITECTURE.md              ← 架构 / 原理 / 与 Windows 版区别 / mod 兼容性
-    ├── GOALS.md                     ← 目标 / Windows vs macOS 差距文档 (活的)
+    ├── docs/                        ← 文档
+    │   ├── USAGE.md                 ← 使用说明 (本文件)
+    │   ├── ARCHITECTURE.md          ← 架构 / 原理 / 与 Windows 版区别 / mod 兼容性
+    │   ├── PITFALLS.md              ← 已知坑与修复 (7.x)
+    │   ├── ROADMAP.md               ← 目标 / 与 Windows 版的差距 (活的)
+    │   ├── OFFSETS.md               ← 已验证的内存偏移速查
+    │   └── guides/                  ← mod 作者教程 (致谢演出 / 语音历史回放)
     ├── src/                         ← 源码 (多文件 ES modules, 唯一源码源)
     │   ├── entry.js                 ← 初始化编排 (API 绑定 / hook 挂载)
     │   ├── utils.js / io.js         ← 基础工具 + libc 文件 I/O
@@ -121,7 +125,7 @@ GAME=/path/to/manosaba ./run_mod.sh # 游戏不在 Steam 默认位置时
 | mod 剧本 (.nani) | ✅ |
 | 本地化 (.txt) / voice | ✅ |
 | 音频 (.wav, 限 PCM16/44100Hz/立体声) | ✅ |
-| 音频 (.ogg) | ❌ 不支持, 用 ffmpeg 转 wav (`ffmpeg -i in.ogg -ar 44100 -ac 2 -sample_fmt s16 out.wav`; 原因见 GOALS.md) |
+| 音频 (.ogg) | ❌ 不支持, 用 ffmpeg 转 wav (`ffmpeg -i in.ogg -ar 44100 -ac 2 -sample_fmt s16 out.wav`; 原因见 [ROADMAP.md](ROADMAP.md)) |
 | Movie (.mp4/.webm/.ogv) | ✅ |
 | 背景 (@back) / 立绘 (@char) | ✅ |
 | 角色名富文本 (姓/名分级字号+颜色) | ✅ |
@@ -137,17 +141,17 @@ GAME=/path/to/manosaba ./run_mod.sh # 游戏不在 Steam 默认位置时
 
 - **致谢演出复刻（2026-08-19+，试验性）**：macOS 版自研功能，**上游 Windows 版
   ManosabaMod 无此功能**。静态数据驱动（`data.json` + `Assets/thanks-pages.json`，数据格式
-  见 [CREDIT_ROLL.md](docs/CREDIT_ROLL.md)），
+  见 [guides/CREDIT_ROLL.md](guides/CREDIT_ROLL.md)），
   复刻原版致谢演出：staff 主名单滚动、stills（默认原版 9 张，data.json 配 `stills`
-  播放列表可自定义：换图 + 每张 display/fadeIn/fadeOut，见 CREDIT_ROLL.md §6）、
+  播放列表可自定义：换图 + 每张 display/fadeIn/fadeOut，见 guides/CREDIT_ROLL.md §6）、
   共犯者 Special Thanks 36 屏翻页（zh 420 + ja 4544 合并名单）、製作・販売/Acacia/© 段滚动。
   **稳定性未经充分实测**，依赖原版 CreditsDirectorAct2 运行时参数（bpm/拍数/滚动速度）
-  与 CreditsUI 场景结构。触发方式见 ARCHITECTURE.md 九节。
+  与 CreditsUI 场景结构。触发方式见 [ARCHITECTURE.md](ARCHITECTURE.md) 九节。
 - **已知残留（2026-08-18）**：切语言瞬间有肉眼可见卡顿 —— 每个 loader 实例各触发一次
   全量重注入（实测一次切换 ~200 次，间隔 ~20ms≈每帧），主线程被同步 IL2CPP 调用占用数秒。
-  优化方向（verify-before-repair / 按 loader 定向重注入）见 GOALS.md「差距」5。
-- 修复细节见 [GOALS.md](GOALS.md)「差距」5 / [ARCHITECTURE.md](ARCHITECTURE.md) 7.5。
+  优化方向（verify-before-repair / 按 loader 定向重注入）见 [ROADMAP.md](ROADMAP.md)「差距」5。
+- 修复细节见 [ROADMAP.md](ROADMAP.md)「差距」5 / [PITFALLS.md](PITFALLS.md) 7.5。
 
-架构、工作原理、与 Windows 版差异、mod 格式兼容性详见 [ARCHITECTURE.md](ARCHITECTURE.md)。
-mod 作者教程见 [docs/CREDIT_ROLL.md](docs/CREDIT_ROLL.md)（自定义致谢演出：数据格式 + 剧本触发协议）
-与 [docs/语音历史回放.md](docs/语音历史回放.md)（让角色语音可在历史回放重播）。
+架构、工作原理、与 Windows 版差异、mod 格式兼容性详见 [ARCHITECTURE.md](ARCHITECTURE.md) / [PITFALLS.md](PITFALLS.md)。
+mod 作者教程见 [guides/CREDIT_ROLL.md](guides/CREDIT_ROLL.md)（自定义致谢演出：数据格式 + 剧本触发协议）
+与 [guides/VOICE_BACKLOG.md](guides/VOICE_BACKLOG.md)（让角色语音可在历史回放重播）。

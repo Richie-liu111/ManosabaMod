@@ -38,7 +38,7 @@
 | 致谢演出复刻 (staff 主名单滚动 + 共犯 36 屏 + 製作段) | ⚠️ 试验性 (macOS 独有, 上游无此功能, 稳定性未实测) |
 | 调试工具 | ❌ 未实现(macOS 用 probe_*.js 探针替代) |
 
-Windows 版与 macOS 版的功能差距(调试工具等)见 [GOALS.md](macos-frida/GOALS.md)。
+Windows 版与 macOS 版的功能差距(调试工具等)见 [macos-frida/docs/ROADMAP.md](macos-frida/docs/ROADMAP.md)。
 
 ## 项目结构
 
@@ -61,9 +61,13 @@ ManosabaMod/
     ├── dist/manosabamod.js    # 打包产物 (frida-compile 构建, 随版本提交)
     ├── run_mod.sh             # 启动脚本 (自动构建 + 启动游戏 + 注入)
     ├── normalize_audio.py     # 可选: 非标音频 (ogg/48k 等) 检测与转换, run_mod.sh 启动前调用
-    ├── ARCHITECTURE.md        # 架构 / 原理 / 与 Windows 版差异
-    ├── GOALS.md               # Windows vs macOS 功能对照与差距 (活的)
-    └── README.md              # macOS 版使用说明
+    └── docs/                  # 文档
+        ├── USAGE.md           # macOS 版使用说明 (部署/开发/游戏目录定位)
+        ├── ARCHITECTURE.md    # 架构 / 原理 / 与 Windows 版差异
+        ├── PITFALLS.md        # 已知坑与修复 (7.x)
+        ├── ROADMAP.md         # 与 Windows 版的功能对照与差距 (活的)
+        ├── OFFSETS.md         # 已验证的内存偏移速查
+        └── guides/            # mod 作者教程 (致谢演出 / 语音历史回放)
 └── README.md                  # 本文件
 ```
 
@@ -120,7 +124,7 @@ cd "$GAME"
 
 **退出游戏**：程序坞退出时游戏，或者游戏内退出表现为: "未响应"不退出，需强制退出，或在启动游戏的终端 ctrl+c 终止。
 
-**日志**:机制日志默认关闭(运行噪音小),`MOD_DEBUG=1 ./run_mod.sh` 开启;游戏侧 `Unity.LogError` 始终全量输出。日志同时写入游戏目录 `modlog.txt`。更多用法(指定 mod 根目录、非默认游戏位置)见 [macos-frida/README.md](macos-frida/README.md)。
+**日志**:机制日志默认关闭(运行噪音小),`MOD_DEBUG=1 ./run_mod.sh` 开启;游戏侧 `Unity.LogError` 始终全量输出。日志同时写入游戏目录 `modlog.txt`。更多用法(指定 mod 根目录、非默认游戏位置)见 [macos-frida/docs/USAGE.md](macos-frida/docs/USAGE.md)。
 
 **开发 (源码版)**:改 `src/` 后在仓库里直接运行 `./run_mod.sh` 即自动重新构建;或手动 `cd macos-frida && npx frida-compile src/entry.js -o dist/manosabamod.js`(首次需 `npm install`)。
 
@@ -148,20 +152,22 @@ macOS 版的剧本结构与 Windows 版类似。
 ## 已知限制
 
 - **macOS 进程行为**:`ctrl+c` 终止启动脚本并一并收掉游戏(SIGTERM→SIGKILL);或直接退出游戏,脚本自动收尾。2026-08-12 起:游戏存活检测 + frida-helper 主动清理,不再残留孤儿进程。注意:程序坞退出游戏或者游戏内退出表现为"未响应",需强制退出。手动退出游戏时 macOS 可能弹出崩溃报告 (SIGSEGV at `__cxa_throw`,IL2CPP 退出期异常路径),与 mod 运行期功能无关
-- **音频解析** 走游戏原装 `WavToAudioClipConverter`,只支持 **PCM16 / 44100Hz / 立体声 wav**:`.ogg` 无法被资源定位;48kHz 等非标采样率/位深/声道的 wav 会播放失败或音高偏移(Windows 版 #5 修复的就是这个问题)。**run_mod.sh 启动前自动检测**(纯 Python 读文件头,毫秒级,零依赖):发现非标音频(ogg/48k/32k/单声道等)时列出清单并询问是否批量转成 `-ar 44100 -ac 2 -sample_fmt s16` 标准 wav —— 转换是改文件操作(覆盖原 wav、删除 ogg 源),**必须 y 确认后才执行**,回车/非 TTY 默认不转,照常启动;也可手动 `python3 normalize_audio.py --apply`。`NORMALIZE_AUDIO=0` 关闭检测,`force` 不询问直接转。根因与 Windows 侧对照见 macos-frida/GOALS.md。
+- **音频解析** 走游戏原装 `WavToAudioClipConverter`,只支持 **PCM16 / 44100Hz / 立体声 wav**:`.ogg` 无法被资源定位;48kHz 等非标采样率/位深/声道的 wav 会播放失败或音高偏移(Windows 版 #5 修复的就是这个问题)。**run_mod.sh 启动前自动检测**(纯 Python 读文件头,毫秒级,零依赖):发现非标音频(ogg/48k/32k/单声道等)时列出清单并询问是否批量转成 `-ar 44100 -ac 2 -sample_fmt s16` 标准 wav —— 转换是改文件操作(覆盖原 wav、删除 ogg 源),**必须 y 确认后才执行**,回车/非 TTY 默认不转,照常启动;也可手动 `python3 normalize_audio.py --apply`。`NORMALIZE_AUDIO=0` 关闭检测,`force` 不询问直接转。根因与 Windows 侧对照见 [docs/ROADMAP.md](macos-frida/docs/ROADMAP.md)。
 - @char SubId:"Middle" + 自定义角色 可能会导致角色立绘在退出剧本时不被清除，建议不要加SubId:"Middle"参数。
-- **语言切换（macOS，2026-08-18 已修）**:游戏内切语言（zh-Hans ↔ ja）曾击穿 mod 资源加载——Naninovel 重建全部 `LocalizableResourceLoader<T>` 的 ProvisionSources，抹掉 mod 注入的 provider，导致中途切语言卡死。**已知残留:切语言瞬间有肉眼可见卡顿**（每个 loader 实例各触发一次全量重注入，实测 ~200 次/切换）。细节见 [GOALS.md](macos-frida/GOALS.md)「差距」5 / [ARCHITECTURE.md](macos-frida/ARCHITECTURE.md) 7.5。
-- **致谢演出复刻（macOS 独有，试验性，2026-08-19+）**：macOS 版自研功能，**上游 Windows 版 ManosabaMod 没有此功能**。用静态本地数据（`data.json` + `thanks-pages.json`）复刻原版结尾致谢演出（staff 主名单滚动 + 自定义/原版 stills + 共犯者 Special Thanks 36 屏翻页 + 製作・販売/Acacia/© 段滚动），触发方式为剧本内 `@set "g_modCreditRoll = \"data.json\""` + `g_modCreditRollPhase` 分阶段。**背景图可自定义**：data.json 配 `stills` 播放列表（数组长度 = 播放张数，每张可配 display/fadeIn/fadeOut，仅 PNG，见 [CREDIT_ROLL.md](macos-frida/docs/CREDIT_ROLL.md) §6）。**稳定性未经充分实测**：依赖原版 CreditsDirectorAct2 运行时参数与 CreditsUI 场景结构。机制细节见 [ARCHITECTURE.md](macos-frida/ARCHITECTURE.md) 九节。
+- **语言切换（macOS，2026-08-18 已修）**:游戏内切语言（zh-Hans ↔ ja）曾击穿 mod 资源加载——Naninovel 重建全部 `LocalizableResourceLoader<T>` 的 ProvisionSources，抹掉 mod 注入的 provider，导致中途切语言卡死。**已知残留:切语言瞬间有肉眼可见卡顿**（每个 loader 实例各触发一次全量重注入，实测 ~200 次/切换）。细节见 [docs/ROADMAP.md](macos-frida/docs/ROADMAP.md)「差距」5 / [docs/PITFALLS.md](macos-frida/docs/PITFALLS.md) 7.5。
+- **致谢演出复刻（macOS 独有，试验性，2026-08-19+）**：macOS 版自研功能，**上游 Windows 版 ManosabaMod 没有此功能**。用静态本地数据（`data.json` + `thanks-pages.json`）复刻原版结尾致谢演出（staff 主名单滚动 + 自定义/原版 stills + 共犯者 Special Thanks 36 屏翻页 + 製作・販売/Acacia/© 段滚动），触发方式为剧本内 `@set "g_modCreditRoll = \"data.json\""` + `g_modCreditRollPhase` 分阶段。**背景图可自定义**：data.json 配 `stills` 播放列表（数组长度 = 播放张数，每张可配 display/fadeIn/fadeOut，仅 PNG，见 [guides/CREDIT_ROLL.md](macos-frida/docs/guides/CREDIT_ROLL.md) §6）。**稳定性未经充分实测**：依赖原版 CreditsDirectorAct2 运行时参数与 CreditsUI 场景结构。机制细节见 [docs/ARCHITECTURE.md](macos-frida/docs/ARCHITECTURE.md) 九节。
 
 ## 文档
 
 | 文档 | 内容 |
 |------|------|
-| [macos-frida/README.md](macos-frida/README.md) | macOS 版完整使用说明(部署/开发/游戏目录定位) |
-| [macos-frida/ARCHITECTURE.md](macos-frida/ARCHITECTURE.md) | 架构、原理、与 Windows 版的差异、mod 兼容性 |
-| [macos-frida/GOALS.md](macos-frida/GOALS.md) | Windows vs macOS 功能对照与差距清单 |
-| [macos-frida/docs/CREDIT_ROLL.md](macos-frida/docs/CREDIT_ROLL.md) | 致谢演出教程:mod 作者如何自定义致谢(数据格式 + 剧本触发协议) |
-| [macos-frida/docs/语音历史回放.md](macos-frida/docs/语音历史回放.md) | 语音教程:让角色语音在历史回放(backlog)中重播(自动语音改造) |
+| [docs/USAGE.md](macos-frida/docs/USAGE.md) | macOS 版使用说明(部署 / 开发 / 游戏目录定位 / 音频标准化) |
+| [docs/ARCHITECTURE.md](macos-frida/docs/ARCHITECTURE.md) | 架构: 怎么工作, 与 Windows 版的差异, mod 格式兼容性 |
+| [docs/PITFALLS.md](macos-frida/docs/PITFALLS.md) | 已知坑与修复: 每条都是"现象 → 定位 → 根因 → 修法" |
+| [docs/ROADMAP.md](macos-frida/docs/ROADMAP.md) | 与 Windows 版的功能对照、差距与开放项 |
+| [docs/OFFSETS.md](macos-frida/docs/OFFSETS.md) | 已验证的内存偏移速查 (容器布局 + 各类型字段) |
+| [docs/guides/CREDIT_ROLL.md](macos-frida/docs/guides/CREDIT_ROLL.md) | mod 作者教程: 自定义致谢演出 (数据格式 + 剧本触发协议) |
+| [docs/guides/VOICE_BACKLOG.md](macos-frida/docs/guides/VOICE_BACKLOG.md) | mod 作者教程: 让角色语音在历史回放 (backlog) 中重播 |
 
 ## 致谢
 
