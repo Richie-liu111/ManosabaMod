@@ -13,7 +13,7 @@ export function getCurrentLocale() { return _locale || "zh-Hans"; }
 // ============ 引擎级语言同步 (LocalizationManager 自身) ============
 // 背景: HandleLocaleChanged 只在"语言实际改变"时触发 (modlog 实证) —
 // 以日语启动 (从未切语言) 时引擎启动初始化不触发它, _locale 停在 zh-Hans,
-// 图鉴姓名在"启动即日语"场景下仍显示中文注册名 (用户实测)。
+// 图鉴姓名在"启动即日语"场景下仍显示中文注册名 (实测)。
 // 修复: spawn 注入早于引擎初始化 → hook LocalizationManager 自身方法,
 //   引擎初始化/读语言/切语言任一路径都会同步 _locale:
 //   get_SelectedLocale onLeave — 任何读语言 (启动加载本地化资源必经) → 读返回 String

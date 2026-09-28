@@ -93,9 +93,9 @@ export function addCharacterProviders(root, prefix) {
             if (cc.key !== prefix) continue;
             // 已存在则跳过 — 两层含义: ① TitleUi 可能多次触发 ② 该 ID 已被原版或其它 mod 占用。
             //   ② 是上游 ModResourceLoader.AddRichCharacter 的核心守卫: 声明原版角色 ID 的 mod
-            //   (如 Twilight_TestMod005 声明 Hiro/Warden/... 想改名) 必须整体跳过, 否则 AddRecord
+            //   (如某 mod 声明了原版角色 id 想改名) 必须整体跳过, 否则 AddRecord
             //   会把原版 LayeredCharacter 记录换成 SpriteCharacter + PathPrefix=<mod>/Characters,
-            //   之后原版剧本 @char Hiro.<组合外观> 全部 "Failed to load" (2026-09-25 实证)。
+            //   之后原版剧本 @char <原版角色>.<组合外观> 全部 "Failed to load" (2026-09-25 实证)。
             // ContainsId 返回 bool → 走装箱读取, 不能用 r.ret.toInt32() (永远 ≠ 1, 守卫失效)。
             if (containsIdMi && !containsIdMi.isNull() && invokeBool(containsIdMi, metaMap, [makeS(ids[i])])) {
                 skipped++;
@@ -212,7 +212,7 @@ export function injectCharacterData() {
 // 镜像 Windows ProfilePageRefreshContent_Patch: 原版对不在角色系统中的 id 显示 ID,
 // 我们直接设置 _authorLabel.text = 格式化富文本 (BuildFullName 同款字号/颜色)
 // 语言: 用 locale.js 跟踪的当前语言 (HandleLocaleChanged 实参, 实证可靠),
-// 不再硬编码 zh-Hans → 切日语后 Profile 姓名应随语言切换 (朝尘→AsaChiri 等)。
+// 不再硬编码 zh-Hans → 切日语后档案姓名应随语言切换 (本地化显示名 vs 注册名)。
 export function hookProfileName() {
     try {
         var cls = wbCls.pages.profile;
@@ -239,7 +239,7 @@ export function hookProfileName() {
                     var setTxt = A.cgm(labCls, Memory.allocUtf8String("set_text"), 1);
                     if (!setTxt || setTxt.isNull()) return;
                     try { syncLocaleFromEngine(); } catch (e) { swallowedWarn("witchbook/characters.js:hookProfileName.onLeave", e); }   // 兜底: 主动查一次 LocalizationManager (启动即目标语言)
-                    var loc = getCurrentLocale();   // 跟随当前语言 (ja → AsaChiri/IrisuM 等)
+                    var loc = getCurrentLocale();   // 跟随当前语言 (ja → 该语言下的显示名)
                     var tpl = buildAuthorTemplate(cc, loc);
                     if (!tpl) tpl = buildAuthorTemplate(cc, "zh-Hans");
                     if (!tpl) tpl = buildAuthorTemplate(cc, "ja");

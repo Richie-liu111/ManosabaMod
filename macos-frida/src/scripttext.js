@@ -6,7 +6,7 @@
 //   * 显示链路分三支 (均已实证):
 //       print  → RevealableText.set_Text(string)  [实例类 RevealableTextModified]  ← v3 修复点
 //       toast  → ToastUI.Show(LocalizableText) → ToastAppearance.SetText(string)
-//       choice → AdvChoiceHandlerButton.Initialize(ChoiceState) override (Gapless 真实按钮,
+//       choice → AdvChoiceHandlerButton.Initialize(ChoiceState) override (mod 场景的真实按钮,
 //                内部调 base ChoiceHandlerButton.Initialize; summary LocalizableText@0x20)
 //   * 通用转换点: LocalizableText.ToString() 读 parts 拼串 (toast/choice/backlog 都可能走)。
 // v5 变化:
@@ -143,7 +143,7 @@ function onChoiceInitEnter(args) {
         stripPartsArray(arr, "ChoiceSummary");
     } catch (e) { dbg("[v3] scripttext ChoiceInit err: " + e); }
 }
-// AdvChoiceHandlerButton.Initialize(ChoiceState) override (Gapless 真实按钮):
+// AdvChoiceHandlerButton.Initialize(ChoiceState) override (mod 场景的真实按钮):
 // override 内部调 base → 基类 hook 也触发; 这里直接挂在 override 上, 尽早看到 summary 结构。
 function onAdvChoiceInitEnter(args) {
     try {
@@ -263,7 +263,7 @@ export function setupScriptTextHooks() {
         if (cbtn && !cbtn.isNull()) {
             ok += attachIf(A.cgm(cbtn, Memory.allocUtf8String("Initialize"), 1), onChoiceInitEnter);
         }
-        // choice(Gapless): AdvChoiceHandlerButton.Initialize override (WitchTrials.Views)
+        // choice(mod 按钮): AdvChoiceHandlerButton.Initialize override (WitchTrials.Views)
         var acbtn = findClassAcrossImages("WitchTrials.Views", "AdvChoiceHandlerButton");
         if (acbtn && !acbtn.isNull()) {
             ok += attachIf(A.cgm(acbtn, Memory.allocUtf8String("Initialize"), 1), onAdvChoiceInitEnter);

@@ -1,6 +1,6 @@
 // ============ CutIn 支持 (镜像 Windows ModObjectionCutInLoader 精简版, 仅 sprite 替换) ============
 // 链路: @gosubCutIn "<Id>" Index:N → GosubToObjectionCutIn.Execute (UniTask, 不 patch)
-//   → 写变量 objectionCutInSpawnPath=<Kind 或 ObjectionCutIn_<Kind>> → 我们改写成 Hiro 模板
+//   → 写变量 objectionCutInSpawnPath=<Kind 或 ObjectionCutIn_<Kind>> → 改写成原版模板
 //   → MultipliableSpawn.Spawn("ObjectionCutIn_Hiro") → ObjectionCutIn.SetSpawnParameters
 //   → 我们按 sprite 名替换 Image/SpriteRenderer 的 sprite (原版激活逻辑不动)。
 // 移植自 v3.js 16h (仅 sprite 替换, 无 shader 覆盖 — Windows Shaders 配置未支持);

@@ -20,9 +20,9 @@ var _stats = { pass: 0, fail: 0, note: 0, knf: 0, rounds: 0, hooked: false };
 // 为什么是它: 2026-09-25 的 KNF 根因是"字典里有键, 但游戏手里的实例不是它" —— 只有拿**这个实例**
 // 去问 ContainsKey 才能发现; 拿 id/ver 去问 (或拿字典自己的键实例) 永远为真, 查不出问题。
 // 容器探测 (不再猜布局): `_loadedDataItemMap` 在 session.js 里是按 **List** 用的
-// (RemoveAt / _items@0x10 / _size@0x18), 而我先前的 A1 按 Dictionary 布局走 (+0x18→entries→24 字节),
-// 把 _size 当指针用 → 被我自己的守卫拦成 0 条, 还误判"旧日志里的 map=155 是垃圾数" (其实是 _size)。
-// 教训 (第 N 次): **猜内存布局不如问游戏自己要** —— 这里用 get_Count/get_Item 访问器, 顺带把类名与
+// (RemoveAt / _items@0x10 / _size@0x18), 而早期实现按 Dictionary 布局读 (+0x18→entries→24 字节),
+// 把 _size 当指针用 → 被守卫拦成 0 条, 还误判"旧日志里的 map=155 是垃圾数" (其实是 _size)。
+// 教训: **猜内存布局不如问游戏自己要** —— 这里用 get_Count/get_Item 访问器, 顺带把类名与
 // 两个候选偏移的原始值打进日志, 下次谁再改都不用猜。
 function probeMap(page, pageCls) {
     var out = { cls: "?", count: -1, raw18: null, raw20: null, items: [] };
@@ -204,7 +204,7 @@ export function runSelftest(round) {
                 // "字典自己有没有这个 (id,ver)" 是查不出那次 bug 的 (字典里有, 但游戏手里的实例不在里面)。
                 var mp = probeMap(page, sp.pageCls);
                 var look = mp.items, mapN = mp.count, badMap = 0, inMap = {};
-                // 不再静默: 有条数却取不到条目 = 我的读取有问题, 必须说出来 (并带类名/原始偏移值)
+                // 不再静默: 有条数却取不到条目 = 读取有问题, 必须说出来 (并带类名/原始偏移值)
                 if (!look.length && mapN > 0) { _stats.note++; wblog("[SELFTEST] NOTE " + sp.key + ": map 有 " + mapN + " 条但 get_Item 取到 0 条 (" + mp.cls + " raw18=" + mp.raw18 + " raw20=" + mp.raw20 + ")"); }
                 var selfproof = selfProofEnabled();     // 负对照: 换成不匹配的键去问 (见下)
                 if (selfproof && !_breakAnnounced) { _breakAnnounced = true; wblog("[SELFTEST] 负对照模式 (MOD_SELFTEST_BREAK=1): 每分类第一条改用版本+1 的键 → 必须报 FAIL (其余条目照常真查)"); }
@@ -229,8 +229,8 @@ export function runSelftest(round) {
                 probeKeySemantics(page, sp.pageCls, sp.locOff, dict, ck, sp.key);
                 // —— A2. `_state` 里的键: 字典里得有活条目 ——
                 // 分级: 同时在 map 里 (会被渲染) → FAIL; 只在 state 里 (渲染不走它) → NOTE (记录, 不判)。
-                // 为什么分级: 游戏自己的 `@update` 会写入**非本 mod** 的键 (2026-09-28 实测: Twilight 的
-                // `@update "Hiro"` 被"首个 mod 优先"判给了别的 mod), 那种键渲染根本不碰 → 不算致命。
+                // 为什么分级: 游戏自己的 `@update` 会写入**非本 mod** 的键 (实测: 某 mod 的
+                // `@update` 目标的条目被"首个 mod 优先"判给了别的 mod), 那种键渲染根本不碰 → 不算致命。
                 var stList = null;
                 try {
                     var st = page.add(fieldOffset(sp.pageCls, "_state", 0x48)).readPointer();

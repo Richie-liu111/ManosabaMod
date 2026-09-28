@@ -509,7 +509,7 @@ function tryFinalizeChoiceHandlers() {
                 var hd = chData.handlers[h];
                 try {
                     // serve 双 key (2026-08-11): C# 蓝本 AddResource 用 'ModChoiceHandlers/{id}' (prefix+id);
-                    // run3 探针实测按钮加载请求裸 id 'MyMod_EmaHiro'。两条路径可能并存 (按钮 vs UI prefab),
+                    // run3 探针实测按钮加载请求裸 id 'MyMod_<角色组合>'。两条路径可能并存 (按钮 vs UI prefab),
                     // 双 key 各自 Add 无冲突 (不同 key), 覆盖两种请求。
                     var path = hd.id;
                     var pathPrefix = chData.providerKey + "/" + hd.id;

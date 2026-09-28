@@ -84,8 +84,8 @@ export function healDictKey(dict, spec, id, ver, ivp) {
 }
 // 每次注入末尾: 把该页 `_state` 里"将要渲染的键"逐个核对, 缺就补 (mod 条目用 mod 文本, 原版从 Data 重建)。
 // **真相源必须是页面自己的 `_state._list`, 不是我们的 wbData.states** —— 2026-09-28 实测抓到的分叉:
-//   Twilight 的 Main.nani 有 `@update "Hiro" Category:"Profile" Version:0`, 而 'Hiro' 被 data.js 的
-//   "首个 mod 优先"判给了先加载的 mod (Gapless) → 我们按规矩忽略这条 @update (它"不是当前 mod 的条目"),
+//   某 mod 的剧本有 `@update "<原版条目>" Category:"..." Version:0`, 而该条目被 data.js 的
+//   "首个 mod 优先"判给了先加载的另一个 mod → 我们按规矩忽略这条 @update (它"不是当前 mod 的条目"),
 //   但**游戏照旧把它写进 _state**。只信 wbData.states 就永远不 heal 它 → 字典缺这个键,
 //   而 `_state` 里它一直在 (哨兵连续 5 轮报 FAIL)。与 7.10 同源: 判定要问游戏, 不要问我们自己的记录。
 export function healStateKeys(page, cat) {

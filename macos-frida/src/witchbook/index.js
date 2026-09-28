@@ -212,7 +212,7 @@ function dumpPageFieldTypes() {
     } catch (e) { error("dumpPageFieldTypes err: " + e); }
 }
 // ===== ①② @update 合帧去抖 + 按分类收敛 (2026-09-25) =====
-// 背景: Twilight_TestMod005/Scripts/Twilight_TestMod005/Main 第 2 行起 28 条 @update 连排,
+// 背景: 某 mod 剧本从第 2 行起 28 条 @update 连排,
 //   旧实现每条都跑一次全量 tryInjectWitchBook (5 分类全页 remove/add + 纹理注册),
 //   实测 28 × 55~80 ms ≈ 2.12 s 主线程冻结 (modlog 2026-09-25 13:01:16.338→18.460)。
 // 现改为:

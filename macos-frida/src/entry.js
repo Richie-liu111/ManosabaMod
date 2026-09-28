@@ -501,7 +501,7 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         // @choice handler 支持 (自定义选项面板, 镜像 Windows ModChoiceHandlerLoader 精简核心)
         setupChoiceHandlerHooks();
 
-        // 自定义致谢演出控制器 (用户 nani 触发, 100% 内容可控; 蓝本 probe_credit.js v4, P1-P5 裁决)
+        // 自定义致谢演出控制器 (由外部剧本触发, 内容完全可控; 蓝本: 早期探针脚本的裁决结果)
         setupCreditHooks();
 
         // 语言切换重注入 hook (镜像上游 Windows LocaleWatcherComponent, commit 66e5388b)

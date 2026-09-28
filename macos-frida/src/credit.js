@@ -1,5 +1,5 @@
 // ============ 自定义致谢演出控制器 (PLAN.md 实现阶段; 蓝本 probe_credit.js v4, 探针 P1-P5 全裁决) ============
-// 协议: 用户的 nani 用 @set 触发 (转义双引号写法), 本控制器在 SetVariableValue hook (主线程) 里
+// 协议: 外部剧本用 @set 触发 (转义双引号写法), 本控制器在 SetVariableValue hook (主线程) 里
 //   调用原版组件方法 fire-and-forget, 动画由原版组件状态机在 PlayerLoop 自己跑, nani @Wait 编排节奏:
 //   @set "g_modCreditRoll = \"data.json\""   → trigger: 读 json 缓存 + arm
 //   @set "g_modCreditRollPhase = 1"          → staff:  文本/布局/归零 → 写 g_staffDuration → ScrollAsync
@@ -7,7 +7,7 @@
 //   @set "g_modCreditRollPhase = 3"          → end:    SpecialThanks.Clear + DisableCanvas + 还原祖先 + disarm
 // 探针裁决落点 (2026-08-20 run-4):
 //   * F1 根治: 只启用 roll 自身不够, 必须沿 Transform 链激活 inactive 祖先 (ensureHierarchy) —
-//     run-4 实证 canvas 0→1, 我方 ScrollAsync 完美线性动画 (0.990→0.000 @98.4s)
+//     实证 canvas 0→1, 我方 ScrollAsync 完美线性动画 (0.990→0.000 @98.4s)
 //   * 多标签: staff content 里多个 TMP 标签 (ContentSizeFitter[]), 原版残留文本在非当前语种标签上
 //     主导高度 (29513.1px 恒定实证) → 必须枚举全部标签: active 填文本, inactive 清空, 再强制布局
 //   * 数组类免偷: string[] = il2cpp_array_new(System.String); string[][] = array_new(string[] 类)
@@ -53,7 +53,7 @@ var creditState = {
     phase: 0,            // 1/2/3 当前阶段
     json: null,          // 解析后的数据 json
     jsonPath: null,      // json 路径 (日志)
-    original: false,     // run-15: 原版复刻模式 (g_modCreditRoll="original" → 直接调 CreditsUI.PlayAsync(2))
+    original: false,     // 原版复刻模式 (g_modCreditRoll="original" → 直接调 CreditsUI.PlayAsync(2))
     extract: false,      // run-24: 素材提取模式 (trigger "extract" → 原版全流程 + stills PNG/名单 json → mod 文件夹)
     pendingProduction: false,  // run-30f: 共犯完成后置位 → 由 g_creditTick 主线程泵执行 doProduction
     stillsConf: null           // run-31: 自定义 stills 播放列表 (data.json j.stills, 校验后; null=原版 9 张)
@@ -794,7 +794,7 @@ function writeVar(name, num) {
 //   ① director._specialThanksCredits@0xA0 = Dictionary<LocaleKind,string[][]> (PlayAsync 前已构建)
 //      → 每语种 页[] (页 = 行[]), 行 = 富文本 (格式实证: <size=1.7em>名</size><space=80>...)
 //   ② hook SpecialThanksLabel.set_Text → 实际播放序列 (行 + 时间戳) — 时序/顺序验证
-// 输出: TestCredit/Assets/special-credits.json (①全量) + thanks-rows.json (②序列)
+// 输出: <测试 mod>/Assets/special-credits.json (①全量) + thanks-rows.json (②序列)
 var thanksProbe = { attached: false, rows: [], flushTimer: null, t0: 0 };
 function thanksProbeRoot() {
     return (typeof MOD_ROOT !== "undefined" && MOD_ROOT) ? MOD_ROOT + "/TestCredit/Assets" : "/tmp";
@@ -926,7 +926,7 @@ function loadCreditData(path) {
     creditState.json = null;
     creditState.stillsConf = null;   // run-31: 每次 trigger 重置 (original 分支提前 return, 不清会残留上次自定义列表)
     creditState.original = false;
-    // run-15: 原版复刻模式 — 值 "original" 不读 json, 直接调原版 CreditsUI.PlayAsync(2)
+    // 原版复刻模式 — 值 "original" 不读 json, 直接调原版 CreditsUI.PlayAsync(2)
     //   (= nani @credit 2 命令全流程: stills + staff 滚动 + SpecialThanks, 内容/语种/时序全原版)
     // run-30: "probe-thanks" = 原版全流程 + 共犯完整数据探针 (字典全量 + set_Text 逐行时序)
     if (path === "original" || path === "extract" || path === "probe-thanks") {
@@ -1636,538 +1636,19 @@ function doStaff() {
 //   全零 = CancellationToken.None ×2 (永不取消) — 与 op_Implicit(CancellationToken.None) 语义一致
 // run-23: 主线程 PlayAsync 泵 — pendingPlay 由 doOriginal 设置 (Preload 后挂起),
 //   onSVV (g_creditTick) 在主线程同步 hook 里检查资产填充 → doPlayAsyncInvoke 完成 PlayAsync
-// ============ 素材提取 (run-24): 原版致谢素材 → mod 文件夹 (TestCredit/Assets/) ============
+// ============ 素材提取: 原版致谢素材 → mod 文件夹 (TestCredit/Assets/) ============
 //   trigger "extract" → doOriginal 全流程 (Preload+Play) → doPlayAsyncInvoke 成功后 extractStep()
 //   (PlayAsync 后仍在主线程同步 hook 内, 所有 invoke 安全) → 写出:
 //     Assets/stills/still{i}.png   原版 EndingStill 图片 (Sprite → Texture2D → GetPixels32 → PNG)
 //     Assets/credit-assets.json    specialthanks 名单 + staff 当前屏快照 + stills 时序参数
 //     Assets/staff.json            staff 完整滚动文本 (hook TMP set_text 全演出期收集 — run-24-4:
 //                                  滚动块每屏复用 TMP, 任意时刻只能抓到当前屏, 必须全程收集)
-//[run-25-废弃] var staffHookAttached = false;
-//[run-25-废弃] var collectedStaff = [];
-//[run-25-废弃] var staffSeen = {};
-//[run-25-废弃] var fullTexCache = {};   // run-24-5: atlas 全图缓存 (tex指针 → {w,h,rgba}) — 多张 still 共享纹理, 只读一次
-//[run-25-废弃] var staffPollTimer = null;   // run-24-6: 轮询兜底 — 文本无论如何设置 (set_text/SetText/字段直写),
-//[run-25-废弃] var staffPollTmps = [];      //   滚动块 TMP 的 m_text@0xE0 字段最终必然有值 → 采样收集兜底
-//[run-25-废弃] var staffPolling = false;
-//[run-25-废弃] function installStaffHook() {
-//[run-25-废弃]     try {
-//[run-25-废弃]         if (staffHookAttached) return;
-//[run-25-废弃]         // run-24-6: 双 hook — set_text (property setter, virtual) + SetText(string) (非 virtual 直调)。
-//[run-25-废弃]         //   上一轮 set_text 零捕获 → 滚动块文本可能直接走 SetText(string); 去重由 staffSeen 保证。
-//[run-25-废弃]         var hookFns = [];
-//[run-25-废弃]         var mi = null;
-//[run-25-废弃]         if (cls.tmpText && !cls.tmpText.isNull()) mi = A.cgm(cls.tmpText, Memory.allocUtf8String("set_text"), 1);
-//[run-25-废弃]         if (!mi || mi.isNull()) {
-//[run-25-废弃]             try {
-//[run-25-废弃]                 var uguiCls = findClassAcrossImages("TMPro", "TextMeshProUGUI");
-//[run-25-废弃]                 if (uguiCls && !uguiCls.isNull()) mi = A.cgm(uguiCls, Memory.allocUtf8String("set_text"), 1);
-//[run-25-废弃]             } catch (e) {}
-//[run-25-废弃]         }
-//[run-25-废弃]         var mi2 = null;
-//[run-25-废弃]         if (cls.tmpText && !cls.tmpText.isNull()) mi2 = A.cgm(cls.tmpText, Memory.allocUtf8String("SetText"), 1);
-//[run-25-废弃]         if (!mi2 || mi2.isNull()) {
-//[run-25-废弃]             try {
-//[run-25-废弃]                 var ugui2 = findClassAcrossImages("TMPro", "TextMeshProUGUI");
-//[run-25-废弃]                 if (ugui2 && !ugui2.isNull()) mi2 = A.cgm(ugui2, Memory.allocUtf8String("SetText"), 1);
-//[run-25-废弃]             } catch (e) {}
-//[run-25-废弃]         }
-//[run-25-废弃]         var onEnterFn = function (a) {
-//[run-25-废弃]             try {
-//[run-25-废弃]                 var s = readStr(a[1]);   // a[0]=this TMP, a[1]=string*
-//[run-25-废弃]                 if (!s || s.length < 2 || s.length > 500) return;
-//[run-25-废弃]                 var key = a[0].toString() + "|" + s;   // 按组件+文本去重 (滚动复用同一 TMP 多屏文本都收)
-//[run-25-废弃]                 if (staffSeen[key]) return;
-//[run-25-废弃]                 staffSeen[key] = true;
-//[run-25-废弃]                 collectedStaff.push({ go: a[0].toString(), text: s });
-//[run-25-废弃]             } catch (e2) {}
-//[run-25-废弃]         };
-//[run-25-废弃]         if (mi && !mi.isNull() && !mi.readPointer().isNull()) {
-//[run-25-废弃]             Interceptor.attach(mi.readPointer(), { onEnter: onEnterFn });
-//[run-25-废弃]             hookFns.push("set_text");
-//[run-25-废弃]         }
-//[run-25-废弃]         if (mi2 && !mi2.isNull() && !mi2.readPointer().isNull()) {
-//[run-25-废弃]             Interceptor.attach(mi2.readPointer(), { onEnter: onEnterFn });
-//[run-25-废弃]             hookFns.push("SetText");
-//[run-25-废弃]         }
-//[run-25-废弃]         if (!hookFns.length) { warn("[v3][Credit] staff hook: TMP set_text/SetText 均 NOT FOUND"); return; }
-//[run-25-废弃]         staffHookAttached = true;
-//[run-25-废弃]         info("[v3][Credit] staff hook 已挂 (TMP " + hookFns.join("+") + " 全演出期收集)");
-//[run-25-废弃]     } catch (e) { warn("[v3][Credit] installStaffHook err: " + e); }
-//[run-25-废弃] }
-//[run-25-废弃] function flushStaffJson() {
-//[run-25-废弃]     try {
-//[run-25-废弃]         if (!creditState.extract || !creditState.original) return;
-//[run-25-废弃]         if (staffPollTimer) { clearInterval(staffPollTimer); staffPollTimer = null; }   // run-24-6: 停轮询再落盘
-//[run-25-废弃]         if (!collectedStaff.length) { warn("[v3][Credit] staff 收集为空 — hook 零捕获且轮询零采样 (或演出异常)"); return; }
-//[run-25-废弃]         writeFileBytes(extractOutRoot() + "/staff.json", new Uint8Array(utf8Bytes(JSON.stringify(collectedStaff, null, 1))));
-//[run-25-废弃]         info("[v3][Credit] staff.json 已写出 (" + collectedStaff.length + " 条文本)");
-//[run-25-废弃]     } catch (e) { warn("[v3][Credit] flushStaffJson err: " + e); }
-//[run-25-废弃] }
-//[run-25-废弃] // run-24-6: staff 轮询兜底 — 主线程 (extractStep 内) 缓存滚动块全部 TMP 组件指针,
-//[run-25-废弃] //   JS 线程 300ms 采样 m_text@0xE0 (TMP_Text 受保护字段, dump.cs 实证) — 纯内存读零 Unity API,
-//[run-25-废弃] //   任何设置路径 (set_text/SetText/字段直写) 最终都体现在 m_text 字段 → 采样必得。
-//[run-25-废弃] //   组件被回收/销毁 → 读崩 → try/catch 跳过 (不崩游戏)。
-//[run-25-废弃] function installStaffPoll() {
-//[run-25-废弃]     try {
-//[run-25-废弃]         if (staffPolling || !comp.director || comp.director.isNull()) return;
-//[run-25-废弃]         var d = comp.director;
-//[run-25-废弃]         var rolls = d.add(0x60).readPointer();
-//[run-25-废弃]         if (!rolls || rolls.isNull()) return;
-//[run-25-废弃]         var n = rolls.add(0x18).readS32();
-//[run-25-废弃]         if (n < 1 || n > 50) return;
-//[run-25-废弃]         var list = [];
-//[run-25-废弃]         for (var i = 0; i < n; i++) {
-//[run-25-废弃]             var roll = rolls.add(0x20 + i * 8).readPointer();
-//[run-25-废弃]             if (!roll || roll.isNull()) continue;
-//[run-25-废弃]             var goR = invokeOk(cgmChain(A.ogc(roll), "get_gameObject", 0), roll, []);
-//[run-25-废弃]             if (!goR.ok || !goR.ret || goR.ret.isNull()) continue;
-//[run-25-废弃]             var comps = invokeOk(cgmChain(A.ogc(goR.ret), "GetComponentsInChildren", 2), goR.ret, [A.tgo(A.cgt(cls.tmpText)), boolPtr(true)]);
-//[run-25-废弃]             if (!comps.ok || !comps.ret || comps.ret.isNull()) continue;
-//[run-25-废弃]             var clen = comps.ret.add(0x18).readS32();
-//[run-25-废弃]             for (var ci = 0; ci < clen && ci < 64; ci++) {
-//[run-25-废弃]                 var t = comps.ret.add(0x20 + ci * 8).readPointer();
-//[run-25-废弃]                 if (t && !t.isNull()) list.push(t);
-//[run-25-废弃]             }
-//[run-25-废弃]         }
-//[run-25-废弃]         if (!list.length) { warn("[v3][Credit] staffPoll: 未找到滚动 TMP 组件"); return; }
-//[run-25-废弃]         staffPollTmps = list;
-//[run-25-废弃]         staffPolling = true;
-//[run-25-废弃]         info("[v3][Credit] staffPoll 已启动 (" + list.length + " 个 TMP 组件, 300ms 采样 m_text)");
-//[run-25-废弃]         staffPollTimer = setInterval(function () {
-//[run-25-废弃]             try {
-//[run-25-废弃]                 for (var i = 0; i < staffPollTmps.length; i++) {
-//[run-25-废弃]                     var t = staffPollTmps[i];
-//[run-25-废弃]                     if (!t || t.isNull()) continue;
-//[run-25-废弃]                     var s = readStr(t.add(0xE0).readPointer());
-//[run-25-废弃]                     if (!s || s.length < 2 || s.length > 500) continue;
-//[run-25-废弃]                     var key = t.toString() + "|" + s;
-//[run-25-废弃]                     if (staffSeen[key]) continue;
-//[run-25-废弃]                     staffSeen[key] = true;
-//[run-25-废弃]                     collectedStaff.push({ go: t.toString(), text: s });
-//[run-25-废弃]                 }
-//[run-25-废弃]             } catch (e) {}
-//[run-25-废弃]         }, 300);
-//[run-25-废弃]     } catch (e) { warn("[v3][Credit] installStaffPoll err: " + e); }
-//[run-25-废弃] }
-//[run-25-废弃] function extractOutRoot() {
-//[run-25-废弃]     try {
-//[run-25-废弃]         var root = (typeof MOD_ROOT !== "undefined" && MOD_ROOT) ? MOD_ROOT : null;
-//[run-25-废弃]         if (root) return root + "/TestCredit/Assets";
-//[run-25-废弃]         var p = Process.mainModule.path;   // 兜底: 从二进制路径推导 Steam 游戏目录
-//[run-25-废弃]         return p.replace(/\/manosaba\.app.*$/, "").replace(/\/[^\/]+$/, "") + "/ManosabaMod/TestCredit/Assets";
-//[run-25-废弃]     } catch (e) { return "/tmp/manosaba-credit-extract"; }
-//[run-25-废弃] }
-//[run-25-废弃] function mkdirs(path) {
-//[run-25-废弃]     try {
-//[run-25-废弃]         // run-24-2: 用 findGlobalExportByName (io.js 实证可用; findExportByName 在 bundle 内被遮蔽报 TypeError)
-//[run-25-废弃]         var mk = new NativeFunction(Module.findGlobalExportByName("mkdir"), "int", ["pointer", "int"]);
-//[run-25-废弃]         var parts = path.split("/");
-//[run-25-废弃]         var cur = path[0] === "/" ? "/" : "";
-//[run-25-废弃]         for (var i = 0; i < parts.length; i++) {
-//[run-25-废弃]             if (!parts[i]) continue;
-//[run-25-废弃]             cur += parts[i];
-//[run-25-废弃]             mk(Memory.allocUtf8String(cur), 0x1ED);   // 0755; 已存在 EEXIST 无害
-//[run-25-废弃]             cur += "/";
-//[run-25-废弃]         }
-//[run-25-废弃]     } catch (e) { warn("[v3][Credit] mkdirs err: " + e); }
-//[run-25-废弃] }
-//[run-25-废弃] function writeFileBytes(path, u8) {
-//[run-25-废弃]     try {
-//[run-25-废弃]         // run-24-2: 裸字节写走 io.js getIO (open/write/close 系统调用绑定, Darwin flags 同 openForWrite)
-//[run-25-废弃]         var io = getIO();
-//[run-25-废弃]         if (!io || !io.open || !io.write || !io.close) { warn("[v3][Credit] writeFileBytes: io 不可用"); return false; }
-//[run-25-废弃]         var fd = io.open(Memory.allocUtf8String(path), 0x0001 | 0x0200 | 0x0400, 0o644);   // O_WRONLY|O_CREAT|O_TRUNC
-//[run-25-废弃]         if (fd < 0) { warn("[v3][Credit] 写入失败 (open): " + path); return false; }
-//[run-25-废弃]         var buf = Memory.alloc(u8.length);
-//[run-25-废弃]         buf.writeByteArray(u8);
-//[run-25-废弃]         var got = 0, r = 0;
-//[run-25-废弃]         while (got < u8.length) {
-//[run-25-废弃]             r = io.write(fd, buf.add(got), u8.length - got);   // 部分写入循环, r<=0 兜底
-//[run-25-废弃]             if (r <= 0) break;
-//[run-25-废弃]             got += r;
-//[run-25-废弃]         }
-//[run-25-废弃]         io.close(fd);
-//[run-25-废弃]         // run-24-7: 实测 open mode 参数落盘权限异常 (0o644 → 0o350, 连 owner 都不可读) —
-//[run-25-废弃]         //   chmod 硬补 0644, 保证 IDE/用户可读 (staff.json NoPermissions 根因)
-//[run-25-废弃]         try {
-//[run-25-废弃]             var ch = Module.findGlobalExportByName("chmod");
-//[run-25-废弃]             if (ch) new NativeFunction(ch, "int", ["pointer", "int"])(Memory.allocUtf8String(path), 0o644);
-//[run-25-废弃]         } catch (e2) { warn("[v3][Credit] chmod err: " + e2); }
-//[run-25-废弃]         info("[v3][Credit] 已写出: " + path + " (" + got + "/" + u8.length + "B)");
-//[run-25-废弃]         return got >= u8.length;
-//[run-25-废弃]     } catch (e) { warn("[v3][Credit] writeFileBytes err: " + e); return false; }
-//[run-25-废弃] }
-//[run-25-废弃] function utf8Bytes(s) {
-//[run-25-废弃]     var out = [];
-//[run-25-废弃]     for (var i = 0; i < s.length; i++) {
-//[run-25-废弃]         var c = s.charCodeAt(i);
-//[run-25-废弃]         if (c < 0x80) out.push(c);
-//[run-25-废弃]         else if (c < 0x800) out.push(0xC0 | (c >> 6), 0x80 | (c & 0x3F));
-//[run-25-废弃]         else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length && s.charCodeAt(i + 1) >= 0xDC00 && s.charCodeAt(i + 1) <= 0xDFFF) {
-//[run-25-废弃]             var cp = 0x10000 + ((c - 0xD800) << 10) + (s.charCodeAt(i + 1) - 0xDC00);
-//[run-25-废弃]             out.push(0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F), 0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F)); i++;
-//[run-25-废弃]         } else out.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F));
-//[run-25-废弃]     }
-//[run-25-废弃]     return out;
-//[run-25-废弃] }
-//[run-25-废弃] // PNG 编码 (RGBA8 → stored-deflate zlib, 无依赖纯 JS) — 返回 Uint8Array
-//[run-25-废弃] function pngEncodeRGBA(w, h, rgba) {
-//[run-25-废弃]     var crcT = new Int32Array(256);
-//[run-25-废弃]     for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); crcT[n] = c; }
-//[run-25-废弃]     function crc32(b, off, len) { var c = 0xFFFFFFFF; for (var i = 0; i < len; i++) c = crcT[(c ^ b[off + i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
-//[run-25-废弃]     function adler32(b, off, len) { var a = 1, d = 0; for (var i = 0; i < len; i++) { a = (a + b[off + i]) % 65521; d = (d + a) % 65521; } return ((d << 16) | a) >>> 0; }
-//[run-25-废弃]     // 行过滤字节 + 垂直翻转 (GetPixels32 底部行优先 → PNG 顶部行优先)
-//[run-25-废弃]     var stride = 1 + w * 4;
-//[run-25-废弃]     var raw = new Uint8Array(stride * h);
-//[run-25-废弃]     for (var y = 0; y < h; y++) {
-//[run-25-废弃]         var src = (h - 1 - y) * w * 4, rOff = y * stride;
-//[run-25-废弃]         raw[rOff] = 0;
-//[run-25-废弃]         raw.set(rgba.subarray(src, src + w * 4), rOff + 1);
-//[run-25-废弃]     }
-//[run-25-废弃]     // stored deflate (0x78 0x01): 64KB 分块, 每块 5B 头
-//[run-25-废弃]     var chunks = Math.ceil(raw.length / 65535);
-//[run-25-废弃]     var idat = new Uint8Array(2 + chunks * 5 + raw.length + 4);
-//[run-25-废弃]     idat[0] = 0x78; idat[1] = 0x01;
-//[run-25-废弃]     var o = 2, pos = 0;
-//[run-25-废弃]     for (var c = 0; c < chunks; c++) {
-//[run-25-废弃]         var ln = Math.min(65535, raw.length - pos);
-//[run-25-废弃]         var fin = (pos + ln >= raw.length) ? 1 : 0;
-//[run-25-废弃]         idat[o++] = fin; idat[o++] = ln & 0xFF; idat[o++] = (ln >> 8) & 0xFF;
-//[run-25-废弃]         idat[o++] = (~ln) & 0xFF; idat[o++] = ((~ln) >> 8) & 0xFF;
-//[run-25-废弃]         idat.set(raw.subarray(pos, pos + ln), o); o += ln; pos += ln;
-//[run-25-废弃]     }
-//[run-25-废弃]     var ad = adler32(raw, 0, raw.length);
-//[run-25-废弃]     idat[o++] = (ad >> 24) & 0xFF; idat[o++] = (ad >> 16) & 0xFF; idat[o++] = (ad >> 8) & 0xFF; idat[o] = ad & 0xFF;
-//[run-25-废弃]     function chunk(type, data) {
-//[run-25-废弃]         var b = new Uint8Array(12 + data.length);
-//[run-25-废弃]         b[0] = (data.length >> 24) & 0xFF; b[1] = (data.length >> 16) & 0xFF; b[2] = (data.length >> 8) & 0xFF; b[3] = data.length & 0xFF;
-//[run-25-废弃]         b[4] = type.charCodeAt(0); b[5] = type.charCodeAt(1); b[6] = type.charCodeAt(2); b[7] = type.charCodeAt(3);
-//[run-25-废弃]         b.set(data, 8);
-//[run-25-废弃]         var cb = new Uint8Array(4 + data.length);
-//[run-25-废弃]         cb.set([type.charCodeAt(0), type.charCodeAt(1), type.charCodeAt(2), type.charCodeAt(3)], 0);
-//[run-25-废弃]         cb.set(data, 4);
-//[run-25-废弃]         var crc = crc32(cb, 0, cb.length);
-//[run-25-废弃]         b[8 + data.length] = (crc >> 24) & 0xFF; b[9 + data.length] = (crc >> 16) & 0xFF;
-//[run-25-废弃]         b[10 + data.length] = (crc >> 8) & 0xFF; b[11 + data.length] = crc & 0xFF;
-//[run-25-废弃]         return b;
-//[run-25-废弃]     }
-//[run-25-废弃]     var ihdr = new Uint8Array([(w >> 24) & 0xFF, (w >> 16) & 0xFF, (w >> 8) & 0xFF, w & 0xFF, (h >> 24) & 0xFF, (h >> 16) & 0xFF, (h >> 8) & 0xFF, h & 0xFF, 8, 6, 0, 0, 0]);
-//[run-25-废弃]     var sig = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
-//[run-25-废弃]     var ih = chunk("IHDR", ihdr), id = chunk("IDAT", idat), ie = chunk("IEND", new Uint8Array(0));
-//[run-25-废弃]     var png = new Uint8Array(sig.length + ih.length + id.length + ie.length);
-//[run-25-废弃]     png.set(sig, 0); png.set(ih, 8); png.set(id, 8 + ih.length); png.set(ie, 8 + ih.length + id.length);
-//[run-25-废弃]     return png;
-//[run-25-废弃] }
-//[run-25-废弃] // SpecialThanks 名单: _specialThanksCredits@0xA0 = Dictionary<LocaleKind, string[][]>
-//[run-25-废弃] //   (IL2CPP 字典布局实锤 choice.js: m_entries@0x18, Entry stride 24, 空槽 hashCode==-1)
-//[run-25-废弃] function extractDictSpecialThanks() {
-//[run-25-废弃]     try {
-//[run-25-废弃]         var d = comp.director;
-//[run-25-废弃]         if (!d || d.isNull()) { warn("[v3][Credit] extract: 无 director"); return null; }
-//[run-25-废弃]         var dict = d.add(0xA0).readPointer();
-//[run-25-废弃]         if (!dict || dict.isNull()) { warn("[v3][Credit] extract: _specialThanksCredits=null"); return null; }
-//[run-25-废弃]         var ents = dict.add(0x18).readPointer();
-//[run-25-废弃]         if (!ents || ents.isNull()) { warn("[v3][Credit] extract: m_entries 不可得"); return null; }
-//[run-25-废弃]         var al = ents.add(0x18).readS32();
-//[run-25-废弃]         if (al < 0 || al > 64) { warn("[v3][Credit] extract: entries 数量异常 " + al); return null; }
-//[run-25-废弃]         var names = ["ja", "en-US", "zh-Hans", "zh-Hant", "ko", "fr", "es"];
-//[run-25-废弃]         var out = { order: [] };
-//[run-25-废弃]         for (var e = 0; e < al; e++) {
-//[run-25-废弃]             var eb = ents.add(0x20 + e * 24);
-//[run-25-废弃]             if (eb.readS32() === -1) continue;          // 空槽
-//[run-25-废弃]             var key = eb.add(8).readS32();              // LocaleKind
-//[run-25-废弃]             if (key < 0 || key > 6) continue;
-//[run-25-废弃]             var val = eb.add(0x10).readPointer();       // string[][]
-//[run-25-废弃]             if (!val || val.isNull()) continue;
-//[run-25-废弃]             var glen = val.add(0x18).readS32();
-//[run-25-废弃]             if (glen < 0 || glen > 500) { warn("[v3][Credit] extract: 语种 '" + names[key] + "' groups 异常 " + glen); continue; }
-//[run-25-废弃]             var groups = [];
-//[run-25-废弃]             for (var g = 0; g < glen; g++) {
-//[run-25-废弃]                 var arr = val.add(0x20 + g * 8).readPointer();
-//[run-25-废弃]                 if (!arr || arr.isNull()) continue;
-//[run-25-废弃]                 var alen = arr.add(0x18).readS32();
-//[run-25-废弃]                 if (alen < 0 || alen > 200) continue;
-//[run-25-废弃]                 var lines = [];
-//[run-25-废弃]                 for (var l = 0; l < alen; l++) {
-//[run-25-废弃]                     var s = arr.add(0x20 + l * 8).readPointer();
-//[run-25-废弃]                     if (s && !s.isNull()) lines.push(readStr(s));
-//[run-25-废弃]                 }
-//[run-25-废弃]                 groups.push(lines);
-//[run-25-废弃]             }
-//[run-25-废弃]             out[names[key]] = { label: "原版 SpecialThanks (" + names[key] + ")", groups: groups };
-//[run-25-废弃]             out.order.push(names[key]);
-//[run-25-废弃]             info("[v3][Credit] extract: 语种 '" + names[key] + "' 提取 " + glen + " 组名单");
-//[run-25-废弃]         }
-//[run-25-废弃]         return out;
-//[run-25-废弃]     } catch (e) { warn("[v3][Credit] extractDictSpecialThanks err: " + e); return null; }
-//[run-25-废弃] }
-//[run-25-废弃] // stills 图片: _stills@0x58 = EndingStill[] → GameObject → GetComponentsInChildren(Image) → sprite → texture → PNG
-//[run-25-废弃] function extractStillsToPng() {
-//[run-25-废弃]     try {
-//[run-25-废弃]         var d = comp.director;
-//[run-25-废弃]         var stills = d.add(0x58).readPointer();
-//[run-25-废弃]         if (!stills || stills.isNull()) { warn("[v3][Credit] extract: _stills=null"); return []; }
-//[run-25-废弃]         var n = stills.add(0x18).readS32();
-//[run-25-废弃]         if (n < 1 || n > 50) { warn("[v3][Credit] extract: _stills 数量异常 " + n); return []; }
-//[run-25-废弃]         mkdirs(extractOutRoot() + "/stills");
-//[run-25-废弃]         var meta = [];
-//[run-25-废弃]         for (var i = 0; i < n; i++) {
-//[run-25-废弃]             var st = stills.add(0x20 + i * 8).readPointer();
-//[run-25-废弃]             if (!st || st.isNull()) { meta.push({ index: i, sprite: "null-instance" }); continue; }
-//[run-25-废弃]             var goR = invokeOk(cgmChain(A.ogc(st), "get_gameObject", 0), st, []);
-//[run-25-废弃]             if (!goR.ok || !goR.ret || goR.ret.isNull()) { warn("[v3][Credit] extract still#" + i + ": get_gameObject FAIL"); meta.push({ index: i, sprite: "no-go" }); continue; }
-//[run-25-废弃]             var comps = invokeOk(cgmChain(A.ogc(goR.ret), "GetComponentsInChildren", 2), goR.ret, [A.tgo(A.cgt(cls.image)), boolPtr(true)]);
-//[run-25-废弃]             var sprite = null;
-//[run-25-废弃]             if (comps.ok && comps.ret && !comps.ret.isNull()) {
-//[run-25-废弃]                 var clen = comps.ret.add(0x18).readS32();
-//[run-25-废弃]                 for (var ci = 0; ci < clen && !sprite; ci++) {
-//[run-25-废弃]                     var img = comps.ret.add(0x20 + ci * 8).readPointer();
-//[run-25-废弃]                     if (!img || img.isNull()) continue;
-//[run-25-废弃]                     var spR = invokeOk(cgmChain(A.ogc(img), "get_sprite", 0), img, []);
-//[run-25-废弃]                     if (spR.ok && spR.ret && !spR.ret.isNull()) sprite = spR.ret;
-//[run-25-废弃]                 }
-//[run-25-废弃]             }
-//[run-25-废弃]             if (!sprite) { warn("[v3][Credit] extract still#" + i + ": 无 Image/Sprite (sprite 可能尚未赋值)"); meta.push({ index: i, sprite: "none" }); continue; }
-//[run-25-废弃]             var texR = invokeOk(cgmChain(A.ogc(sprite), "get_texture", 0), sprite, []);
-//[run-25-废弃]             if (!texR.ok || !texR.ret || texR.ret.isNull()) { warn("[v3][Credit] extract still#" + i + ": get_texture FAIL"); meta.push({ index: i, sprite: "no-tex" }); continue; }
-//[run-25-废弃]             var tex = texR.ret;
-//[run-25-废弃]             var wMi = cgmChain(A.ogc(tex), "get_width", 0), hMi = cgmChain(A.ogc(tex), "get_height", 0);
-//[run-25-废弃]             // get_width/get_height 返回 int — invoke 对 ≤8B 值类型返回缓冲失效 (utils 实证) → directCall
-//[run-25-废弃]             var w = (wMi && !wMi.isNull()) ? directCall(wMi, "int", [tex]) : 0;
-//[run-25-废弃]             var h = (hMi && !hMi.isNull()) ? directCall(hMi, "int", [tex]) : 0;
-//[run-25-废弃]             if (w < 1 || h < 1 || w * h > 4096 * 4096) { warn("[v3][Credit] extract still#" + i + ": 纹理尺寸异常 " + w + "x" + h); meta.push({ index: i, size: w + "x" + h, sprite: "bad-size" }); continue; }
-//[run-25-废弃]             // run-24-3: still 图片打包在 sprite atlas 里 (纹理 4096x4096) —
-//[run-25-废弃]             //   get_textureRect 返回 Rect (16B HFA) invoke 缓冲不可靠 (实测读到垃圾被守卫拒绝);
-//[run-25-废弃]             //   改用 sprite.get_uv (Vector2[] 引用类型, invoke 安全) 对角 UV 换算纹理像素 region。
-//[run-25-废弃]             //   UV 归一化 [0,1] 原点=纹理左下, 与 GetPixels32(x,y,w,h) 坐标一致。
-//[run-25-废弃]             var rx = 0, ry = 0, rw = w, rh = h;
-//[run-25-废弃]             var rotMi = cgmChain(A.ogc(sprite), "GetPackingRotation", 0);   // internal int — directCall
-//[run-25-废弃]             var rot = (rotMi && !rotMi.isNull()) ? directCall(rotMi, "int", [sprite]) : 0;
-//[run-25-废弃]             if (rot !== 0) { warn("[v3][Credit] extract still#" + i + ": sprite 旋转打包 rotation=" + rot + " — 跳过"); meta.push({ index: i, sprite: "rotated" }); continue; }
-//[run-25-废弃]             var uvR = invokeOk(cgmChain(A.ogc(sprite), "get_uv", 0), sprite, []);
-//[run-25-废弃]             if (uvR.ok && uvR.ret && !uvR.ret.isNull()) {
-//[run-25-废弃]                 var uvn = uvR.ret.add(0x18).readS32();
-//[run-25-废弃]                 if (uvn >= 2) {
-//[run-25-废弃]                     // run-24-5: tight-packed sprite 顶点序任意 (实测 uv[0]/uv[2] 相邻 → region 1x4) —
-//[run-25-废弃]                     //   遍历全部 uv 顶点取包围盒 min/max (tight 和 simple 都适用)
-//[run-25-废弃]                     var u0 = uvR.ret.add(0x20);
-//[run-25-废弃]                     var minU = 1, minV = 1, maxU = 0, maxV = 0;
-//[run-25-废弃]                     for (var k = 0; k < uvn && k < 64; k++) {
-//[run-25-废弃]                         var uu = u0.add(k * 8).readFloat(), vv = u0.add(k * 8 + 4).readFloat();
-//[run-25-废弃]                         if (uu < minU) minU = uu; if (uu > maxU) maxU = uu;
-//[run-25-废弃]                         if (vv < minV) minV = vv; if (vv > maxV) maxV = vv;
-//[run-25-废弃]                     }
-//[run-25-废弃]                     if (maxU > minU && maxV > minV) {
-//[run-25-废弃]                         var px0 = Math.round(minU * w), py0 = Math.round(minV * h);
-//[run-25-废弃]                         var px1 = Math.round(maxU * w), py1 = Math.round(maxV * h);
-//[run-25-废弃]                         if (px1 > px0 && py1 > py0 && (px1 - px0) <= 4096 && (py1 - py0) <= 4096) {
-//[run-25-废弃]                             rx = px0; ry = py0; rw = px1 - px0; rh = py1 - py0;
-//[run-25-废弃]                             info("[v3][Credit] extract still#" + i + ": 纹理 " + w + "x" + h + " → sprite region " + rw + "x" + rh + "@(" + rx + "," + ry + ") (uv bbox " + uvn + " 顶点)");
-//[run-25-废弃]                         }
-//[run-25-废弃]                     }
-//[run-25-废弃]                 }
-//[run-25-废弃]             }
-//[run-25-废弃]             if (rw < 1 || rh < 1 || rw * rh > 2400 * 2400) { warn("[v3][Credit] extract still#" + i + ": region 尺寸异常 " + rw + "x" + rh); meta.push({ index: i, size: rw + "x" + rh, sprite: "bad-region" }); continue; }
-//[run-25-废弃]             var rgba = null;
-//[run-25-废弃]             // run-24-5: GetPixels32 只有 0/1 参重载 (dump.cs 实证) — 4 参不存在 (mi=0 invoke 崩 access violation 0x4c);
-//[run-25-废弃]             //   必须全图 0 参 + JS 裁剪; 多张 still 共享同一 atlas 纹理 → 全图按 tex 指针缓存只读一次
-//[run-25-废弃]             var ck = tex.toString();
-//[run-25-废弃]             if (!fullTexCache[ck]) {
-//[run-25-废弃]                 var fmi = cgmChain(A.ogc(tex), "GetPixels32", 0);
-//[run-25-废弃]                 if (!fmi || fmi.isNull()) { warn("[v3][Credit] extract still#" + i + ": GetPixels32() NOT FOUND"); meta.push({ index: i, sprite: "no-pixels" }); continue; }
-//[run-25-废弃]                 var fullR = invokeOk(fmi, tex, []);
-//[run-25-废弃]                 if (!fullR.ok || !fullR.ret || fullR.ret.isNull() || fullR.ret.add(0x18).readS32() !== w * h) {
-//[run-25-废弃]                     // run-24-6: 细化失败原因 + 不可读纹理兜底 (ReadPixels 链) — 最常见根因:
-//[run-25-废弃]                     //   atlas 纹理 m_IsReadable=false → GetPixels32 抛 "not readable" (invoke 异常 → ok=false)
-//[run-25-废弃]                     var why = "unknown";
-//[run-25-废弃]                     try {
-//[run-25-废弃]                         var rdMi2 = cgmChain(A.ogc(tex), "get_isReadable", 0);
-//[run-25-废弃]                         var rd2 = (rdMi2 && !rdMi2.isNull()) ? directCall(rdMi2, "bool", [tex]) : "?";
-//[run-25-废弃]                         if (!fullR.ok) {
-//[run-25-废弃]                             var exc = Memory.alloc(8); exc.writePointer(ptr(0));
-//[run-25-废弃]                             A.ri(fmi, tex, ptr(0), exc);   // 重调拿异常详情 (参数忽略, 只为读 exc)
-//[run-25-废弃]                             var ex = exc.readPointer();
-//[run-25-废弃]                             why = (!ex.isNull()) ? ("throw:" + clsName(A.ogc(ex))) : ("ok-but-invalid readable=" + rd2);
-//[run-25-废弃]                         } else if (fullR.ret.isNull()) why = "null-array readable=" + rd2;
-//[run-25-废弃]                         else why = "len-mismatch(" + fullR.ret.add(0x18).readS32() + "!=" + (w * h) + ") readable=" + rd2;
-//[run-25-废弃]                     } catch (e3) { why = "diag-err:" + e3; }
-//[run-25-废弃]                     warn("[v3][Credit] extract still#" + i + ": GetPixels32() FAIL (" + why + ") — 试 ReadPixels 兜底");
-//[run-25-废弃]                     var fb = readPixelsFallback(tex, w, h);
-//[run-25-废弃]                     if (!fb) {
-//[run-25-废弃]                         // run-24-7: 像素不可读 (atlas Crunch 纹理实锤) — region 已拿到, 不丢:
-//[run-25-废弃]                         //   图片像素由开发机 AssetRipper 解包的 atlas PNG 提供 (extract_stills.py 按 region 裁图)
-//[run-25-废弃]                         warn("[v3][Credit] extract still#" + i + ": 像素提取不可行 — region " + rw + "x" + rh + "@(" + rx + "," + ry + ") 已记录 (图片=AssetRipper atlas)");
-//[run-25-废弃]                         meta.push({ index: i, size: rw + "x" + rh, region: [rx, ry], sprite: "assetripper-atlas" });
-//[run-25-废弃]                         continue;
-//[run-25-废弃]                     }
-//[run-25-废弃]                     fullTexCache[ck] = fb;
-//[run-25-废弃]                     info("[v3][Credit] extract still#" + i + ": ReadPixels 兜底成功 " + fb.w + "x" + fb.h);
-//[run-25-废弃]                 }
-//[run-25-废弃]                 fullTexCache[ck] = { w: w, h: h, rgba: new Uint8Array(fullR.ret.add(0x20).readByteArray(w * h * 4)) };
-//[run-25-废弃]                 info("[v3][Credit] extract still#" + i + ": 全图已缓存 " + w + "x" + h + " (atlas 共享)");
-//[run-25-废弃]             }
-//[run-25-废弃]             var full = fullTexCache[ck];
-//[run-25-废弃]             rgba = new Uint8Array(rw * rh * 4);
-//[run-25-废弃]             for (var yy = 0; yy < rh; yy++) {
-//[run-25-废弃]                 var srcOff = ((Math.round(ry) + yy) * full.w + Math.round(rx)) * 4;
-//[run-25-废弃]                 rgba.set(full.rgba.subarray(srcOff, srcOff + rw * 4), yy * rw * 4);
-//[run-25-废弃]             }
-//[run-25-废弃]             var png = pngEncodeRGBA(rw, rh, rgba);
-//[run-25-废弃]             var ok = writeFileBytes(extractOutRoot() + "/stills/still" + i + ".png", png);
-//[run-25-废弃]             meta.push({ index: i, png: "stills/still" + i + ".png", size: rw + "x" + rh, region: [rx, ry], ok: ok });
-//[run-25-废弃]         }
-//[run-25-废弃]         return meta;
-//[run-25-废弃]     } catch (e) { warn("[v3][Credit] extractStillsToPng err: " + e); return []; }
-//[run-25-废弃] }
 // run-24-6: 不可读纹理兜底 — atlas 纹理 m_IsReadable=false 时 GetPixels32 抛异常 (实测 FAIL),
 //   改走 GPU 拷贝链: GetTemporary RT → Graphics.Blit → active → Texture2D(新, 默认可读).ReadPixels →
 //   ReleaseTemporary → dst.GetPixels32 (ReadPixels 已填充 CPU 侧, readable=true 必成)。
 //   注意: il2cpp_runtime_invoke 的 8B 参数槽只支持指针/≤8B 值 (Rect 16B 塞不进) →
 //   GetTemporary 的 (int,int) 本地写 s32 槽, ReadPixels 的 Rect 用 NativeFunction 'rect' 直调
 //   (darwin 平台 CGRect 与 UnityEngine.Rect 同构); 全程 try/catch, 任何一步失败返回 null。
-//[run-25-废弃] function readPixelsFallback(tex, w, h) {
-//[run-25-废弃]     try {
-//[run-25-废弃]         if (!cls.renderTexture || cls.renderTexture.isNull() || !cls.graphics || cls.graphics.isNull()
-//[run-25-废弃]             || !cls.texture2D || cls.texture2D.isNull()) {
-//[run-25-废弃]             warn("[v3][Credit] readPixelsFallback: RenderTexture/Graphics/Texture2D 类不可得");
-//[run-25-废弃]             return null;
-//[run-25-废弃]         }
-//[run-25-废弃]         var excBuf = function () { var e = Memory.alloc(8); e.writePointer(ptr(0)); return e; };
-//[run-25-废弃]         // 1. rt = RenderTexture.GetTemporary(w, h) — static, int,int → 本地 s32 槽
-//[run-25-废弃]         var rtMi = A.cgm(cls.renderTexture, Memory.allocUtf8String("GetTemporary"), 2);
-//[run-25-废弃]         if (!rtMi || rtMi.isNull()) { warn("[v3][Credit] readPixelsFallback: GetTemporary(2) NOT FOUND"); return null; }
-//[run-25-废弃]         var p2 = Memory.alloc(16); p2.writeS32(w); p2.add(8).writeS32(h);
-//[run-25-废弃]         var e1 = excBuf();
-//[run-25-废弃]         var rt = A.ri(rtMi, null, p2, e1);
-//[run-25-废弃]         if (!e1.readPointer().isNull() || !rt || rt.isNull()) { warn("[v3][Credit] readPixelsFallback: GetTemporary FAIL"); return null; }
-//[run-25-废弃]         var rtStr = rt.toString();
-//[run-25-废弃]         // 2. Graphics.Blit(tex, rt) — static, 2 pointer
-//[run-25-废弃]         var blitMi = A.cgm(cls.graphics, Memory.allocUtf8String("Blit"), 2);
-//[run-25-废弃]         if (blitMi && !blitMi.isNull()) {
-//[run-25-废弃]             var bargs = Memory.alloc(16); bargs.writePointer(tex); bargs.add(8).writePointer(rt);
-//[run-25-废弃]             var e2 = excBuf();
-//[run-25-废弃]             A.ri(blitMi, null, bargs, e2);
-//[run-25-废弃]             if (!e2.readPointer().isNull()) warn("[v3][Credit] readPixelsFallback: Blit 抛异常 (忽略继续)");
-//[run-25-废弃]         } else warn("[v3][Credit] readPixelsFallback: Blit(2) NOT FOUND (忽略)");
-//[run-25-废弃]         // 3. RenderTexture.set_active(rt) — static, 1 pointer
-//[run-25-废弃]         var actMi = A.cgm(cls.renderTexture, Memory.allocUtf8String("set_active"), 1);
-//[run-25-废弃]         if (actMi && !actMi.isNull()) {
-//[run-25-废弃]             var aargs = Memory.alloc(8); aargs.writePointer(rt);
-//[run-25-废弃]             var e3 = excBuf();
-//[run-25-废弃]             A.ri(actMi, null, aargs, e3);
-//[run-25-废弃]             if (!e3.readPointer().isNull()) warn("[v3][Credit] readPixelsFallback: set_active 抛异常 (忽略继续)");
-//[run-25-废弃]         }
-//[run-25-废弃]         // 4. dst = new Texture2D(w, h, DefaultFormat.LDR=0, TextureCreationFlags.None=0) — 4 参 ctor 直调
-//[run-25-废弃]         var dst = A.on(cls.texture2D);
-//[run-25-废弃]         var ctorMi = A.cgm(cls.texture2D, Memory.allocUtf8String(".ctor"), 4);
-//[run-25-废弃]         if (!ctorMi || ctorMi.isNull() || ctorMi.readPointer().isNull()) {
-//[run-25-废弃]             warn("[v3][Credit] readPixelsFallback: Texture2D.ctor(4) NOT FOUND"); A.ri(actMi, null, aargs, excBuf()); return null;
-//[run-25-废弃]         }
-//[run-25-废弃]         new NativeFunction(ctorMi.readPointer(), "void", ["pointer", "int", "int", "int", "int"])(dst, w, h, 0, 0);
-//[run-25-废弃]         // 5. dst.ReadPixels(rect(0,0,w,h), 0, 0) — Rect 16B → NativeFunction 'rect' 直调
-//[run-25-废弃]         var rpMi = A.cgm(cls.texture2D, Memory.allocUtf8String("ReadPixels"), 3);
-//[run-25-废弃]         if (!rpMi || rpMi.isNull() || rpMi.readPointer().isNull()) {
-//[run-25-废弃]             warn("[v3][Credit] readPixelsFallback: ReadPixels(3) NOT FOUND"); A.ri(actMi, null, aargs, excBuf()); return null;
-//[run-25-废弃]         }
-//[run-25-废弃]         var rpFn = new NativeFunction(rpMi.readPointer(), "void", ["pointer", "rect", "int", "int"]);
-//[run-25-废弃]         var rc = Memory.alloc(16);
-//[run-25-废弃]         rc.writeFloat(0); rc.add(4).writeFloat(0); rc.add(8).writeFloat(w); rc.add(12).writeFloat(h);
-//[run-25-废弃]         rpFn(dst, rc, 0, 0);
-//[run-25-废弃]         // 6. 清理: active 复位 + ReleaseTemporary
-//[run-25-废弃]         if (actMi && !actMi.isNull()) A.ri(actMi, null, aargs, excBuf());
-//[run-25-废弃]         var relMi = A.cgm(cls.renderTexture, Memory.allocUtf8String("ReleaseTemporary"), 1);
-//[run-25-废弃]         if (relMi && !relMi.isNull()) {
-//[run-25-废弃]             var rargs = Memory.alloc(8); rargs.writePointer(rt);
-//[run-25-废弃]             A.ri(relMi, null, rargs, excBuf());
-//[run-25-废弃]         }
-//[run-25-废弃]         // 7. dst.GetPixels32() — 0 参, 返回 Color32[] (引用类型 invoke 安全)
-//[run-25-废弃]         var g32 = cgmChain(A.ogc(dst), "GetPixels32", 0);
-//[run-25-废弃]         if (!g32 || g32.isNull()) { warn("[v3][Credit] readPixelsFallback: dst.GetPixels32 NOT FOUND"); return null; }
-//[run-25-废弃]         var r2 = invokeOk(g32, dst, []);
-//[run-25-废弃]         if (!r2.ok || !r2.ret || r2.ret.isNull() || r2.ret.add(0x18).readS32() !== w * h) {
-//[run-25-废弃]             var ln = (r2.ret && !r2.ret.isNull()) ? r2.ret.add(0x18).readS32() : "null";
-//[run-25-废弃]             warn("[v3][Credit] readPixelsFallback: dst.GetPixels32 FAIL (len=" + ln + ") rt=" + rtStr);
-//[run-25-废弃]             return null;
-//[run-25-废弃]         }
-//[run-25-废弃]         return { w: w, h: h, rgba: new Uint8Array(r2.ret.add(0x20).readByteArray(w * h * 4)) };
-//[run-25-废弃]     } catch (e) { warn("[v3][Credit] readPixelsFallback err: " + e); return null; }
-//[run-25-废弃] }
-//[run-25-废弃] // staff 滚动名单: _creditRolls@0x60 = CreditRoll[] → GameObject → GetComponentsInChildren(TMP_Text) 文本
-//[run-25-废弃] function extractStaffTexts() {
-//[run-25-废弃]     try {
-//[run-25-废弃]         var d = comp.director;
-//[run-25-废弃]         var rolls = d.add(0x60).readPointer();
-//[run-25-废弃]         if (!rolls || rolls.isNull()) { warn("[v3][Credit] extract: _creditRolls=null"); return null; }
-//[run-25-废弃]         var n = rolls.add(0x18).readS32();
-//[run-25-废弃]         if (n < 1 || n > 50) { warn("[v3][Credit] extract: _creditRolls 数量异常 " + n); return null; }
-//[run-25-废弃]         var out = [];
-//[run-25-废弃]         for (var i = 0; i < n; i++) {
-//[run-25-废弃]             var roll = rolls.add(0x20 + i * 8).readPointer();
-//[run-25-废弃]             if (!roll || roll.isNull()) continue;
-//[run-25-废弃]             var goR = invokeOk(cgmChain(A.ogc(roll), "get_gameObject", 0), roll, []);
-//[run-25-废弃]             if (!goR.ok || !goR.ret || goR.ret.isNull()) continue;
-//[run-25-废弃]             var comps = invokeOk(cgmChain(A.ogc(goR.ret), "GetComponentsInChildren", 2), goR.ret, [A.tgo(A.cgt(cls.tmpText)), boolPtr(true)]);
-//[run-25-废弃]             var texts = [];
-//[run-25-废弃]             if (comps.ok && comps.ret && !comps.ret.isNull()) {
-//[run-25-废弃]                 var clen = comps.ret.add(0x18).readS32();
-//[run-25-废弃]                 for (var ci = 0; ci < clen && ci < 8; ci++) {
-//[run-25-废弃]                     var t = comps.ret.add(0x20 + ci * 8).readPointer();
-//[run-25-废弃]                     if (!t || t.isNull()) continue;
-//[run-25-废弃]                     var txR = invokeOk(cgmChain(A.ogc(t), "get_text", 0), t, []);
-//[run-25-废弃]                     if (txR.ok && txR.ret && !txR.ret.isNull()) texts.push(readStr(txR.ret));
-//[run-25-废弃]                 }
-//[run-25-废弃]             }
-//[run-25-废弃]             out.push({ roll: i, texts: texts });
-//[run-25-废弃]         }
-//[run-25-废弃]         return out;
-//[run-25-废弃]     } catch (e) { warn("[v3][Credit] extractStaffTexts err: " + e); return null; }
-//[run-25-废弃] }
-//[run-25-废弃] // 主入口: doPlayAsyncInvoke (PlayAsync 成功, 仍处主线程同步 hook) 后调用
-//[run-25-废弃] function extractStep() {
-//[run-25-废弃]     try {
-//[run-25-废弃]         info("[v3][Credit] 素材提取开始 (stills PNG + SpecialThanks 名单 + staff 文本 + 时序)");
-//[run-25-废弃]         var d = comp.director;
-//[run-25-废弃]         if (!d || d.isNull()) { warn("[v3][Credit] extract: director 不可得"); writeVar("g_extractDone", 1); return; }
-//[run-25-废弃]         mkdirs(extractOutRoot());
-//[run-25-废弃]         var stMeta = extractStillsToPng();
-//[run-25-废弃]         var stJson = extractDictSpecialThanks();
-//[run-25-废弃]         var staffJson = extractStaffTexts();
-//[run-25-废弃]         // run-24-8: 轮询首采有启动延迟 → 滚动开头 1-2 屏 (企画/Acacia/プロデューサー...) 可能漏 —
-//[run-25-废弃]         //   当前屏快照 (extractStaffTexts) 与 collectedStaff 去重合并, 开头屏不丢
-//[run-25-废弃]         try {
-//[run-25-废弃]             if (staffJson) {
-//[run-25-废弃]                 for (var si = 0; si < staffJson.length; si++) {
-//[run-25-废弃]                     var rollTxts = staffJson[si].texts || [];
-//[run-25-废弃]                     for (var tj = 0; tj < rollTxts.length; tj++) {
-//[run-25-废弃]                         var tv = rollTxts[tj];
-//[run-25-废弃]                         var key2 = "snap|" + si + "|" + tv;
-//[run-25-废弃]                         if (staffSeen[key2] || !tv || tv.length < 2) continue;
-//[run-25-废弃]                         staffSeen[key2] = true;
-//[run-25-废弃]                         collectedStaff.push({ go: "snap-roll" + si, text: tv });
-//[run-25-废弃]                     }
-//[run-25-废弃]                 }
-//[run-25-废弃]             }
-//[run-25-废弃]         } catch (e4) { warn("[v3][Credit] extractStep 快照合并 err: " + e4); }
-//[run-25-废弃]         installStaffPoll();   // run-24-6: staff 轮询兜底 (主线程缓存组件 → JS 线程采样 m_text)
-//[run-25-废弃]         var out = {
-//[run-25-废弃]             stills: stMeta,
-//[run-25-废弃]             specialthanks: stJson,
-//[run-25-废弃]             staff: staffJson,
-//[run-25-废弃]             timing: {
-//[run-25-废弃]                 scrollSpeed: d.add(0x68).readFloat(),
-//[run-25-废弃]                 stillDelayUnits: d.add(0x6C).readFloat(),
-//[run-25-废弃]                 stillFadeUnits: d.add(0x70).readFloat(),
-//[run-25-废弃]                 stillDisplayUnits: d.add(0x74).readFloat(),
-//[run-25-废弃]                 specialThanksFadeUnits: d.add(0x78).readFloat(),
-//[run-25-废弃]                 specialThanksDisplayUnits: d.add(0x7C).readFloat()
-//[run-25-废弃]             }
-//[run-25-废弃]         };
-//[run-25-废弃]         writeFileBytes(extractOutRoot() + "/credit-assets.json", new Uint8Array(utf8Bytes(JSON.stringify(out, null, 2))));
-//[run-25-废弃]         writeVar("g_extractDone", 1);
-//[run-25-废弃]         info("[v3][Credit] 素材提取完成 — g_extractDone=1");
-//[run-25-废弃]     } catch (e) { error("[v3][Credit] extractStep err: " + e); writeVar("g_extractDone", 1); }
-//[run-25-废弃] }
 var pendingPlay = null;
 var creditT0 = 0;
 function doPlayAsyncInvoke() {
@@ -2192,9 +1673,6 @@ function doPlayAsyncInvoke() {
         if (!r.ok) { warn("[v3][Credit] 原版复刻: PlayAsync(2) invoke FAIL — 见上方异常"); writeVar("g_creditDone", 1); writeVar("g_thanksDuration", 5); pendingPlay = null; return; }
         pendingPlay = null;
         info("[v3][Credit] 原版复刻: CreditsUI.PlayAsync(2) 已触发 (主线程, _specialThanksCredits=" + (stc && !stc.isNull() ? "填充" : "null") + ") — 原版全流程运行中 (stills+staff+thanks)");
-//[run-25-废弃]         if (creditState.extract) {
-//[run-25-废弃]             try { extractStep(); } catch (e2) { error("[v3][Credit] extractStep err: " + e2); writeVar("g_extractDone", 1); }
-//[run-25-废弃]         }
         startCompletionPoll();
     } catch (e) { error("[v3][Credit] doPlayAsyncInvoke err: " + e); writeVar("g_creditDone", 1); pendingPlay = null; }
 }
@@ -2208,7 +1686,6 @@ var startCompletionPoll = function () {
         var timeoutGuard = setTimeout(function () {
             if (creditState.armed && creditState.original) {
                 warn("[v3][Credit] 原版演出 360s 超时兜底 — g_creditDone=1 (演出可能异常未播完)");
-//[run-25-废弃]                 flushStaffJson();   // run-24-4: 超时兜底也落盘 (收集到的即全部滚动期文本)
                 try { if (creditState.extract) thanksProbeFlush(); } catch (e5) { swallowed("credit.js:startCompletionPoll", e5); }
                 writeVar("g_creditDone", 1);
             }
@@ -2234,7 +1711,6 @@ var startCompletionPoll = function () {
                 if (!on) {
                     clearTimeout(timeoutGuard);
                     var elapsed = (Date.now() - t0) / 1000;
-//[run-25-废弃]                     flushStaffJson();   // run-24-4: 演出自然完, staff 收集完整
                     try { if (creditState.extract) thanksProbeFlush(); } catch (e5) { swallowed("credit.js:pollFn", e5); }
                     writeVar("g_creditDone", 1);
                     writeVar("g_thanksDuration", elapsed + 3);
@@ -2426,7 +1902,7 @@ function readThanksTiming() {
 //   且原版只操作当前语种标签, prefab 两语种标签默认全 active → 双 Special Thanks 叠印。
 // 自翻页 (run-29 按原版实证重构):
 //   标题时序: _startLabel@0x30 (共犯者) fade in → display (delayCoef 拍) → fade out → 才开始翻页
-//   (用户实测: 标题展示完成后即消失, 非全程常驻);
+//   (实测: 标题展示完成后即消失, 非全程常驻);
 //   名单呈现 = 逐行累积追加 (运行时采样 42 条 = 42 行实证): 每行 = 完整富文本
 //   (<size=1.7em>名字</size><space=80>... 同行多名字, <br> 换行), 行内排版由富文本原样复刻;
 //   只激活当前语种标签 (防叠印)。节奏 = 原版拍数换算 (fadeUnits/displayUnits × 拍长)。
@@ -2708,13 +2184,12 @@ function doEnd() {
     try {
         if (!creditState.armed) return;   // 未 arm 无事可清 (存档回放防御)
         if (creditState.original) {
-            // run-15: 原版复刻模式 — 原版 PlayAsync 自清理 (ChangeActivity/Stop), 我们什么都没动;
+            // 原版复刻模式 — 原版 PlayAsync 自清理 (ChangeActivity/Stop), 我们什么都没动;
             //   只调原版 CreditsUI.Stop() 兜底 (防演出未播完被脚本切走) + disarm
             if (comp.creditsUI && !comp.creditsUI.isNull()) {
                 var stMi = A.cgm(cls.creditsUI, Memory.allocUtf8String("Stop"), 0);
                 if (stMi && !stMi.isNull()) invoke(stMi, comp.creditsUI, []);
             }
-//[run-25-废弃]             flushStaffJson();   // run-24-5: EndCredits2 标签接管收尾路径也落盘 (Resume 打断轮询循环后走这里)
             creditState.armed = false;
             creditState.phase = 0;
             info("[v3][Credit] end (原版模式): CreditsUI.Stop 兜底 + disarm");
@@ -2837,7 +2312,7 @@ function onScrollAsync(a) {
 }
 function onShowAsync(a) {
     try {
-        // dict 类兜底偷取 (任何 ShowAsync, 含我方 — 我方首次调用也偷得到, 后续 run 自愈)
+        // dict 类兜底偷取 (任何 ShowAsync, 含我方 — 我方首次调用也偷得到, 后续自愈)
         if (!comp.dictCls) {
             var d = a[1];
             if (d && !d.isNull()) {

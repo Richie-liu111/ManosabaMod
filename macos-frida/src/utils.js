@@ -122,7 +122,7 @@ export function invokeBool(mi, obj, args) {
     } catch (e) { swallowedWarn("utils.js:invokeBool", e); }
     return ret.readU8() === 1;
 }
-// 0 参构造器调用 (用户已证可行)
+// 0 参构造器调用 (实测可行)
 var ctorCache = {};
 export function tryCtor(cls, obj) {
     var k = ptr(cls).toInt32();
