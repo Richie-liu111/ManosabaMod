@@ -18,7 +18,7 @@
 9031 /src/witchbook/dictheal.js
 20196 /src/witchbook/index.js
 27757 /src/witchbook/pages.js
-20134 /src/witchbook/selftest.js
+21451 /src/witchbook/selftest.js
 46141 /src/witchbook/session.js
 2673 /src/witchbook/state.js
 7233 /src/witchbook/textures.js
@@ -11694,6 +11694,36 @@ function probeMap(page, pageCls) {
         swallowed("witchbook/selftest.js:probeMap", e);
     }
     return out;
+}
+// 选页面实例: 图鉴页有**多个实例** (图鉴页 vs 出示证物页, 且含 inactive) ——
+// 注入用的是 findAllObjectOfType (只 active), 自检若用 findAllObjectOfTypeAll[0] 可能选到
+// `_loadedDataItemMap` 为空的那个 → A1 一条都没探到, 却报"全部通过/没反应" (2026-09-28 实测)。
+// 这里按"哪个实例的 map 有货"来选, 并把每个实例的条数打进日志。
+function pickPage(pageCls) {
+    var active = findAllObjectOfType(pageCls), all = findAllObjectOfTypeAll(pageCls);
+    var seen = {}, cands = [];
+    active.forEach(function (p) { var k = p.toString(); if (!seen[k]) {
+        seen[k] = 1;
+        cands.push({ p: p, tag: "A" });
+    } });
+    all.forEach(function (p) { var k = p.toString(); if (!seen[k]) {
+        seen[k] = 1;
+        cands.push({ p: p, tag: "i" });
+    } });
+    var best = null, bestN = -1, counts = [];
+    for (var i = 0; i < cands.length; i++) {
+        var n = -1;
+        try {
+            n = probeMap(cands[i].p, pageCls).count;
+        }
+        catch (e) { }
+        counts.push(cands[i].tag + n); // A=active, i=inactive
+        if (n > bestN) {
+            bestN = n;
+            best = cands[i].p;
+        }
+    }
+    return { page: best, n: cands.length, activeN: active.length, counts: counts, mapN: bestN };
 }
 export function selftestEnabled() {
     try {
