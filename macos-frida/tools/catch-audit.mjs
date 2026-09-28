@@ -15,7 +15,7 @@
 //
 // 刻意**跳过**的位置 (改了会出事或没意义):
 //   · log.js 的崩溃上下文 (crashLine / installCrashHandler / Fallback) — 那里禁 console/RPC, 会死锁
-//   · 注释行里的 `catch (e) {}`(如 credit.js 的 //[run-25-废弃] 死代码) — 改了不起作用只添噪
+//   · 整行被注释掉的死代码里的 `catch (e) {}` — 改了不起作用只添噪 (这类死代码本身应尽早删)
 //   · probe_textlocalizer.js (已无调用点的死文件, 删不删由用户定)
 import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";

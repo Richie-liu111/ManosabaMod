@@ -50,6 +50,10 @@ if [ -d "$PWD/src" ]; then
     if command -v node >/dev/null && [ -f "$PWD/tools/check-imports.mjs" ]; then
         node "$PWD/tools/check-imports.mjs" || { echo "错误: 具名导入校验未通过, 已中止构建"; exit 1; }
     fi
+    # 发布卫生: 文档/注释里不许出现具体 mod 名/本机路径/私有渠道 (2026-09-29 起)
+    if command -v node >/dev/null && [ -f "$PWD/tools/check-privacy.mjs" ]; then
+        node "$PWD/tools/check-privacy.mjs" || { echo "错误: 内容脱敏检查未通过, 已中止构建 (npm run privacy 看详情)"; exit 1; }
+    fi
     if ! (command -v npx >/dev/null && npx --no-install frida-compile src/entry.js -o dist/manosabamod.js -S); then
         if [ -f "$PWD/node_modules/.bin/frida-compile" ]; then
             "$PWD/node_modules/.bin/frida-compile" src/entry.js -o dist/manosabamod.js -S || { echo "错误: frida-compile 构建失败"; exit 1; }

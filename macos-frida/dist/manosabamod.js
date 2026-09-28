@@ -3,7 +3,7 @@
 1938 /src/banner.js
 5796 /src/chapterdisplay.js
 87999 /src/choice.js
-166254 /src/credit.js
+165928 /src/credit.js
 23208 /src/cutin.js
 4600 /src/io.js
 6146 /src/locale.js
@@ -2781,7 +2781,7 @@ export function initChoiceHandlers() {
 // 原则 (项目惯例): 只做加法+自清理, 不改任何游戏现有对象; 全程 try/catch 不崩。
 //   错误路径一律写安全默认时长 → nani @Wait 永不悬挂 (R4)。
 import { A, dbg, directCall, error, findAllObjectOfType, findClassAcrossImages, findSvc, getSystemClass, invoke, invokeOk, makeS, nv, pngDims, readStr, swallowed, warn } from "./utils.js";
-import { getIO } from "./io.js"; // run-24-2: 写文件走 io.js 绑定 (Module.findExportByName 在 bundle 内不可用, io.js 的 findGlobalExportByName 实证可用)
+import { getIO } from "./io.js"; // 写文件走 io.js 绑定 (Module.findExportByName 在 bundle 内不可用, io.js 的 findGlobalExportByName 实证可用)
 import { readJSONFile, openForWrite, writeString, fileSync, fileReadBytes } from "./io.js";
 import { info } from "./log.js";
 import { getCurrentLocale } from "./locale.js";
@@ -2802,7 +2802,7 @@ var comp = {
     stillT: { delay: 2000, fade: 2000, display: 26000 },
     timing: null,
     thanksTiming: null,
-    thanksPaging: null // run-28: 共犯自翻页状态机 (不调原版 ShowAsync, 防 level 数组越界)
+    thanksPaging: null // 共犯自翻页状态机 (不调原版 ShowAsync, 防 level 数组越界)
 };
 var creditState = {
     armed: false,
@@ -2836,7 +2836,7 @@ catch (e) {
 } }
 function cgmChain(c, name, argc) {
     var cur = c;
-    // run-24-4: A.gn 不能在模块顶层修 (A 表由 entry.js 在加载完成后填充, 顶层时 A.cgp 还是 undefined);
+    // A.gn 不能在模块顶层修 (A 表由 entry.js 在加载完成后填充, 顶层时 A.cgp 还是 undefined);
     //   必须运行时取 — 找不到父类函数就直接放弃回退 (避免 TypeError)
     var gn = (typeof A.gn === "function") ? A.gn : (typeof A.cgp === "function" ? A.cgp : null);
     for (var d = 0; cur && !cur.isNull() && d < 8; d++) {
@@ -3003,7 +3003,7 @@ function getFontName(tmp) {
     return "?";
 }
 // 枚举 staff content 下全部 TMP 标签 (含 inactive — GetComponentsInChildren(Type,bool))
-// run-26: Label 名后缀 → key 段 (与 build_credit_data.py label_suffix 同一规则)
+// Label 名后缀 → key 段 (与 build_credit_data.py label_suffix 同一规则)
 function labelSuffix(nm) {
     if (nm === "Label")
         return "";
@@ -3052,7 +3052,7 @@ function enumerateLabels() {
                             var pgo = invokeOk(cgmChain(A.ogc(p2.ret), "get_gameObject", 0), p2.ret, []);
                             if (pgo.ok && pgo.ret)
                                 pn = getGoName(pgo.ret);
-                            // run-26: 再上一级 = grand (Content 直接子级: TopSpace/Full/Separator/Left/BottomSpace)
+                            // 再上一级 = grand (Content 直接子级: TopSpace/Full/Separator/Left/BottomSpace)
                             var p3 = invokeOk(cgmChain(A.ogc(p2.ret), "get_parent", 0), p2.ret, []);
                             if (p3.ok && p3.ret) {
                                 var pgo2 = invokeOk(cgmChain(A.ogc(p3.ret), "get_gameObject", 0), p3.ret, []);
@@ -3110,7 +3110,7 @@ function enumerateThanksLabels() {
             var tmp = lbl.add(0x30).readPointer();
             if (!tmp || tmp.isNull())
                 continue;
-            var cg = lbl.add(0x28).readPointer(); // run-28: SpecialThanksLabel._canvasGroup@0x28 (翻页 fade 用)
+            var cg = lbl.add(0x28).readPointer(); // SpecialThanksLabel._canvasGroup@0x28 (翻页 fade 用)
             comp.thanksByLocale[lk] = { label: lbl, tmp: tmp, cg: cg, name: getGoName(lbl), font: getFontName(tmp) };
             info("[v3][Credit] thanks 标签 localeKind=" + lk + " name=" + comp.thanksByLocale[lk].name + " font=" + comp.thanksByLocale[lk].font);
             n++;
@@ -4205,7 +4205,7 @@ function loadCreditData(path) {
         for (var k2 in j.thanks) {
             if (k2 !== "order" && j.thanks[k2] && Array.isArray(j.thanks[k2].pages) && j.thanks[k2].pages.length)
                 thanksOk = true;
-        } // run-29: pages
+        } // pages
     }
     var stats = [];
     if (staffOk)
@@ -4302,12 +4302,12 @@ function lineEm(text) {
         return null;
     }
 }
-// ============ run-26/27: still 图片显示 (复刻模式右侧画面) ============
+// ============ /27: still 图片显示 (复刻模式右侧画面) ============
 // 原版 Act2: ShowStillsAsync 依次 Present/Dismiss 9 张 EndingStill (Still_1..9 = prefab 静态,
-// CanvasGroup+Image; sprite 随 prefab 依赖加载)。复刻: 时序由 run-27 动态决定 —
+// CanvasGroup+Image; sprite 随 prefab 依赖加载)。复刻: 时序由 动态决定 —
 //   delay   = キャスト 条目滚到屏上的时间 (castLeadOffsetPx/speed; 原版: 名单先滚, キャスト 段图才出现)
 //   fade/display = 原版 director units × 60/bpm 换算 (bpm 可得时), 否则 fallback 2s/26s
-// 9 张依次 fade (张间无 delay, 逐张 fadeout 切换 — run-28), 播完 fadeout 收尾。phase2 入口 fade 收尾。
+// 9 张依次 fade (张间无 delay, 逐张 fadeout 切换 — ), 播完 fadeout 收尾。phase2 入口 fade 收尾。
 function setStillAlpha(st, a) {
     try {
         if (st && st.cg && !st.cg.isNull())
@@ -4331,7 +4331,7 @@ function findStills() {
             warn("[v3][Credit] still: 场景无 EndingStill 组件");
             return 0;
         }
-        // run-27: 顺序 — 优先 director._stills@0x58 数组序 (prefab 序列化顺序 = 原版显示顺序),
+        // 顺序 — 优先 director._stills@0x58 数组序 (prefab 序列化顺序 = 原版显示顺序),
         //   兜底场景扫 + 名字数字序 (旧: 名字序导致 9→1, 与原版顺序不符)
         var d = (comp.director && !comp.director.isNull()) ? comp.director : null;
         if (!d) {
@@ -4692,7 +4692,7 @@ function stillTick() {
         else if (comp.stillState === "display") {
             var dispMs = (cfg && cfg.displayMs != null) ? cfg.displayMs : comp.stillT.display;
             if (el >= dispMs) {
-                // run-28: 张间不再回 delay — 原版 delay(18拍) 只对齐首张キャスト出现; 逐张 fadeout 后切换
+                // 张间不再回 delay — 原版 delay(18拍) 只对齐首张キャスト出现; 逐张 fadeout 后切换
                 //   (旧: 每张都等 12.3s delay → 9×22.2=200s > phase1 119s → 后几张没播)
                 comp.stillState = "fadeout";
                 comp.stillStepStart = now;
@@ -4775,7 +4775,7 @@ function showStills(delayMs, fadeMs, displayMs) {
         warn("[v3][Credit] showStills err: " + e);
     }
 }
-// run-27: 原版时序参数 — 场景扫 CreditsDirectorAct2 (CreditsUI prefab 自带组件) 读序列化字段:
+// 原版时序参数 — 场景扫 CreditsDirectorAct2 (CreditsUI prefab 自带组件) 读序列化字段:
 //   _scrollSpeed@0x68 float, _stillDelayUnits@0x6C, _stillFadeUnits@0x70, _stillDisplayUnits@0x74 (拍数),
 //   _bgmBpm@0x30 float (CreditsDirectorBase) — 拍→秒 = units × 60/bpm
 function readDirectorTiming() {
@@ -4813,7 +4813,7 @@ function readDirectorTiming() {
         return comp.timing;
     }
 }
-// run-27: キャスト 条目 (Left 首个 Roll_6) 距 Content 顶部的滚动距离 px — 布局后读 Left 容器
+// キャスト 条目 (Left 首个 Roll_6) 距 Content 顶部的滚动距离 px — 布局后读 Left 容器
 //   anchoredPosition.y (Label GO → transform → parent(Roll_6) → parent(Left 容器), Transform==RectTransform 同一对象)
 function castLeadOffsetPx() {
     try {
@@ -4900,7 +4900,7 @@ function doStaff() {
             writeVar("g_staffDuration", 3);
             return;
         }
-        // run-27: 速度优先用原版 director._scrollSpeed (序列化配置), 无则 data.json speed, 再兜底 60
+        // 速度优先用原版 director._scrollSpeed (序列化配置), 无则 data.json speed, 再兜底 60
         var timing = readDirectorTiming();
         var speed = (timing && timing.speed > 0) ? timing.speed
             : ((creditState.json.staff && creditState.json.staff.speed > 0) ? creditState.json.staff.speed : 60);
@@ -4924,7 +4924,7 @@ function doStaff() {
         }
         var text = lines.join("\n");
         var isZh = getCurrentLocale() === "zh-Hans";
-        // run-26: 逐条目复刻 — data.json staff.items [{key,text}] → 按 key 匹配填充各条目标签
+        // 逐条目复刻 — data.json staff.items [{key,text}] → 按 key 匹配填充各条目标签
         //   (原版演出 = Content 下 222 个条目标签各填各的静态文本, 整体滚动 — 不再整段全填叠印。
         //   key = "{grand}|{entry}|{suffix}": grand=Content 直接子级, entry=条目容器, suffix=Label 名后缀
         //   (Label→'', Label_1→'_1') — 与 build_credit_data.py label_suffix 同一规则)
@@ -5057,7 +5057,7 @@ function doStaff() {
             var lb = comp.labels[i];
             var fillText = null;
             if (itemMap) {
-                // run-26: 逐条目 key 匹配 (grand|entry|suffix) — 命中填该条目标签的静态文本, 未命中清空+停用
+                // 逐条目 key 匹配 (grand|entry|suffix) — 命中填该条目标签的静态文本, 未命中清空+停用
                 var key = (lb.grand || "") + "|" + (lb.parent || "") + "|" + labelSuffix(lb.name);
                 if (itemMap[key] !== undefined) {
                     fillText = itemMap[key];
@@ -5102,7 +5102,7 @@ function doStaff() {
         invoke(cgmChain(cls.canvas, "ForceUpdateCanvases", 0), ptr(0), []);
         // 4. 位置归零 (R2/N2): 优先 setter
         invoke(A.cgm(cls.scrollRect, Memory.allocUtf8String("set_verticalNormalizedPosition"), 1), comp.scrollRect, [fPtr(1.0)]);
-        // run-27: still 时序 — 布局强制后 (anchoredPosition 才有效)。原版锚点 = 硬编码 delayUnits 拍数
+        // still 时序 — 布局强制后 (anchoredPosition 才有效)。原版锚点 = 硬编码 delayUnits 拍数
         //   (实读: delay=18拍 → 18×60/88 ≈ 12.3s — 正是 Full 大条目滚完、キャスト 出现的时间);
         //   キャスト 偏移 (Left 容器 y/speed) 作校验日志, 取 max 兜底 (キャスト 未出现前不显示图)
         var castOff = castLeadOffsetPx();
@@ -5158,16 +5158,16 @@ function doStaff() {
 //     → 播完 goto EndLabelName (# EndCredits2) — NaniScriptPlayer
 //   AsyncToken = {CancellationToken@0x0, CancellationToken@0x8} (32B 结构体, dump.cs:142681);
 //   全零 = CancellationToken.None ×2 (永不取消) — 与 op_Implicit(CancellationToken.None) 语义一致
-// run-23: 主线程 PlayAsync 泵 — pendingPlay 由 doOriginal 设置 (Preload 后挂起),
+// 主线程 PlayAsync 泵 — pendingPlay 由 doOriginal 设置 (Preload 后挂起),
 //   onSVV (g_creditTick) 在主线程同步 hook 里检查资产填充 → doPlayAsyncInvoke 完成 PlayAsync
 // ============ 素材提取: 原版致谢素材 → mod 文件夹 (TestCredit/Assets/) ============
 //   trigger "extract" → doOriginal 全流程 (Preload+Play) → doPlayAsyncInvoke 成功后 extractStep()
 //   (PlayAsync 后仍在主线程同步 hook 内, 所有 invoke 安全) → 写出:
 //     Assets/stills/still{i}.png   原版 EndingStill 图片 (Sprite → Texture2D → GetPixels32 → PNG)
 //     Assets/credit-assets.json    specialthanks 名单 + staff 当前屏快照 + stills 时序参数
-//     Assets/staff.json            staff 完整滚动文本 (hook TMP set_text 全演出期收集 — run-24-4:
+// Assets/staff.json            staff 完整滚动文本 (hook TMP set_text 全演出期收集 —
 //                                  滚动块每屏复用 TMP, 任意时刻只能抓到当前屏, 必须全程收集)
-// run-24-6: 不可读纹理兜底 — atlas 纹理 m_IsReadable=false 时 GetPixels32 抛异常 (实测 FAIL),
+// 不可读纹理兜底 — atlas 纹理 m_IsReadable=false 时 GetPixels32 抛异常 (实测 FAIL),
 //   改走 GPU 拷贝链: GetTemporary RT → Graphics.Blit → active → Texture2D(新, 默认可读).ReadPixels →
 //   ReleaseTemporary → dst.GetPixels32 (ReadPixels 已填充 CPU 侧, readable=true 必成)。
 //   注意: il2cpp_runtime_invoke 的 8B 参数槽只支持指针/≤8B 值 (Rect 16B 塞不进) →
@@ -5230,7 +5230,7 @@ function doPlayAsyncInvoke() {
         pendingPlay = null;
     }
 }
-// 完成信号轮询 (run-23 模块级): canvas disabled → g_creditDone=1; 360s 超时兜底 (run-24: 片尾 5 分钟)
+// 完成信号轮询 (模块级): canvas disabled → g_creditDone=1; 360s 超时兜底 (片尾 5 分钟)
 var startCompletionPoll = function () {
     try {
         var ui = comp.creditsUI;
@@ -5252,7 +5252,7 @@ var startCompletionPoll = function () {
                 }
                 writeVar("g_creditDone", 1);
             }
-        }, (creditState.extract ? 2400000 : 360000)); // run-30: 探针模式原版全流程(共犯 459+420 人拼行)可超 10 分钟; 普通原版 360s (run-24 bloom 片尾)
+        }, (creditState.extract ? 2400000 : 360000)); // run-30: 探针模式原版全流程(共犯 459+420 人拼行)可超 10 分钟; 普通原版 360s (bloom 片尾)
         var pollFn = function () {
             try {
                 if (!creditState.armed || !creditState.original) {
@@ -5409,10 +5409,10 @@ function doOriginal() {
         catch (e) {
             warn("[v3][Credit] 原版 director 诊断 err: " + e);
         }
-        // 触发原版演出 (run-23): 原版 @credit = Preload → Play, 但 invoke 必须在主线程 —
+        // 触发原版演出 (): 原版 @credit = Preload → Play, 但 invoke 必须在主线程 —
         //   JS 线程 (setTimeout 回调) 调 Unity API 会 breakpoint triggered; 用 nani 轮询 @set
         //   g_creditTick 作泵, 在 onSVV (主线程同步 hook) 里完成 PlayAsync。
-        //   Preload 同步触发 (run-22 已验证: 300ms 内 _specialThanksCredits 填充)。
+        // Preload 同步触发 (已验证: 300ms 内 _specialThanksCredits 填充)。
         writeVar("g_creditDone", 0);
         creditT0 = Date.now();
         var tok = Memory.alloc(32);
@@ -5448,10 +5448,10 @@ function thanksLocales() {
     for (var k in j.thanks) {
         if (k !== "order" && j.thanks[k] && Array.isArray(j.thanks[k].pages) && j.thanks[k].pages.length)
             out.push(k);
-    } // run-29: pages (页=富文本行[])
+    } // pages (页=富文本行[])
     return out;
 }
-// run-29: 共犯翻页原版参数 (场景实例即 prefab 克隆, 字段直读):
+// 共犯翻页原版参数 (场景实例即 prefab 克隆, 字段直读):
 //   rollThanks._delayBeforeCreditsCoefficient@0x60 — 标题"共犯者"展示时长 (单位=拍)
 //   director._specialThanksFadeUnits@0x78 / _specialThanksDisplayUnits@0x7C — 翻页 fade/display (拍)
 //   director._specialThanksOrderData@0x80 — 每语种播放顺序 (SpecialThanksOrderData{_localeKind@0x10,_order@0x18 LocaleKind[]})
@@ -5538,11 +5538,11 @@ function readThanksTiming() {
         return comp.thanksTiming;
     }
 }
-// run-29: 共犯翻页自实现 (不调原版 ShowAsync) — 原版 ShowAsync 内部按课程档位索引
+// 共犯翻页自实现 (不调原版 ShowAsync) — 原版 ShowAsync 内部按课程档位索引
 //   _maxLabelSizesByLevel@0x40 等数组 (dump.cs:11233 CreditRollSpecialThanks), mod 页数 (72) 远超
 //   原版档位数 → 播几页后 IndexOutOfRangeException → 演出中断 (共犯者消失/无名单, 14:58:58 实证);
 //   且原版只操作当前语种标签, prefab 两语种标签默认全 active → 双 Special Thanks 叠印。
-// 自翻页 (run-29 按原版实证重构):
+// 自翻页 (按原版实证重构):
 //   标题时序: _startLabel@0x30 (共犯者) fade in → display (delayCoef 拍) → fade out → 才开始翻页
 //   (实测: 标题展示完成后即消失, 非全程常驻);
 //   名单呈现 = 逐行累积追加 (运行时采样 42 条 = 42 行实证): 每行 = 完整富文本
@@ -5629,7 +5629,7 @@ function thanksTick() {
                     info("[v3][Credit] 共犯翻页完成 " + p.nPages + " 页 (zh+ja 合并完整名单)");
                     stopThanks();
                     // run-30f: Production 段改主线程泵 — thanksTick 是 JS 定时器线程, 直接调
-                    //   get_ContentHeight/ScrollAsync = "breakpoint triggered" (run-23 同款实证:
+                    // get_ContentHeight/ScrollAsync = "breakpoint triggered" (同款实证:
                     //   引擎级 Unity API 必须在 onSVV 主线程同步 hook 执行); 置标志, 下一轮
                     //   nani 轮询 @set g_creditTick 时由 onSVV 泵执行 doProduction (完成后写 g_creditDone)
                     creditState.pendingProduction = true;
@@ -5766,7 +5766,7 @@ function doProduction() {
         writeVar("g_creditDone", 1);
     }
 }
-// run-29: 行距按档位 — 行富文本 <size=Xem> → 档 (1.7em→2/1.3em→1/1em→0) → _lineSpacingsByLevel
+// 行距按档位 — 行富文本 <size=Xem> → 档 (1.7em→2/1.3em→1/1em→0) → _lineSpacingsByLevel
 //   (原版每页 SetLineSpacing(档位行距); 富文本里没有行距, 不设则默认行距)
 function thanksSetLineSpacing(label, text, lineSpacings) {
     try {
@@ -5801,7 +5801,7 @@ function doThanks() {
             writeVar("g_thanksDuration", 5);
             return;
         }
-        stopStills(); // run-26: phase1 滚动结束 → still 收尾 (fade 0 + 停定时器)
+        stopStills(); // phase1 滚动结束 → still 收尾 (fade 0 + 停定时器)
         if (!ensureThanks()) {
             warn("[v3][Credit] phase=2 跳过: rollThanks 未捕获/失效 (见上方捕获诊断)");
             writeVar("g_thanksDuration", 5);
@@ -5815,7 +5815,7 @@ function doThanks() {
             writeVar("g_thanksDuration", 5);
             return;
         }
-        // run-29: order — 优先原版 _specialThanksOrderData (每语种一序, 当前语种优先), 兜底 json.order, 再回退当前语言
+        // order — 优先原版 _specialThanksOrderData (每语种一序, 当前语种优先), 兜底 json.order, 再回退当前语言
         var tt = readThanksTiming();
         var orderList = [];
         var curLoc = getCurrentLocale();
@@ -5859,7 +5859,7 @@ function doThanks() {
             }
             var pgList = (jt[loc] && Array.isArray(jt[loc].pages)) ? jt[loc].pages : null;
             if (!pgList) {
-                warn("[v3][Credit] 语种 " + loc + " 无 pages (需 run-29 格式)");
+                warn("[v3][Credit] 语种 " + loc + " 无 pages (需当前使用的 pages 格式)");
                 continue;
             }
             nPages += pgList.length;
@@ -5878,7 +5878,7 @@ function doThanks() {
             writeVar("g_thanksDuration", 5);
             return;
         }
-        // run-29: 原版参数 — fade/display 拍数 + 标题"共犯者"延迟系数 (拍), 异常回退固定值
+        // 原版参数 — fade/display 拍数 + 标题"共犯者"延迟系数 (拍), 异常回退固定值
         var beat = (tt && tt.bpm > 0) ? 60 / tt.bpm : 0.68;
         var fadeMs = 400, displayMs = 1280, titleMs = 4000;
         if (tt && tt.fadeUnits >= 0 && tt.bpm > 0)
@@ -5892,9 +5892,9 @@ function doThanks() {
         invoke(cgmChain(kts, "SetGameObjectActive", 1), comp.rollThanks, [boolPtr(true)]);
         invoke(cgmChain(kts, "SetCanvasEnabled", 1), comp.rollThanks, [boolPtr(true)]);
         ensureHierarchy();
-        // run-28: 只激活当前语种标签 (防叠印 — 原版 prefab 两语种全 active)
+        // 只激活当前语种标签 (防叠印 — 原版 prefab 两语种全 active)
         activateThanksLocale(pages[0].lv);
-        // 标题"共犯者" (_startLabel@0x30 SpecialThanksLabel) — run-29: fade in → display → fade out → 翻页
+        // 标题"共犯者" (_startLabel@0x30 SpecialThanksLabel) — fade in → display → fade out → 翻页
         var startLbl = comp.rollThanks.add(0x30).readPointer();
         var startCg = (startLbl && !startLbl.isNull()) ? startLbl.add(0x28).readPointer() : null;
         // 诊断: 当前语种翻页标签 rect 尺寸 (对照原版 _maxLabelSizesByLevel 1920-2320 宽)
@@ -6010,9 +6010,9 @@ function doEnd() {
             }
         }
         deactivatedLabels = [];
-        stopStills(); // run-26: still 定时器/alpha 收尾 + run-31: 恢复原版 sprite
+        stopStills(); // still 定时器/alpha 收尾 + run-31: 恢复原版 sprite
         clearStillCaches(); // run-31: 清自定义 sprite/纹理缓存 (Unity GC 回收)
-        stopThanks(); // run-28: 共犯翻页定时器收尾
+        stopThanks(); // 共犯翻页定时器收尾
         restoreAncestors();
         creditState.armed = false;
         creditState.phase = 0;
@@ -6059,9 +6059,9 @@ function abortCredit(reason) {
     catch (e) {
         swallowed("credit.js:abortCredit#3", e);
     }
-    stopStills(); // run-26: still 定时器/alpha 收尾 + run-31: 恢复原版 sprite
+    stopStills(); // still 定时器/alpha 收尾 + run-31: 恢复原版 sprite
     clearStillCaches(); // run-31: 清自定义 sprite/纹理缓存
-    stopThanks(); // run-28: 共犯翻页定时器收尾
+    stopThanks(); // 共犯翻页定时器收尾
     restoreAncestors();
     creditState.armed = false;
     creditState.phase = 0;
@@ -6122,7 +6122,7 @@ function onSVV(a) {
                 doEnd();
         }
         else if (name === "g_creditTick") {
-            // run-23: 主线程泵 — nani 轮询每轮 @set g_creditTick, 在同步 hook 里完成 PlayAsync
+            // 主线程泵 — nani 轮询每轮 @set g_creditTick, 在同步 hook 里完成 PlayAsync
             if (creditState.original && pendingPlay)
                 doPlayAsyncInvoke();
             // run-30f: Production 段 — 共犯完成置 pendingProduction 后, 主线程执行 doProduction
