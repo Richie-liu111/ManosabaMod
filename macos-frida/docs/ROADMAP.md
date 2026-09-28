@@ -2,9 +2,9 @@
 
 > 随代码演进更新。最后更新：2026-08-23（新增 macOS 自研致谢演出复刻 — ⚠️ 试验性, 上游无此功能, 见「差距」6）。
 
-> **蓝本勘定（2026-08-11/12）**：Windows 对照的蓝本是 **ManosabaMod1 群文件版 ManosabaLoader.dll**（254KB，md5 ea00a666，ilspycmd 反编译 `/tmp/manosaba1_decomp.cs`，10232 行）——唯一包含 `ModChoiceHandlerLoader` + `ModObjectionCutInLoader` 的版本。GitHub 源码仓库 `ManosabaMod-2.0.0`（csproj v1.0.0）**没有**这两个类；GitHub release 的 ManosabaMod2 DLL（221KB）与 `ManosabaMod`（221KB，md5 86d623ab）同源，也都没有。C# 侧参考路径：`DoomsGuardians/Project-Cannon-and-Candle`（Packages/com.elringus.naninovel/，与 dump.cs 签名完全匹配）。
+> **蓝本勘定（2026-08-11/12）**：Windows 对照的蓝本是**上游 Windows 版 ManosabaLoader.dll**（离线反编译对照，仅作参考实现）——唯一包含 `ModChoiceHandlerLoader` + `ModObjectionCutInLoader` 的版本。GitHub 源码仓库 `ManosabaMod-2.0.0`（csproj v1.0.0）**没有**这两个类；GitHub release 的 ManosabaMod2 DLL（221KB）与 `ManosabaMod`（221KB，md5 86d623ab）同源，也都没有。C# 侧参考路径：`DoomsGuardians/Project-Cannon-and-Candle`（Packages/com.elringus.naninovel/，与 dump.cs 签名完全匹配）。
 >
-> **上游脉络（2026-08-12 GitHub 核实）**：IrisuM/ManosabaMod 的 PR 贡献——v2.0.0（2026-03-21）= #4（zyf722：图鉴自定义/视频/schema 迁移）+ #5（Asa-Chiri：OGG/任意 WAV 音频）+ #6（Asa-Chiri：语言切换资源修复）；master 2026-04-27 合入 #7–#10（均 Asa-Chiri，提交署名 Weicheng Zhao，Co-Authored-By Claude Opus：DisplayName 统一+颜色恢复、多语言本地化、菜单 UI 本地化、@choice handler + @gosubCutIn），未发 release。群文件 DLL（254KB）即此状态构建；GitHub release（221KB，md5 86d623ab）= v2.0.0。macOS 蓝本源码（`ManosabaLoader/`）与其逐文件对齐。语言切换资源修复对应提交 **`66e5388b`**（LocaleHelper + LocaleWatcherComponent + ReInjectModProvisionSources，见「差距」5）；mod 名称/描述/作者/章节名多语言本地化对应提交 **`7b021a11`**（schema 2.1→2.2，与 Gapless info.json ja 变体配套）。
+> **上游脉络（2026-08-12 GitHub 核实）**：IrisuM/ManosabaMod 的 PR 贡献——v2.0.0（2026-03-21）= #4（zyf722：图鉴自定义/视频/schema 迁移）+ #5（Asa-Chiri：OGG/任意 WAV 音频）+ #6（Asa-Chiri：语言切换资源修复）；master 2026-04-27 合入 #7–#10（均 Asa-Chiri，提交署名 Weicheng Zhao，Co-Authored-By Claude Opus：DisplayName 统一+颜色恢复、多语言本地化、菜单 UI 本地化、@choice handler + @gosubCutIn），未发 release。上游 GitHub release 的版本即对应此状态。macOS 蓝本源码（`ManosabaLoader/`）与其逐文件对齐。语言切换资源修复对应提交 **`66e5388b`**（LocaleHelper + LocaleWatcherComponent + ReInjectModProvisionSources，见「差距」5）；mod 名称/描述/作者/章节名多语言本地化对应提交 **`7b021a11`**（schema 2.1→2.2，与 某 mod info.json ja 变体配套）。
 
 ## 目标
 
@@ -37,7 +37,7 @@
    - 镜像 C# 蓝本 `ModChoiceHandlerLoader` 四步：真 VirtualResourceProvider + `AddResource<GameObject>`（真 Resource，path 含 `ModChoiceHandlers/{Id}` prefix）+ ChoiceHandlerMetadata（Implementation 从原版 Trial meta 逐字节复制）+ `providersMap.Add("ModChoiceHandlers", vrp)`。actor 由游戏自己构造（克隆 BasePanel 原版面板 + mod 立绘替换）。
    - **两个最终根因**：① 往 Resource 塞组件而非 GameObject（ResourceExistsBlocking<T> 双条件，必须精确匹配）→ Instantiate 后 `get_gameObject`；② Resource.path 必须含 prefix（LoadedResource.ctor 的 BuildLocalPath 校验）。
 2. **CutIn** — ✅ 2026-08-12 已闭环
-   - 机制：SetVariableValue postfix 把 objectionCutInSpawnPath 改写为 Hiro（insideRewrite 守卫）+ pendingEntry；SetSpawnParameters postfix → BuildInstanceCache（GetComponentsInChildren<Image/SpriteRenderer>(true)，23 渲染器）→ SwapSpritesFromCache（按 sprite 名匹配 6 key）→ 动画不覆盖替换（1s 后 re-dump 验证）。
+   - 机制：SetVariableValue postfix 把 objectionCutInSpawnPath 改写为原版模板名（insideRewrite 守卫）+ pendingEntry；SetSpawnParameters postfix → BuildInstanceCache（GetComponentsInChildren<Image/SpriteRenderer>(true)，23 渲染器）→ SwapSpritesFromCache（按 sprite 名匹配 6 key）→ 动画不覆盖替换（1s 后 re-dump 验证）。
    - **最终根因（替换成功但不可见）**：`invoke()` 经 `il2cpp_runtime_invoke` 读 ≤8B 值类型返回（float/bool）读到垃圾——`get_pixelsPerUnit` 读回 1.77e-18（真值 37.8）→ `Sprite.Create` 以近零 ppu 创建 → sprite 无限放大不可见。修复：`directCall()`（utils.js）直读 MethodInfo 首字段 methodPointer，按正确返回类型（'float'）读 s0；Vector2/Rect 是 HFA（s0-s3）仍走缓冲 + 归一化守卫（[0,1] 回落 0.5）。详见 ARCHITECTURE.md 的 directCall 节。
    - 验证：6 sprite 全部显示（ppu=37.82/75.76/65.91/72.96 原版真实值），shader 分布与原版一致，动画不覆盖。
 3. **ModChapterDisplay（存档章节名）** — ✅ 2026-08-12 已闭环
@@ -45,15 +45,15 @@
    - 数据：run_mod.sh 扫描 info.json 的 `ChapterNames`（值支持本地化 dict）注入全局 chapterNames（脚本路径 → 章节名）。
    - 布局：`GameStateMap.playbackSpot` offset 运行时读；`PlaybackSpot.scriptPath` 固定 @0x0（按名查找与字段类型反查在 macOS 上都返回 scriptPath@0x10 的错类，被实例内存实证推翻）；`_subTitleLabel` offset 运行时读。
    - **踩坑**：`set_richText`/`set_text` 经 `il2cpp_runtime_invoke` 调用 access violation at 0x1 → 改用 `directCall()` 直调 methodPointer（invoke 不可靠的又一样本）。空槽 `_subTitleLabel` 可能是非 null 垃圾指针，`A.ogc` 前必须做小地址守卫。
-4. **菜单翻页** — ✅ 2026-08-03 已回迁（perPage=4，`ChoiceList_<页>` 方案，镜像 Windows AddModStartMenu）并通过回归验证（TestWitchBook 位于第 3 页，翻页进入正常）。
+4. **菜单翻页** — ✅ 2026-08-03 已回迁（perPage=4，`ChoiceList_<页>` 方案，镜像 Windows AddModStartMenu）并通过回归验证（某个 mod 位于第 3 页，翻页进入正常）。
 5. **语言切换后 mod 资源重注入** — ✅ 2026-08-18 已修（残留:切语言卡顿）
-   - **现象**：游戏内切语言（zh-Hans ↔ ja）后：① 剧本内 `Failed to load 'zh-Hans' localization document for '<mod>/<script>'` ×N → `Failed to hold` 卡死；② 退出到标题黑屏（Rewind 覆盖标题脚本的 `@back EmaHiro` 等 mod 资产加载失败 → `Unity.LogException` → 死在 `@ShowUI TitleUI` 前 → TitleUi.Activate 永不触发 → 重注入钩子永不执行 → 自锁）。
+   - **现象**：游戏内切语言（zh-Hans ↔ ja）后：① 剧本内 `Failed to load 'zh-Hans' localization document for '<mod>/<script>'` ×N → `Failed to hold` 卡死；② 退出到标题黑屏（覆写标题剧本的 mod 的 `@back <mod 资产>` 等 mod 资产加载失败 → `Unity.LogException` → 死在 `@ShowUI TitleUI` 前 → TitleUi.Activate 永不触发 → 重注入钩子永不执行 → 自锁）。
    - **根因**：Naninovel 切语言时对**所有** `LocalizableResourceLoader<T>` 调用 `InitializeProvisionSources()` 重建 ProvisionSources 列表，抹掉 mod 注入的 provider（Scripts/Text/Audio/Voice/Backgrounds/Characters 全中）。macOS loader 唯一重注入点在 `TitleUi.Activate` hook（providers.js）→ 中途切换无恢复。**与 mod 内容无关**：`@print/@toast/@choice` 的 `|#ID|` 都只是"在错误时机被迫重载 doc"的触发器；此前把 `@choice |#ID|` 误判为根因，已排除（118 条 `@print |#ID|` 在 provider 被抹后同样 `Failed to hold`）。
-   - **证据**（2026-08-18 modlog）：`RL.HandleLocaleChanged('ja')` ×几十 = 每个 loader 实例都在重建；随后 Backgrounds/Stills loader 只剩游戏自带 4 个 provider、`EmaHiro ResourceExists mp=0x0` → LogException。
+   - **证据**（2026-08-18 modlog）：`RL.HandleLocaleChanged('ja')` ×几十 = 每个 loader 实例都在重建；随后 Backgrounds/Stills loader 只剩游戏自带 4 个 provider、`<mod 资产> ResourceExists mp=0x0` → LogException。
    - **修复**（2026-08-18，providers.js + choice.js，细节见 [PITFALLS.md](PITFALLS.md) 7.5）：hook `ResourceLoader<T>.HandleLocaleChanged`（FSG 共享体，一次覆盖所有 T 实例化）**onLeave → 主线程同步重注入**：遍历 modList 重跑 `addModLoader`；`insertProvisionSource` 带去重（同 prefix 幂等跳过）。覆盖全部 5 类 provider（Scripts/Text/Audio/Voice/Backgrounds(MainBackground|Stills|Tricks)/Characters），比上游 C# 版（仅 Text/Audio/Voice）更全——标题黑屏正是 Backgrounds。
    - **与上游 66e5388b 的差异 —— 不用 JS timer**：上游用 LocaleWatcherComponent（MonoBehaviour.Update）连续 ~10 帧重注入；macOS 初版镜像用 setTimeout 链，但 Frida timer 跑在**脚本线程**而非 Unity 主线程，与主线程异步 reload（UniTask 续体）竞争 → 2026-08-18 多次 SIGBUS/SIGSEGV 崩溃（GameAssembly 无符号偏移 +0xab2da0/0xb52c34/0xdc9988）。改 onLeave 同步重注入后，同一场景实测 **358 次重注入零崩溃**（主线程语义对齐上游）。
    - **已知残留 —— 切语言卡顿**：一次切换 ~200+ 次重注入（每个 loader 实例各一次，间隔 ~20ms≈每帧），每次全量 `addModLoader`（30 mod × 5 类）。去重只省 insert，findSvc / LRP 创建 / converters dict 填充仍每帧重复 → 主线程被占用数秒 → 肉眼卡顿。优化方向：① **verify-before-repair**——重注入前先扫各 loader 列表，全在则跳过（绝大多数重注入冗余）；② 按 loader 定向重注入——只补刚被 wipe 的 loader，最贴上游语义，但 LRP 若只被 JS 记录引用会被 IL2CPP GC 回收成悬垂指针，需额外 rooting。
-   - **附带修复 —— WitchBook 缺语言条目**：mod 的 info.json 某条目缺某语言（如 Gapless 的 Clues 只有 zh-Hans）时，日文下图鉴查 `inner[ja]` → KeyNotFoundException → name/desc 空白。`registerLocalizedDict`（witchbook/pages.js）现在补全全部 7 种游戏语言，缺的用已有文本回退（`pickLocaleText`：zh-Hans→ja→任意），与游戏 .txt "Missing translation → source locale" 语义一致（2026-08-18 已修）。
+   - **附带修复 —— WitchBook 缺语言条目**：mod 的 info.json 某条目缺某语言（如某 mod 的 Clues 只有 zh-Hans）时，日文下图鉴查 `inner[ja]` → KeyNotFoundException → name/desc 空白。`registerLocalizedDict`（witchbook/pages.js）现在补全全部 7 种游戏语言，缺的用已有文本回退（`pickLocaleText`：zh-Hans→ja→任意），与游戏 .txt "Missing translation → source locale" 语义一致（2026-08-18 已修）。
 
 6. **致谢演出复刻** — ⚠️ 试验性（2026-08-19+, macOS 自研, **上游 Windows 版 ManosabaMod 无此功能**）
    - 复刻原版结尾致谢演出: staff 主名单滚动（CreditRollVerticalScroll.ScrollAsync,

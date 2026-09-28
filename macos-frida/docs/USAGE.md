@@ -13,7 +13,7 @@ mod 剧本 / 本地化 / voice / audio / movie / 背景 / 立绘 已通过 provi
 ├── dist/manosabamod.js              ← 主 Frida 脚本 (frida-compile 构建产物, 部署到这里)
 ├── normalize_audio.py               ← 可选: 音频标准化 (不部署则跳过该功能, 见"音频标准化"节)
 └── ManosabaMod/                     ← mod 目录 (首次运行 run_mod.sh 自动创建)
-    ├── 1919180/                     ← 你的 mod (含 info.json + Scripts/...)
+    ├── my_mod/                      ← 你的 mod (含 info.json + Scripts/...)
     └── ModLoader/Scripts/           ← 启动时自动生成 (菜单剧本)
 
 仓库 — 脚本源 (clone 到任何位置, 只用于部署/更新脚本)

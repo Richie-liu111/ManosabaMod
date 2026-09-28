@@ -42,9 +42,9 @@ RVA 0x3404d4 完全一致; 不加载任何 mod 也会发生, 加载 mod 后概�
 
 ### 7.2 @char SubId 立绘残留 (剧本用法层, 非加载器缺陷)
 
-**已确认事实**: `@char SubId:"Middle" <char>.<appearance>` (如 BoneWingEma 的
+**已确认事实**: `@char SubId:"Middle" <char>.<appearance>` (如某 mod 的
 `SubId:"Middle" gyEma-Ch2.8`) 显示的立绘在回标题后**不被清除**;
-无 SubId 用法的 mod (Rewind) 无残留 → SubId 是差异因素。
+无 SubId 用法的 mod 无残留 → SubId 是差异因素。
 
 **机制 (推断, 未验证)**: SubId 是 Naninovel 的**槽位参数** — 带 SubId 时 actor
 实例注册为复合 key `{charId}-{SubId}` (同屏可显示同一角色多实例); 回标题时引擎的
@@ -96,8 +96,8 @@ RVA 0x3404d4 完全一致; 不加载任何 mod 也会发生, 加载 mod 后概�
 **现象** (修复前): 游戏内切语言 (zh-Hans ↔ ja) 后:
 1. **剧本内卡死**: `Failed to load 'zh-Hans' localization document for '<mod>/<script>'` ×N →
    `Failed to hold 'Text/Scripts/<mod>/<script>'` 剧本卡住。
-2. **退出到标题黑屏**: 覆盖标题的 mod 剧本 (如 Rewind 的 `System/System_Title.nani`)
-   从脚本缓存正常播放, 但 `@back EmaHiro Id:"Stills"` 等 **mod 资产**加载失败 →
+2. **退出到标题黑屏**: 覆写标题剧本的 mod (如某 mod 的 `System/System_Title.nani`)
+   从脚本缓存正常播放, 但 `@back <mod 资产> Id:"Stills"` 等 **mod 资产**加载失败 →
    `Unity.LogException` → 剧本死在 `@ShowUI TitleUI` 之前 → TitleUi.Activate 永不触发
    → 加载器的重注入 hook 永不执行 → **自锁黑屏**。
 
@@ -113,7 +113,7 @@ Backgrounds/Characters) 被全部抹掉。macOS 版**唯一**重注入点是 `Ti
 因此**每一个**本地化 loader 实例的重建都被记录, 即"全量重建"的实锤。
 切换后 Backgrounds/Stills loader 的 ProvisionSources 只剩游戏自带 4 项
 (`Localization/zh-Hans/Backgrounds/Stills` + `Backgrounds/Stills`), mod 的
-`<key>/Backgrounds/Stills` 消失, `EmaHiro ResourceExists mp=0x0` → LogException。
+`<key>/Backgrounds/Stills` 消失, `<mod 资产> ResourceExists mp=0x0` → LogException。
 
 **修复** (2026-08-18, providers.js + choice.js):
 - hook `ResourceLoader<T>.HandleLocaleChanged` (FSG 共享体, 一次覆盖所有 T 实例化)
@@ -147,9 +147,9 @@ name/desc 空白。`registerLocalizedDict` (witchbook/pages.js) 补全全部 7 �
 
 ### 7.6 角色元数据守卫失效 → 原版角色被 mod 覆写 (2026-09-25)
 
-**现象**: 装了 **Twilight_TestMod005** (info.json 用**原版角色 id** `Hiro/Warden/…`
-声明 `Characters`) 后, 原版剧本 `@char Hiro.Arms3,Eyes1_Normal_Open5,Default` /
-`@char Warden.1` 在预加载时报 `Naninovel.Error: Failed to load '<外观>' resource`;
+**现象**: 装了**某 mod** (info.json 用**原版角色 id** `<角色A>/<角色B>/…`
+声明 `Characters`) 后, 原版剧本 `@char <角色>.<外观组合>` /
+`@char <角色>.1` 在预加载时报 `Naninovel.Error: Failed to load '<外观>' resource`;
 卸载该 mod 后日志 0 条 (modlog1/modlog2 对照)。
 
 **根因**: `witchbook/characters.js` 的 `ContainsId` 守卫写成 `r.ret.toInt32() === 1`
@@ -160,14 +160,14 @@ name/desc 空白。`registerLocalizedDict` (witchbook/pages.js) 补全全部 7 �
 的 ArgumentException 实证)。
 
 **修复**: 两处改用 `invokeBool()`。修复后日志给出 `addCharacterProviders:
-mod 'Twilight_TestMod005' 新注册 13 个角色, 跳过 16 个已存在 ID`
+该 mod 新注册 13 个角色, 跳过 16 个已存在 ID`
 (29 条声明 = 16 撞原版 + 13 自有) —— 这行现在是"mod 声明原版 id"的可观测信号。
 注: `choice.js:chBool` 是 `invokeBool` 的重复实现 (S2 待清理)。
 
 ### 7.7 `@update` 连排 → 主线程冻结 2.1 s — 合帧去抖 + 按分类收敛 (2026-09-25)
 
-**现象**: 进入 Twilight 剧本时主线程冻结 **2.12 s** (日志 13:01:16.338→18.460,
-1343 行, 占全会话日志 76%)。触发点是 `Twilight_TestMod005/Scripts/…/Main.nani`
+**现象**: 进入该 mod 剧本时主线程冻结 **2.12 s** (日志 13:01:16.338→18.460,
+1343 行, 占全会话日志 76%)。触发点是 `某 mod 的剧本`
 第 2 行起 **28 条 `@update` 连排** (15 Profile + 3 Rule + 9 Note + 1 Clue), 同一帧内执行。
 
 **根因**: `onWitchBookUpdate` 每命中一条 `@update` 就调用一次**全量**
@@ -189,7 +189,7 @@ mod 'Twilight_TestMod005' 新注册 13 个角色, 跳过 16 个已存在 ID`
 
 ### 7.8 跨帧持有托管对象指针 → 点开图鉴闪退 (2026-09-25, 与 7.5 的"悬垂指针"同一族)
 
-**现象**: Twilight 会话中 **回标题 → 再进 mod → 点开魔女图鉴** 必闪退 (首次进 mod
+**现象**: 该 mod 会话中 **回标题 → 再进 mod → 点开魔女图鉴** 必闪退 (首次进 mod
 直接点则不崩)。`.ips`: `EXC_BAD_ACCESS / KERN_INVALID_ADDRESS at 0x6f004d00000018`。
 
 **取证**: 反汇编崩溃 PC (`GameAssembly+0x4313D8`) 是一段**字符串内容比较**
@@ -238,9 +238,9 @@ string 指针的值是 `{len=8,"Mo"}` —— 即**一个 `System.String` 被当�
 
 ### 7.10 图鉴打不开 — `IdVersionPair` 字典**按实例匹配** (2026-09-25, 与 7.8 同一现场)
 
-**现象**: 进 Gapless 剧本后魔女图鉴打不开, 每次点击都抛
+**现象**: 进 **mod A** 剧本后魔女图鉴打不开, 每次点击都抛
 `KeyNotFoundException: The given key 'WitchTrials.Models.IdVersionPair' was not present in the dictionary.`,
-游戏随之中断打开流程; 同一加载器下 Twilight 剧本正常 (差别只是剧本 `@update` 激活了哪些键)。
+游戏随之中断打开流程; 同一加载器下 **mod B** 剧本正常 (差别只是剧本 `@update` 激活了哪些键)。
 
 **（2026-09-28 复查: 本条结论经真机探针再次确认 = 实例语义; 中途一度被怀疑, 见 7.13①。另注: 页面 `_loadedDataItemMap` 是 List 而非 Dictionary —— 7.13②）**
 
@@ -325,17 +325,17 @@ string 指针的值是 `{len=8,"Mo"}` —— 即**一个 `System.String` 被当�
 
 ### 7.12 哨兵第一次真跑就抓到东西: "我们的记录" ≠ "游戏的状态" (2026-09-28)
 
-MOD_SELFTEST=1 跑一局 (Gapless 点图鉴 → 回标题 → Twilight 点图鉴), 11 轮里 **5 轮 FAIL**、
+MOD_SELFTEST=1 跑一局 (mod A 点图鉴 → 回标题 → mod B 点图鉴), 11 轮里 **5 轮 FAIL**、
 **knf=0** (游戏没崩, 图鉴正常) —— 这种"看着没事但断言红了"正是要研究的。
 
 **证据链**:
-- FAIL 全部同一条: `字典缺键 profile 'Hiro' v0`, 且只出现在 Twilight 之后;
-- Twilight 的 `Main.nani` 第 7 行: `@update "Hiro" Category:"Profile" Version:0`; 剧本第 1 行还有
+- FAIL 全部同一条: `字典缺键 profile '<原版条目>' v0`, 且只出现在 mod B 之后;
+- mod B 剧本的第 7 行: `@update "<原版条目>" Category:"Profile" Version:0`; 剧本第 1 行还有
   `@gosubResetBook System/System_ResetWitchBook` (游戏侧清空图鉴);
-- 但我们的 `>>> @update 拦截` 只打了 **15** 条 profile (Warden…Margo), **没有 Hiro**;
-- 原因: 'Hiro' 在 data.js 里被 "**首个 mod 优先**" 判给了先加载的 mod (Gapless, 字母序在前) →
-  在 Twilight 里 `isCurrentModItem(profile,'Hiro')` 为假 → 我们**按规矩忽略**了这条 @update。
-  而**游戏不管我们的规矩**, 照旧把 Hiro 写进 `_state`(16 条) 与 `_itemIds` →
+- 但我们的 `>>> @update 拦截` 只打了 **15** 条 profile (其余原版角色条目), **没有这一条**;
+- 原因: 这个条目被 data.js 的 "**首个 mod 优先**" 判给了先加载的 mod (字母序在前) →
+  在 mod B 里 `isCurrentModItem(profile,'<原版条目>')` 为假 → 我们**按规矩忽略**了这条 @update。
+  而**游戏不管我们的规矩**, 照旧把该条目写进 `_state`(16 条) 与 `_itemIds` →
   字典里只有我们注入的 15 条 → `_state` 与字典出现分叉。
 
 **两个真问题 (都已修)**:

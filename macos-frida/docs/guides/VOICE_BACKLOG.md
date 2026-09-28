@@ -28,7 +28,7 @@
 Voice/{剧本路径}/{文本ID}
 ```
 
-- **剧本路径**：游戏加载剧本时用的路径（不含 `Scripts/` 前缀），例如原版 `Act01_Chapter03/Act01_Chapter03_Adv01`，二创剧本如 `1919180_02/Main_02`
+- **剧本路径**：游戏加载剧本时用的路径（不含 `Scripts/` 前缀），例如原版 `Vanilla/Chapter01_Adv01`，二创剧本如 `my_mod/MyScript`
 - **文本 ID**：`|#ID|` 里的 ID
 
 所以语音文件要放在 `Voice/{剧本路径}/{文本ID}.wav`（只能用 WAV，见文末「语音格式」）。
@@ -38,8 +38,8 @@ Voice/{剧本路径}/{文本ID}
 `|#ID|` 里的 ID 必须在对应的本地化文件 `Text/Scripts/{剧本路径}.txt` 里有一条记录，否则引擎解析不出语音路径。记录里用 `; > 角色: |#ID|` 标记这是一行**角色对话**（有语音）：
 
 ``` {tabindex="0"}
-# Main_02_Hiro001
-; > Hiro: |#Main_02_Hiro001|
+# MyScript_Line001
+; > 角色A: |#MyScript_Line001|
 ; 原文（日语或其它语言）
 中文翻译
 ```
@@ -54,11 +54,11 @@ Voice/{剧本路径}/{文本ID}
 
 ``` {tabindex="0"}
 ; 改前
-@voice "Hiro/001"
-@print "摘要：……" author:"Hiro" waitInput:true Wait:true
+@voice "角色A/001"
+@print "摘要：……" author:"角色A" waitInput:true Wait:true
 
 ; 改后
-@print "摘要：……"|#Main_02_Hiro001| author:"Hiro" waitInput:true Wait:true
+@print "摘要：……"|#MyScript_Line001| author:"角色A" waitInput:true Wait:true
 ```
 
 `|#ID|` 紧跟文本参数之后、其它命名参数之前。
@@ -70,9 +70,9 @@ Voice/{剧本路径}/{文本ID}
 ``` {tabindex="0"}
 [MOD根目录]/
   ├─ Voice/
-  │   └─ 1919180_02/
-  │       └─ Main_02/
-  │           └─ Main_02_Hiro001.wav
+  │   └─ my_mod/
+  │       └─ MyScript/
+  │           └─ MyScript_Line001.wav
   ├─ Scripts/
   └─ Text/
 ```
@@ -82,8 +82,8 @@ Voice/{剧本路径}/{文本ID}
 在 `Text/Scripts/{剧本路径}.txt` 中为每个 ID 添加记录：
 
 ``` {tabindex="0"}
-# Main_02_Hiro001
-; > Hiro: |#Main_02_Hiro001|
+# MyScript_Line001
+; > 角色A: |#MyScript_Line001|
 ; 摘要：……
 摘要：……
 ```

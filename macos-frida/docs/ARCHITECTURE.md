@@ -139,7 +139,7 @@ ScriptPlaylist.LoadResources
   (Windows 读 `modKey` 自定义变量, 思路一致)。
 - **会话（资源）隔离 — 整页重建** (防止跨剧本/跨会话继承):
   - **只注入当前 mod** 的条目。
-  - **override** (mod id == 原版 id, 如 `Hiro`): 注入时移除原版同 id 条目 + 注入 mod 版。
+  - **override** (mod id == 原版 id, 如 `<原版角色 id>`): 注入时移除原版同 id 条目 + 注入 mod 版。
   - **整页重建**: 页面首次出现时捕获原版 `_loadedDataItemMap` 快照 (按页面实例);
     mod 切换/回标题时 **清空 map → 从快照重添全部原版条目** → 重建 `_itemIds` →
     补缺失 dict 项 → 注入当前 mod。每次会话从原版基座开始, override 完全可逆 (含 v1)。
