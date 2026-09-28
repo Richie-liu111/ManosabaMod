@@ -1,6 +1,6 @@
 // ============ WitchBook 角色域: 立绘 provider 注册 + CharacterData/AuthorData 注入 + Profile 姓名覆写 ============
 // 镜像 Windows AddRichCharacter/AddSimpleCharacter + TryInjectCharacterData + TryInjectAuthorData + ProfilePageRefreshContent_Patch
-import { A, dbg, fieldOffset, findClassAcrossImages, findFirstObjectOfType, findSvc, invoke, invokeBool, invokeOk, listContainsId, makeLocalResourceProvider, makeS, populateConvertersDict, readStr, wblog, error, warn } from "../utils.js";
+import { A, dbg, error, fieldOffset, findClassAcrossImages, findFirstObjectOfType, findSvc, invoke, invokeBool, invokeOk, listContainsId, makeLocalResourceProvider, makeS, populateConvertersDict, readStr, swallowed, swallowedWarn, warn, wblog } from "../utils.js";
 import { wbCls, wbCurrentMod, wbData } from "./state.js";
 import { buildLocalizedTextArray, localeValue, pickLocaleText, resolveLocale, unionLocaleKeys } from "./data.js";
 import { getCurrentLocale, syncLocaleFromEngine } from "../locale.js";
@@ -21,7 +21,7 @@ function stealListStringClass(metaMap) {
             if (pt.isNull()) continue;
             return A.ogc(pt);
         }
-    } catch (e) {}
+    } catch (e) { swallowed("witchbook/characters.js:stealListStringClass", e); }
     return ptr(0);
 }
 // 立绘 provider: ① providersMap.Add(prefix, LRP(Texture2D)) ② CharacterManagerExtended 注册 ActorMetadata
@@ -70,7 +70,7 @@ export function addCharacterProviders(root, prefix) {
                 if (cand.isNull()) continue;
                 var gmm = A.cgm(A.ogc(cand), Memory.allocUtf8String("get_MetadataMap"), 0);
                 if (gmm && !gmm.isNull()) { cfg = cand; dbg("[v3] Configuration @0x" + cfgCands[ci].toString(16) + " = " + A.cgn(A.ogc(cand)).readCString()); break; }
-            } catch (e) {}
+            } catch (e) { swallowed("witchbook/characters.js:texFn", e); }
         }
         if (!cfg || cfg.isNull()) { dbg("[v3] CharacterManager.Configuration 未找到 (get_MetadataMap)"); return; }
         var gmmMi = A.cgm(A.ogc(cfg), Memory.allocUtf8String("get_MetadataMap"), 0);
@@ -238,13 +238,13 @@ export function hookProfileName() {
                     var labCls = A.ogc(label);
                     var setTxt = A.cgm(labCls, Memory.allocUtf8String("set_text"), 1);
                     if (!setTxt || setTxt.isNull()) return;
-                    try { syncLocaleFromEngine(); } catch (e) {}   // 兜底: 主动查一次 LocalizationManager (启动即目标语言)
+                    try { syncLocaleFromEngine(); } catch (e) { swallowedWarn("witchbook/characters.js:hookProfileName.onLeave", e); }   // 兜底: 主动查一次 LocalizationManager (启动即目标语言)
                     var loc = getCurrentLocale();   // 跟随当前语言 (ja → AsaChiri/IrisuM 等)
                     var tpl = buildAuthorTemplate(cc, loc);
                     if (!tpl) tpl = buildAuthorTemplate(cc, "zh-Hans");
                     if (!tpl) tpl = buildAuthorTemplate(cc, "ja");
                     if (tpl) invokeOk(setTxt, label, [makeS(tpl)]);
-                } catch (e) {}
+                } catch (e) { swallowedWarn("witchbook/characters.js:hookProfileName.onLeave#2", e); }
             }
         });
         wblog("ProfilePage 姓名覆写 hook 就绪");

@@ -1,5 +1,5 @@
 // ============ WitchBook 页面注入域: 注入 Page._loadedDataItemMap + _itemIds + _state + 本地化字典预填 ============
-import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, findAllObjectOfTypeAll, getGenericArgClass, getSystemClass, invokeBool, invokeOk, listContainsId, makeS, readStr, wblog, dbg, error, warn } from "../utils.js";
+import { A, dbg, ensureItemIdsString, error, fieldIsStringArray, fieldOffset, findAllObjectOfType, findAllObjectOfTypeAll, getGenericArgClass, getSystemClass, invokeBool, invokeOk, listContainsId, makeS, readStr, swallowed, swallowedWarn, warn, wblog } from "../utils.js";
 import { fileExists } from "../io.js";
 import { wbCls, wbData, wbOverrides } from "./state.js";
 import { currentModIds, fullLocaleTags, injectVersions, isCurrentModItem, localeValue, pickLocaleText, resolveLocale, wbCats } from "./data.js";
@@ -38,7 +38,7 @@ function findMapEntryPtr(mapList, id, off) {
             if (e.isNull()) continue;
             if (readStr(e.add(off.id).readPointer()) === id) return e;
         }
-    } catch (e) {}
+    } catch (e) { swallowed("witchbook/pages.js:findMapEntryPtr", e); }
     return null;
 }
 // 覆写换血的幂等判定: 页面 map 里该 id 的那条, 是不是我们上一轮换血注入的那一个?
@@ -136,7 +136,7 @@ export function ensureStateEntriesDict(page, cat) {
             var prev = _lastDictCnt[cat.name];
             if (prev !== undefined && cnt < prev) wblog(cat.name + "._localizedTextData 由 " + prev + " 条降到 " + cnt + " 条 (游戏重建过)");
             _lastDictCnt[cat.name] = cnt;
-        } catch (e0) {}
+        } catch (e0) { swallowedWarn("witchbook/pages.js:ensureStateEntriesDict", e0); }
         var stMap = wbData.states[cat.name] || {};
         if (!Object.keys(stMap).length) return 0;
         // 核对"页面即将渲染的键"(_state 里的每条): mod 条目用 mod 文本, 原版条目从游戏 Data 重建。
@@ -207,7 +207,7 @@ export function applyStates(page, cat) {
         try {
             var stList2 = state.add(fieldOffset(wbCls.versionedState, "_list", 0x10)).readPointer();
             if (!stList2.isNull()) listN = stList2.add(0x18).readS32();
-        } catch (e2) {}
+        } catch (e2) { swallowedWarn("witchbook/pages.js:applyStates", e2); }
         dbg(cat.name + "Page 状态应用 " + applied + " 条 (_state._list=" + listN + ")");   // B2 已结案: 降 dbg
     } catch (e) { error("applyStates err: " + e); }
 }
@@ -226,9 +226,9 @@ export function getFirstDictValue(dict) {
                 if (en.readS32() < 0) continue;      // 已删除残留 (hashCode=-1): 它的 value 指针可能是旧对象, 不能拿
                 var v = en.add(16).readPointer();
                 if (v && !v.isNull()) return v;
-            } catch (e) {}
+            } catch (e) { swallowedWarn("witchbook/pages.js:getFirstDictValue", e); }
         }
-    } catch (e) {}
+    } catch (e) { swallowedWarn("witchbook/pages.js:getFirstDictValue#2", e); }
     return null;
 }
 export function registerLocalizedDict(page, b) {
@@ -243,13 +243,13 @@ export function registerLocalizedDict(page, b) {
         try {
             // Dictionary 在 0x20 偏移处直接有 count 字段, 绕过 get_Count 的 boxed Int32 调用
             var cnt = -1;
-            try { cnt = outer.add(0x20).readS32(); } catch (e) {}
+            try { cnt = outer.add(0x20).readS32(); } catch (e) { swallowedWarn("witchbook/pages.js:registerLocalizedDict", e); }
             var ivpId = "?", ivpVer = -1;
-            try { ivpId = readStr(b.ivp.add(0x10).readPointer()); } catch (e) {}
-            try { ivpVer = b.ivp.add(0x18).readS32(); } catch (e) {}
+            try { ivpId = readStr(b.ivp.add(0x10).readPointer()); } catch (e) { swallowedWarn("witchbook/pages.js:registerLocalizedDict#2", e); }
+            try { ivpVer = b.ivp.add(0x18).readS32(); } catch (e) { swallowedWarn("witchbook/pages.js:registerLocalizedDict#3", e); }
             var outerClsName = A.cgn(outerCls).readCString();
             dbg("[WitchBook] " + cat.name + " registerDict '" + b.id + "' 进入: dict size=" + cnt + " cls=" + outerClsName + " ivp.Id='" + ivpId + "' ivp.Ver=" + ivpVer);
-        } catch (e) {}
+        } catch (e) { swallowedWarn("witchbook/pages.js:registerLocalizedDict#4", e); }
         // 重要: 切语言后 RefreshPageContent 会重复触发, 但游戏只会重新读取 _localizedTextData[ivp][locale]
         // 如果只是 ContainsKey=true 就跳过, inner dict 里仍是旧 locale 集 (如只有 zh-Hans),
         // 切到日文后游戏查 inner[ja] → KeyNotFoundException.
@@ -283,7 +283,7 @@ export function registerLocalizedDict(page, b) {
             // Clue/Rule/Note: Dictionary<LocaleKind, Xxx.LocalizedTexts> — 值 = 二元组
             var ltsCls = wbCls.lts[cat.name];
             if (!ltsCls || ltsCls.isNull()) {
-                try { var ifaceCls = getGenericArgClass(outerCls, 1); if (!ifaceCls.isNull()) ltsCls = getGenericArgClass(ifaceCls, 1); } catch (e) {}
+                try { var ifaceCls = getGenericArgClass(outerCls, 1); if (!ifaceCls.isNull()) ltsCls = getGenericArgClass(ifaceCls, 1); } catch (e) { swallowedWarn("witchbook/pages.js:registerLocalizedDict#5", e); }
             }
             var ltsCtor = (ltsCls && !ltsCls.isNull()) ? A.cgm(ltsCls, Memory.allocUtf8String(".ctor"), 2) : null;
             if (!ltsCls || ltsCls.isNull() || !ltsCtor || ltsCtor.isNull()) { warn(cat.name + ".LocalizedTexts 类/ctor 未找到, 跳过 '" + b.id + "'"); return; }
@@ -339,7 +339,7 @@ export function registerLocalizedDict(page, b) {
                     var addNum = A.cgm(numCls, Memory.allocUtf8String("Add"), 2);
                     if (addNum && !addNum.isNull()) invokeOk(addNum, numDict, [b.ivp, makeS(vrec.numbering || "")]);
                 }
-            } catch (e) {}
+            } catch (e) { swallowedWarn("witchbook/pages.js:registerLocalizedDict#6", e); }
         }
         dbg(cat.name + "._localizedTextData 预填 '" + b.id + "' v" + b.ver + " (" + innerName + ")");
     } catch (e) { error("registerLocalizedDict err '" + b.id + "': " + e); }

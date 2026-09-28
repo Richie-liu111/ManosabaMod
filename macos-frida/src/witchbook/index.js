@@ -11,11 +11,12 @@
 //   3. 显示: Interceptor.replace CluePage.RefreshPageContent / SetupItemButton —— mod 线索直接设
 //      _subjectLabel/_descriptionLabel/_thumbnail (绕开 _localizedTextData 的 KeyNotFoundException)。
 // 数据来源: 运行时读 <MOD_ROOT>/<modKey>/info.json 的 Clues 字段 + 扫 WitchBook/Clues/*.png。
-import { A, dbg, ensureItemIdsString, fieldOffset, findAllObjectOfType, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, wblog, error, warn } from "../utils.js";
+import { A, dbg, ensureItemIdsString, error, fieldOffset, findAllObjectOfType, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, swallowed, warn, wblog } from "../utils.js";
 import { initCatStateMaps, resetWbOverrides, setWbCls, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbPrevMod } from "./state.js";
 import { isCurrentModItem, loadWitchBookData, wbCatByIdx, wbCats } from "./data.js";
 import { clearAllWitchBookPages, clearBookViaVanilla, detectCurrentMod, findAllPages, hookClearState, rebuildAllPages } from "./session.js";
 import { injectPage, hookRefreshLocalized } from "./pages.js";
+import { runSelftest, setupSelftest } from "./selftest.js";
 import { registerTexturesInto } from "./textures.js";
 import { hookProfileName } from "./characters.js";
 
@@ -67,7 +68,7 @@ export function setupWitchBookHooks() {
                 var uvMi = A.cgm(cls, Memory.allocUtf8String("UpdateVersion"), 3);
                 // NO_UPDATE_HOOK=1 (A/B 隔离): 跳过 @update hook — 审判加载时逐事件 hook 延迟是崩溃竞态嫌疑
                 if (uvMi && !uvMi.isNull() && typeof NO_UPDATE_HOOK === 'undefined') Interceptor.attach(uvMi.readPointer(), { onEnter: onWitchBookUpdate });
-            } catch (e) {}
+            } catch (e) { swallowed("witchbook/index.js:setupWitchBookHooks", e); }
         });
         // macOS 泛型共享根治: 游戏自身 WitchBookPageBase.UpdateVersion 里 _itemIds.Contains(id)
         // 在 Graphic[]/Canvas[] 上抛 MAE → 崩/黑屏 (原版 macOS bug, 加载器写入只是放大器)。
@@ -89,10 +90,10 @@ export function setupWitchBookHooks() {
                         var uvP = uvMi2.readPointer();
                         if (!uvP || uvP.isNull() || uvSeen[uvP.toString()]) continue;
                         uvSeen[uvP.toString()] = 1;
-                        Interceptor.attach(uvP, { onEnter: function (a) { try { ensureItemIdsString(a[0], A.ogc(a[0])); } catch (e) {} } });
+                        Interceptor.attach(uvP, { onEnter: function (a) { try { ensureItemIdsString(a[0], A.ogc(a[0])); } catch (e) { swallowed("witchbook/index.js:setupWitchBookHooks.onEnter", e); } } });
                         wblog("page UpdateVersion hook (" + A.cgn(uvc).readCString() + " " + uvn + " 参) @" + uvP);
                     }
-                } catch (e) {}
+                } catch (e) { swallowed("witchbook/index.js:setupWitchBookHooks.onEnter#2", e); }
             }
         } catch (e) { error("page UpdateVersion hook err: " + e); }
         // Profile 姓名覆写 (mod 新角色显示格式化名字而非 ID)
@@ -100,6 +101,7 @@ export function setupWitchBookHooks() {
         // @clearBook (ClearWitchBook 命令) → ClearState: 清 wbData.states + 复位面板
         // 修: 剧本内 @clearBook 后自定义证物无法清除 (applyStates 复活) + 上方面板冻结残留
         hookClearState();
+        setupSelftest();   // MOD_SELFTEST=1 时: 挂 KNF 计数 (平时不挂)
         // RefreshPageContent onEnter: 重新预填 _localizedTextData
         // 修 InitializePages→LoadDataAsync 异步重建 map 时清掉注入导致 KeyNotFoundException
         hookRefreshLocalized();
@@ -111,7 +113,7 @@ export function setupWitchBookHooks() {
                     dbg(">>> WitchBook " + mn + " 触发");
                     tryInjectWitchBook();   // 内部处理 mod 切换清理 (状态+面板) + 注入
                 }});
-            } catch (e) {}
+            } catch (e) { swallowed("witchbook/index.js:setupWitchBookHooks.onEnter#3", e); }
         });
         // @spawn "Clue" → SpawnableClue.SetSpawnParameters 后注册纹理 (spawn 可能早于图鉴打开)
         try {
@@ -126,11 +128,11 @@ export function setupWitchBookHooks() {
                                 dbg(">>> SpawnableClue mod 线索: '" + cid + "', 注册纹理");
                                 registerTexturesInto(null);   // 用全局 AddressablesManager
                             }
-                        } catch (e) {}
+                        } catch (e) { swallowed("witchbook/index.js:setupWitchBookHooks.onLeave", e); }
                     }
                 });
             }
-        } catch (e) {}
+        } catch (e) { swallowed("witchbook/index.js:setupWitchBookHooks.onLeave#2", e); }
         // 剧本加载 → 识别当前 mod (匹配 Enter 路径), 用于按 mod 注入线索
         try {
             var slCls2 = findClassAcrossImages("Naninovel", "ScriptLoader");
@@ -138,11 +140,11 @@ export function setupWitchBookHooks() {
                 var loadMi3 = A.cgm(slCls2, Memory.allocUtf8String("Load"), 2);
                 if (loadMi3 && !loadMi3.isNull()) {
                     Interceptor.attach(loadMi3.readPointer(), { onEnter: function (a) {
-                        try { detectCurrentMod(readStr(a[1])); } catch (e) {}
+                        try { detectCurrentMod(readStr(a[1])); } catch (e) { swallowed("witchbook/index.js:setupWitchBookHooks.onEnter#4", e); }
                     }});
                 }
             }
-        } catch (e) {}
+        } catch (e) { swallowed("witchbook/index.js:setupWitchBookHooks.onEnter#5", e); }
         wblog("hooks 就绪");
     } catch (e) { error("setupWitchBookHooks err: " + e + " | " + (e && e.stack ? e.stack.split("\n").slice(0,3).join(" | ") : "")); }
 }
@@ -175,6 +177,7 @@ export function tryInjectWitchBook() {
         registerTexturesInto(null);
         var pages2 = findAllPages();
         if (pages2.length) registerTexturesInto(pages2[0].add(fieldOffset(A.ogc(pages2[0]), "_addressableAssetLoader", 0x50)).readPointer());
+        runSelftest("开图鉴/切mod");
         wblog("tryInjectWitchBook 完成");
     } catch (e) { error("tryInjectWitchBook err: " + e); }
 }
@@ -204,7 +207,7 @@ function dumpPageFieldTypes() {
                     } catch (e2) { parts.push(fields[fi] + "=err"); }
                 }
                 dbg("  [页面] " + pcn + " " + parts.join(" "));
-            } catch (e3) {}
+            } catch (e3) { swallowed("witchbook/index.js:dumpPageFieldTypes", e3); }
         }
     } catch (e) { error("dumpPageFieldTypes err: " + e); }
 }
@@ -237,7 +240,7 @@ function isItemIdInPage(cat, id) {
         var n = arr.add(0x18).readS32();
         if (n < 0 || n > 100000) return false;
         for (var i = 0; i < n; i++) if (readStr(arr.add(0x20 + i * 8).readPointer()) === id) return true;
-    } catch (e) {}
+    } catch (e) { swallowed("witchbook/index.js:isItemIdInPage", e); }
     return false;
 }
 // 合帧补注入: 只重注入脏分类 + 补一次纹理 (对比 tryInjectWitchBook: 全分类 + mod 切换处理)
@@ -251,6 +254,7 @@ export function flushWitchBookDirty(reason) {
         var ps = findAllPages();
         if (ps.length) registerTexturesInto(ps[0].add(fieldOffset(A.ogc(ps[0]), "_addressableAssetLoader", 0x50)).readPointer());
         dbg("[v3][WitchBook] 合帧补注入 (" + reason + "): " + names.join(","));
+        runSelftest("突发合帧:" + reason);
     } catch (e) { error("flushWitchBookDirty err: " + e); }
 }
 // @update 拦截: 按 WitchBookCategory 路由 (Clue=0 Profile=1 Map=2 Rule=3 Note=4)

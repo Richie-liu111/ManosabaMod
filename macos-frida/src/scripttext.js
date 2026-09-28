@@ -25,7 +25,7 @@
 //   (全串只允许首尾一对引号, 防 "a""b" 多段误剥); 高频 getter 不拖慢; `""` 空壳不碰。
 'use strict';
 
-import { A, dbg, findClassAcrossImages, makeS, readStr, wblog } from "./utils.js";
+import { A, dbg, findClassAcrossImages, makeS, readStr, swallowed, wblog } from "./utils.js";
 
 var hooked = false;
 var cnt = { append: 0, fmt: 0, gto: 0, getText: 0, display: 0, tostr: 0 };
@@ -213,7 +213,7 @@ function onGetTextLeave(ret) {
         this.returnValue = makeS(inner);
         cnt.getText++;
         logStrip("get_Text", s, inner, cnt.getText);
-    } catch (e) {}
+    } catch (e) { swallowed("scripttext.js:onGetTextLeave", e); }
 }
 function onGetTextOrNullLeave(ret) {
     try {
@@ -224,7 +224,7 @@ function onGetTextOrNullLeave(ret) {
         this.returnValue = makeS(inner);
         cnt.gto++;
         logStrip("GetTextOrNull", s, inner, cnt.gto);
-    } catch (e) {}
+    } catch (e) { swallowed("scripttext.js:onGetTextOrNullLeave", e); }
 }
 
 function attachIf(mi, onEnter, onLeave) {

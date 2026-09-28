@@ -28,7 +28,7 @@ function defaultLogPath() {
     try {
         var p = Process.mainModule ? Process.mainModule.path : "";
         if (p) { var ps = p.split("/"); if (ps.length > 4) return ps.slice(0, ps.length - 4).join("/") + "/modlog.txt"; }
-    } catch (e) {}
+    } catch (e) { swallowedWarn("log.js:defaultLogPath", e); }   // 推导日志路径失败 = 日志系统降级, 必须可见
     return null;
 }
 export function initLog(path, noColor) {
@@ -80,6 +80,31 @@ export function logBanner(art) {
         else console.log("\x1b[36m" + ln + "\x1b[0m");
         if (_fd >= 0) writeString(_fd, ln + "\n");
     }
+}
+
+// ===== 被吞异常的留痕 (步骤 2.1, 2026-09-25 教训) =====
+// 那次排查最贵的一课不是某个 bug, 而是**诊断代码自己静默失败** (钩子被过滤 / 方法名写错 /
+// 函数在此版本不存在), "看不到输出" 被误读成 "游戏没抛异常", 白跑好几轮。
+// 所以: 任何 catch 都不许完全无痕。默认用 swallowed (DEBUG 级), 关键路径用 swallowedWarn (WARN 级)。
+// 节流: 每个 tag 只打前 3 条, 之后静默累计 (防每帧异常刷屏); 计数经 swallowedStats() 取。
+var _swallow = {};
+function _swallowLog(isWarn, tag, e) {
+    try {
+        var s = _swallow[tag] || (_swallow[tag] = { n: 0, shown: 0 });
+        s.n++;
+        var msg;
+        if (s.shown < 3) { s.shown++; msg = "catch: " + tag + " — " + (e && e.message ? e.message : e); }
+        else if (s.shown === 3) { s.shown++; msg = "catch: " + tag + " — (同类后续静默, 见 swallowedStats)"; }
+        else return;
+        if (isWarn) warn(msg); else debug(msg);
+    } catch (e2) { /* 日志自身绝不能抛 (否则 catch 里再炸一层) */ }
+}
+export function swallowed(tag, e) { _swallowLog(false, tag, e); }
+export function swallowedWarn(tag, e) { _swallowLog(true, tag, e); }
+export function swallowedStats() {
+    var out = [];
+    try { for (var k in _swallow) out.push(k + "=" + _swallow[k].n); } catch (e) {}
+    return out;
 }
 
 // ===== 崩溃前 flush =====

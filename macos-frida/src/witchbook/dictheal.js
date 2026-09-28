@@ -10,7 +10,7 @@
 //   字典已有的键实例。本模块只保留"缺了就补"的那一条主干 (补时同样复用键实例, 所以补得上)。
 // 顺带记录的第二个坑: .NET Dictionary 的 Remove 只把 Entry.hashCode 置 -1, **键的指针留在数组里**
 //   → 只看键会把这些"已删除残留"当成存在 (dictHasIdVer 已按 hashCode >= 0 判定存活)。
-import { A, dbg, fieldOffset, findAllObjectOfType, findClassAcrossImages, getGenericArgClass, invokeBool, readStr, wblog, warn, error } from "../utils.js";
+import { A, dbg, error, fieldOffset, findAllObjectOfType, findClassAcrossImages, getGenericArgClass, invokeBool, readStr, swallowed, swallowedWarn, warn, wblog } from "../utils.js";
 import { wbCls, wbData } from "./state.js";
 import { isCurrentModItem, makeIdVersionPair, wbCats } from "./data.js";
 import { dictHasIdVer, readDataItemsIndex, writeLocalizedDictEntry } from "./session.js";
@@ -32,7 +32,7 @@ function pageSpecs() {
         if (wbCls.mapPage && !wbCls.mapPage.isNull()) {
             out.push({ cat: MAP_SPEC, key: "map", pageCls: wbCls.mapPage, locOff: MAP_SPEC.locOff, dataCls: wbCls.mapData, mapOnly: true });
         }
-    } catch (e) {}
+    } catch (e) { swallowed("witchbook/dictheal.js:pageSpecs", e); }
     return out;
 }
 // 从分类的 Data 资产取 (id, ver) 的 item; 版本对不上时退回该 id 的第一条并告警 (数据不一致)
@@ -78,12 +78,16 @@ export function healDictKey(dict, spec, id, ver, ivp) {
             if (ck && !ck.isNull() && usedKey && !usedKey.isNull()) {
                 dbg("[WitchBook] " + spec.key + " 补后核对 ContainsKey=" + invokeBool(ck, dict, [usedKey]));
             }
-        } catch (e4) {}
+        } catch (e4) { swallowedWarn("witchbook/dictheal.js:healDictKey", e4); }
         return true;
     } catch (e) { error("healDictKey(" + spec.key + ") err: " + e); return false; }
 }
 // 每次注入末尾: 把该页 `_state` 里"将要渲染的键"逐个核对, 缺就补 (mod 条目用 mod 文本, 原版从 Data 重建)。
-// 渲染门槛就是 _state, 所以这层足够覆盖"游戏接下来会查的键"; 也是本轮 KNF 的正式兜底。
+// **真相源必须是页面自己的 `_state._list`, 不是我们的 wbData.states** —— 2026-09-28 实测抓到的分叉:
+//   Twilight 的 Main.nani 有 `@update "Hiro" Category:"Profile" Version:0`, 而 'Hiro' 被 data.js 的
+//   "首个 mod 优先"判给了先加载的 mod (Gapless) → 我们按规矩忽略这条 @update (它"不是当前 mod 的条目"),
+//   但**游戏照旧把它写进 _state**。只信 wbData.states 就永远不 heal 它 → 字典缺这个键,
+//   而 `_state` 里它一直在 (哨兵连续 5 轮报 FAIL)。与 7.10 同源: 判定要问游戏, 不要问我们自己的记录。
 export function healStateKeys(page, cat) {
     try {
         var spec = null, specs = pageSpecs();
@@ -91,9 +95,30 @@ export function healStateKeys(page, cat) {
         if (!spec || !spec.pageCls || spec.pageCls.isNull()) return 0;
         var dict = page.add(fieldOffset(spec.pageCls, "_localizedTextData", spec.locOff)).readPointer();
         if (dict.isNull()) return 0;
+        var n = 0, done = {};
+        // ① 页面真实 _state._list (含游戏自己写进去的、非本 mod 的键)
+        try {
+            var st = page.add(fieldOffset(spec.pageCls, "_state", 0x48)).readPointer();
+            if (!st.isNull()) {
+                var lst = st.add(fieldOffset(wbCls.versionedState, "_list", 0x10)).readPointer();
+                if (!lst.isNull()) {
+                    var cnt = lst.add(0x18).readS32(), arr = lst.add(0x10).readPointer();
+                    if (!arr.isNull() && cnt > 0 && cnt <= 5000) {
+                        for (var r = 0; r < cnt; r++) {
+                            var se = arr.add(0x20 + r * 8).readPointer();
+                            if (se.isNull()) continue;
+                            var sid = readStr(se.add(0x10).readPointer()), sver = se.add(0x18).readS32();
+                            if (!sid) continue;
+                            done[sid + "@" + sver] = 1;
+                            if (healDictKey(dict, spec, sid, sver, null)) n++;
+                        }
+                    }
+                }
+            }
+        } catch (e1) { swallowed("witchbook/dictheal.js:healStateKeys", e1); }
+        // ② 我们的记录 (兜底: 游戏还没写进 _state, 或 _state 读失败)
         var stMap = (wbData.states || {})[cat.name] || {};
-        var n = 0;
-        for (var id in stMap) if (healDictKey(dict, spec, id, stMap[id] | 0, null)) n++;
+        for (var id in stMap) if (!done[id + "@" + (stMap[id] | 0)]) { if (healDictKey(dict, spec, id, stMap[id] | 0, null)) n++; }
         return n;
     } catch (e) { error("healStateKeys err: " + e); return 0; }
 }

@@ -103,6 +103,6 @@ export function writeString(fd, s) {
     } catch (e) { return -1; }
 }
 export function fileSync(fd) {
-    try { var io = getIO(); if (io.fsync && fd >= 0) return io.fsync(fd); } catch (e) {}
+    try { var io = getIO(); if (io.fsync && fd >= 0) return io.fsync(fd); } catch (e) { iodbg("[io] fileSync err: " + e); }
     return -1;
 }

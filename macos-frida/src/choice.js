@@ -26,7 +26,7 @@
 //   之后 actor 由游戏自己构造 (GetOrAddActor → Activator → LoadUIPrefabAsync →
 //       provider 链 → 我们的 vrp.Resources); 只读诊断钩子确认游戏走到哪一步。
 
-import { A, dbg, fieldOffset, findAllObjectOfType, findClassAcrossImages, findSvc, getSystemClass, invoke, invokeOk, makeS, pngDims, readStr, warn } from "./utils.js";
+import { A, dbg, fieldOffset, findAllObjectOfType, findClassAcrossImages, findSvc, getSystemClass, invoke, invokeOk, makeS, pngDims, readStr, swallowed, warn } from "./utils.js";
 import { fileReadBytes, readJSONFile } from "./io.js";
 import { info } from "./log.js";
 import { startReinjectWindow } from "./providers.js";
@@ -152,7 +152,7 @@ function chSwapPortrait(clone, sprite) {
         try {
             var ggMi = A.cgm(chCls.component, Memory.allocUtf8String("get_gameObject"), 0);
             if (ggMi && !ggMi.isNull()) { var g2 = invoke(ggMi, clone, []); if (g2 && !g2.isNull()) go = g2; }
-        } catch (e) {}
+        } catch (e) { swallowed("choice.js:chSwapPortrait", e); }
         var gicMi = A.cgm(chCls.gameObject, Memory.allocUtf8String("GetComponentsInChildren"), 2);
         if (!gicMi || gicMi.isNull()) { warn("[Choice] GetComponentsInChildren NOT FOUND"); return false; }
         var typeObj = A.tgo(A.cgt(chCls.image));
@@ -173,7 +173,7 @@ function chSwapPortrait(clone, sprite) {
                     var rtMi = A.cgm(chCls.rectTransform, Memory.allocUtf8String("get_rect"), 0);
                     var rt = (grtMi && !grtMi.isNull() && rtMi && !rtMi.isNull()) ? invoke(rtMi, invoke(grtMi, img, []), []) : null;
                     if (rt && !rt.isNull()) score = Math.abs(rt.add(12).readFloat());   // Rect.height
-                } catch (e2) {}
+                } catch (e2) { swallowed("choice.js:chSwapPortrait#2", e2); }
             }
             if (score > bestScore) { bestScore = score; best = img; }
         }
@@ -204,7 +204,7 @@ function chFindResourceLoader() {
             if (!p || p.isNull()) continue;
             var cn = A.cgn(A.ogc(p)).readCString();
             if (cn && cn.indexOf("ResourceLoader") >= 0) { dbg("[Choice] steal: ResourceLoader @0x" + cands[i].toString(16) + " = " + cn); return p; }
-        } catch (e) {}
+        } catch (e) { swallowed("choice.js:chFindResourceLoader", e); }
     }
     return null;
 }
@@ -233,7 +233,7 @@ function chStealResourceGOClass() {
                     var sysRes = lr.add(0x10).readPointer();   // LoadedResource<T>.Resource
                     if (sysRes && !sysRes.isNull()) { out = sysRes.readPointer(); return; }
                 }
-            } catch (e2) {}
+            } catch (e2) { swallowed("choice.js:chStealResourceGOClass", e2); }
         });
         if (out) { chData.resGOClass = out; dbg("[Choice] 捕获 Resource<GameObject> klass=" + A.cgn(out).readCString() + " (from " + (chData.resGOClass ? "loaded cache" : "cache") + ")"); }
         return out;
@@ -254,10 +254,10 @@ function chTriggerGOClass() {
                 var c = mgr.add(o).readPointer();
                 if (c.isNull()) continue;
                 if (A.cgn(A.ogc(c)).readCString() === "ChoiceHandlersConfiguration") cfg = c;
-            } catch (e) {}
+            } catch (e) { swallowed("choice.js:chTriggerGOClass", e); }
         }
         var trigId = "Trial";
-        if (cfg && !cfg.isNull()) { try { var dhid = readStr(cfg.add(0x28).readPointer()); if (dhid) trigId = dhid; } catch (e) {} }
+        if (cfg && !cfg.isNull()) { try { var dhid = readStr(cfg.add(0x28).readPointer()); if (dhid) trigId = dhid; } catch (e) { swallowed("choice.js:chTriggerGOClass#2", e); } }
         try {
             var goaMi = A.cgm(A.ogc(mgr), Memory.allocUtf8String("GetOrAddActor"), 1);
             if (goaMi && !goaMi.isNull()) {
@@ -272,9 +272,9 @@ function chTriggerGOClass() {
                 var laMi = ptr(0);
                 [2, 1].forEach(function (ac) {
                     if (laMi && !laMi.isNull()) return;
-                    try { laMi = A.cgm(A.ogc(bl), Memory.allocUtf8String("LoadAsync"), ac); } catch (e) {}
+                    try { laMi = A.cgm(A.ogc(bl), Memory.allocUtf8String("LoadAsync"), ac); } catch (e) { swallowed("choice.js:chTriggerGOClass#3", e); }
                 });
-                if (!laMi || laMi.isNull()) { try { laMi = A.cgm(A.ogc(bl), Memory.allocUtf8String("Load"), 2); } catch (e) {} }
+                if (!laMi || laMi.isNull()) { try { laMi = A.cgm(A.ogc(bl), Memory.allocUtf8String("Load"), 2); } catch (e) { swallowed("choice.js:chTriggerGOClass#4", e); } }
                 if (laMi && !laMi.isNull()) {
                     invoke(laMi, bl, [makeS("ChoiceButtons/Trial/Objection"), ptr(0)]);
                     dbg("[Choice] 触发按钮加载 ChoiceButtons/Trial/Objection (fire-and-forget)");
@@ -285,13 +285,18 @@ function chTriggerGOClass() {
 }
 
 // ============ bool 返回值 (探针 run 7 教训: 值类型返回装箱, 直接 readU8 是 klass 指针低位) ============
+// 读法三上下文 (详见 ARCHITECTURE.md 7.4, 2026-09-25 复审确认本处写法正确):
+//   ① il2cpp_runtime_invoke 的返回值 → **装箱** System.Boolean 对象指针, 值在 +0x10 (本函数上半支)
+//   ② Interceptor.onLeave 的 ret   → 原始返回寄存器, ret.toInt32() === 1 才对 (见 movie.js:59)
+//   ③ directCall (methodPointer 直调) → 按真实返回类型读 (见 credit.js dcBool)
+// 本函数的 fallback (ret.readU8() === 1) 是给"未装箱"的历史路径兜底, 不是 bug。
 function chBool(r) {
     var ret = r && r.ok ? r.ret : null;
     if (!ret || ret.isNull()) return false;
     try {
         var k = A.cgn(A.ogc(ret)).readCString() || "";
         if (k.indexOf("Boolean") >= 0) return ret.add(0x10).readU8() === 1;
-    } catch (e) {}
+    } catch (e) { swallowed("choice.js:chBool", e); }
     return ret.readU8() === 1;
 }
 
@@ -358,7 +363,7 @@ function chRegisterMeta(hd) {
                     if (vs) implStr = vs;
                 }
             }
-        } catch (e) {}
+        } catch (e) { swallowed("choice.js:chRegisterMeta", e); }
         meta.add(fieldOffset(chCls.choiceHandlerMeta, "Implementation", 0x10)).writePointer(makeS(implStr));
         // Loader: 真 ResourceLoaderConfiguration (PathPrefix + ProviderTypes)
         var loader = A.on(chCls.resourceLoaderConfig);
@@ -399,7 +404,7 @@ function chRegisterMeta(hd) {
             }
         } catch (e) { dbg("[Choice] ProviderTypes 构造 err: " + e); }
         meta.add(fieldOffset(chCls.choiceHandlerMeta, "Loader", 0x18)).writePointer(loader);
-        try { meta.add(fieldOffset(chCls.choiceHandlerMeta, "WaitHideOnChoice", 0x30)).writeU8(0); } catch (e) {}
+        try { meta.add(fieldOffset(chCls.choiceHandlerMeta, "WaitHideOnChoice", 0x30)).writeU8(0); } catch (e) { swallowed("choice.js:chRegisterMeta#2", e); }
         // 读回核对
         var implBack = readStr(meta.add(fieldOffset(chCls.choiceHandlerMeta, "Implementation", 0x10)).readPointer());
         var ldrBack = meta.add(fieldOffset(chCls.choiceHandlerMeta, "Loader", 0x18)).readPointer();
@@ -468,7 +473,7 @@ function tryFinalizeChoiceHandlers() {
                         var mm = invokeOk(gmm, cand, []);
                         if (mm.ok && mm.ret && !mm.ret.isNull()) { cfg = cand; metaMap = mm.ret; break; }
                     }
-                } catch (e) {}
+                } catch (e) { swallowed("choice.js:tryFinalizeChoiceHandlers", e); }
             }
             if (!cfg || !metaMap || metaMap.isNull()) { dbg("[Choice] Configuration NOT FOUND, 稍后重试"); return; }
             chData.metaMap = metaMap;
@@ -579,7 +584,7 @@ function chHookDictTryGetValue() {
             try {
                 var np = A.mgn(mi);
                 if (np && !np.isNull()) nm = np.readCString();
-            } catch (e) {}
+            } catch (e) { swallowed("choice.js:chHookDictTryGetValue", e); }
             var mp = mi.readPointer();
             if ((nm === "TryGetValue" || nm === "ContainsKey" || nm === "get_Item") && mp && !mp.isNull()) {
                 var mnm2 = nm;
@@ -588,17 +593,17 @@ function chHookDictTryGetValue() {
                         try {
                             var self = a[0];
                             var key = "";
-                            try { key = readStr(a[1]); } catch (e) {}
+                            try { key = readStr(a[1]); } catch (e) { swallowed("choice.js:chHookDictTryGetValue.onEnter", e); }
                             // run16: 全不过滤 — 验证特化体理论: 游戏加载 MyMod 时查了哪些 dict/key
                             // (风暴抑制: 只在 key 与 MyMod/ModChoice 相关时打印; 否则打 1 字符标记)
                             if (key.indexOf("MyMod") >= 0 || key.indexOf("ModChoice") >= 0 ||
                                 (chData.vrpDict && self.equals(chData.vrpDict))) {
                                 var selfCls = "";
-                                try { selfCls = A.cgn(A.ogc(self)).readCString(); } catch (e) {}
+                                try { selfCls = A.cgn(A.ogc(self)).readCString(); } catch (e) { swallowed("choice.js:chHookDictTryGetValue.onEnter#2", e); }
                                 dbg("[Choice] " + mnm2 + " self=" + self + " (" + selfCls + ") key='" + key + "'" +
                                     (chData.vrpDict && self.equals(chData.vrpDict) ? " ←我们的 dict" : ""));
                             }
-                        } catch (e) {}
+                        } catch (e) { swallowed("choice.js:chHookDictTryGetValue.onEnter#3", e); }
                     }
                 });
                 dbg("[Choice] Dict.TryGetValue hooked (过滤我们的 vrp dict) @" + mp);
@@ -637,7 +642,7 @@ function chHookClassMethods(cls, tag, all) {
             try {
                 var np = A.mgn(mi);
                 if (np && !np.isNull()) nm = np.readCString();
-            } catch (e) {}
+            } catch (e) { swallowed("choice.js:chHookClassMethods", e); }
             if (mp && !mp.isNull() && !seen[mp.toString()] &&
                 (all || /^(Load|Locate|ResourceExists|SupportsType|GetLoaded|AddResource|SetResource|RemoveResource|Run|Create|Handle|InitializeProvisionSources|Cancel|IsLocationCached|LocateCached)/.test(nm))) {
                 seen[mp.toString()] = true;
@@ -648,7 +653,7 @@ function chHookClassMethods(cls, tag, all) {
                                 var self = a[0];
                                 var tag2 = (chData.vrp && self && self.equals(chData.vrp)) ? " [我们的 vrp]" : "";
                                 var path = "";
-                                try { path = readStr(a[1]); } catch (e) {}
+                                try { path = readStr(a[1]); } catch (e) { swallowed("choice.js:chHookClassMethods.onEnter", e); }
                                 if (mnm === "InitializeProvisionSources") path = "";   // 无 path 参数, 抑制 a[1] 误读
                                 // 节流: 高频方法只打前 NOISY_LIMIT 条 + 之后每 NOISY_STEP 条一条
                                 // HandleLocaleChanged: 同 locale 多次触发 (FSG 多实例) 只 dbg 第一次
@@ -678,7 +683,7 @@ function chHookClassMethods(cls, tag, all) {
                                 if (shouldLog) dbg("[Choice] " + tag + "." + mnm + "('" + path + "')" + tag2);
                                 // RL-P.Load ProvisionSources 诊断 + backtrace: 已完成诊断, 暂时静默减少噪音
                                 // (历史定位: 7181 / 11259 行噪音来自这两段, 一帧多次 Sfx/Bgm 加载触发)
-                            } catch (e) {}
+                            } catch (e) { swallowed("choice.js:chHookClassMethods.onEnter#2", e); }
                         },
                         onLeave: function (retval) {
                             // InitializeProvisionSources onLeave: wipe 点本身. 诊断观察时机 —
@@ -716,7 +721,7 @@ function chIsExec(addr) {
         for (var i = 0; i < chExecRanges.length; i++) {
             if (addr.compare(chExecRanges[i].base) >= 0 && addr.compare(chExecRanges[i].base.add(chExecRanges[i].size)) < 0) return true;
         }
-    } catch (e) {}
+    } catch (e) { swallowed("choice.js:chIsExec", e); }
     return false;
 }
 function chStubResolve(addr) {
@@ -732,7 +737,7 @@ function chStubResolve(addr) {
             // 动态代码区可能不被 enumerateRanges 覆盖 → 不做可执行校验, 直接信任地址池
             return target;
         }
-    } catch (e) {}
+    } catch (e) { swallowed("choice.js:chStubResolve", e); }
     return null;
 }
 // stub 链解析: 外层 LDR/BR stub → 内层 stub (LDR+解引用+BR)。
@@ -745,14 +750,14 @@ function chHookStubBody(stub, tag) {
         if (!body || body.isNull()) { dbg("[Choice] " + tag + " 不是 stub 或解析失败 @" + stub); return; }
         dbg("[Choice] " + tag + " stub@" + stub + " → stub2@" + body);
         var hexs2 = [];
-        try { for (var hh2 = 0; hh2 < 48; hh2++) hexs2.push(body.add(hh2).readU8().toString(16).padStart(2, "0")); } catch (e) {}
+        try { for (var hh2 = 0; hh2 < 48; hh2++) hexs2.push(body.add(hh2).readU8().toString(16).padStart(2, "0")); } catch (e) { swallowed("choice.js:chHookStubBody", e); }
         dbg("[Choice] " + tag + " stub2 开头96B: " + hexs2.join(" "));
         // 只读: slotB @stub2+0x28 (run24 实证 = 最终真体)
         var slot = body.add(0x28).readPointer();
         if (!slot || slot.isNull()) { dbg("[Choice] " + tag + " slot@0x28 为空 (懒解析未完成)"); return; }
         dbg("[Choice] " + tag + " 最终真体(只读 slot)@" + slot);
         var hexs = [];
-        try { for (var hh = 0; hh < 16; hh++) hexs.push(slot.add(hh).readU8().toString(16).padStart(2, "0")); } catch (e) {}
+        try { for (var hh = 0; hh < 16; hh++) hexs.push(slot.add(hh).readU8().toString(16).padStart(2, "0")); } catch (e) { swallowed("choice.js:chHookStubBody#2", e); }
         dbg("[Choice] " + tag + " 最终真体开头32B: " + hexs.join(" "));
         // 只读 dump BL 目标 (不 attach — run24 实证真体 0 BL 目标, 泛型调用全间接)
         var tgts = chDumpBlTargets(slot, 0x800, tag);
@@ -772,7 +777,7 @@ function chDumpBlTargets(addr, len) {
                 if (imm & 0x02000000) imm -= 0x04000000;
                 var tgt = addr.add(i + imm * 4);
                 var ga3 = null;
-                try { ga3 = Process.getModuleByName("GameAssembly_arm64.dylib"); } catch (e) {}
+                try { ga3 = Process.getModuleByName("GameAssembly_arm64.dylib"); } catch (e) { swallowed("choice.js:chDumpBlTargets", e); }
                 var b3 = ga3 ? ga3.base : ptr(0);
                 var off = "";
                 if (b3 && tgt.compare(b3) >= 0 && tgt.compare(b3.add(0x7000000)) < 0) off = "GA+" + tgt.sub(b3).toString(16);
@@ -787,7 +792,7 @@ function chHookBlTargets(addr, len, tag) {
         var tgts = chDumpBlTargets(addr, len);
         var uniq = {};
         var ga4 = null;
-        try { ga4 = Process.getModuleByName("GameAssembly_arm64.dylib"); } catch (e) {}
+        try { ga4 = Process.getModuleByName("GameAssembly_arm64.dylib"); } catch (e) { swallowed("choice.js:chHookBlTargets", e); }
         var b4 = ga4 ? ga4.base : ptr(0);
         var count = 0;
         tgts.forEach(function (t) {
@@ -795,10 +800,10 @@ function chHookBlTargets(addr, len, tag) {
             uniq[t] = true;
             count++;
             var off = "";
-            try { if (b4 && ptr(t).compare(b4) >= 0 && ptr(t).compare(b4.add(0x7000000)) < 0) off = " GA+" + ptr(t).sub(b4).toString(16); } catch (e) {}
+            try { if (b4 && ptr(t).compare(b4) >= 0 && ptr(t).compare(b4.add(0x7000000)) < 0) off = " GA+" + ptr(t).sub(b4).toString(16); } catch (e) { swallowed("choice.js:chHookBlTargets#2", e); }
             Interceptor.attach(ptr(t), {
                 onEnter: function () {
-                    try { dbg("[Choice] BL:" + tag + " 目标 @" + ptr(t) + off); } catch (e) {}
+                    try { dbg("[Choice] BL:" + tag + " 目标 @" + ptr(t) + off); } catch (e) { swallowed("choice.js:chHookBlTargets.onEnter", e); }
                 }
             });
         });
@@ -823,11 +828,11 @@ function chDumpMethods(cls, tag) {
             try {
                 var np = A.mgn(mi);
                 if (np && !np.isNull()) nm = np.readCString();
-            } catch (e) {}
+            } catch (e) { swallowed("choice.js:chDumpMethods", e); }
             var pc = -1, isG = false, isI = false;
-            try { pc = A.mpc ? A.mpc(mi) : -1; } catch (e) {}
-            try { isG = A.mig ? !!A.mig(mi) : false; } catch (e) {}
-            try { isI = A.mii ? !!A.mii(mi) : false; } catch (e) {}
+            try { pc = A.mpc ? A.mpc(mi) : -1; } catch (e) { swallowed("choice.js:chDumpMethods#2", e); }
+            try { isG = A.mig ? !!A.mig(mi) : false; } catch (e) { swallowed("choice.js:chDumpMethods#3", e); }
+            try { isI = A.mii ? !!A.mii(mi) : false; } catch (e) { swallowed("choice.js:chDumpMethods#4", e); }
             rows.push(nm + "/" + pc + (isG ? "G" : "-") + (isI ? "I" : "-") + "@" + mp);
             mi = A.cgmAll(cls, iter);
         }
@@ -852,7 +857,7 @@ function chHookRl() {
             var par = A.cgp(rlk);
             if (par && !par.isNull()) {
                 var pn = "";
-                try { pn = A.cgn(par).readCString(); } catch (e) {}
+                try { pn = A.cgn(par).readCString(); } catch (e) { swallowed("choice.js:chHookRl", e); }
                 dbg("[Choice] RL 父类=" + pn);
                 chHookClassMethods(par, "RL-P");
                 chDumpMethods(par, "RL-P");
@@ -868,13 +873,13 @@ function chHookRl() {
                         try {
                             var np2 = A.mgn(mi2);
                             if (np2 && !np2.isNull()) nm2 = np2.readCString();
-                        } catch (e) {}
+                        } catch (e) { swallowed("choice.js:chHookRl#2", e); }
                         if (nm2 === "Load" || nm2 === "LoadAll") {
                             var mp2 = mi2.readPointer();
                             if (mp2 && !mp2.isNull()) {
                                 dbg("[Choice] RL-P." + nm2 + " 代码段 @" + mp2 + " — BL 目标 hook");
                                 var hexs = [];
-                                try { for (var hh = 0; hh < 32; hh++) hexs.push(mp2.add(hh).readU8().toString(16).padStart(2, "0")); } catch (e) {}
+                                try { for (var hh = 0; hh < 32; hh++) hexs.push(mp2.add(hh).readU8().toString(16).padStart(2, "0")); } catch (e) { swallowed("choice.js:chHookRl#3", e); }
                                 dbg("[Choice] RL-P." + nm2 + "@" + mp2 + " 开头64B: " + hexs.join(" "));
                                 chHookStubBody(mp2, "RL-P-" + nm2);
                             }
@@ -919,7 +924,7 @@ function chHookRl() {
                                                         var objName = objCls && !objCls.isNull() ? A.cgn(objCls).readCString() : "NULL";
                                                         // GameObject 的 klass 对照
                                                         var goCls = ptr(0);
-                                                        try { goCls = findClassAcrossImages("UnityEngine", "GameObject"); } catch (e2) {}
+                                                        try { goCls = findClassAcrossImages("UnityEngine", "GameObject"); } catch (e2) { swallowed("choice.js:chHookRl.onEnter", e2); }
                                                         var goName = goCls && !goCls.isNull() ? A.cgn(goCls).readCString() : "?";
                                                         dbg("[Choice] Resource.Object klass=" + objName + " vs GameObject klass=" + goName + (objCls.equals(goCls) ? " — 匹配" : " — 不匹配"));
                                                     }
@@ -958,7 +963,7 @@ function chHookRl() {
                                                 while (mi3 && !mi3.isNull() && nn3 < 40) {
                                                     nn3++;
                                                     var nm3 = "";
-                                                    try { var np3 = A.mgn(mi3); if (np3 && !np3.isNull()) nm3 = np3.readCString(); } catch (e) {}
+                                                    try { var np3 = A.mgn(mi3); if (np3 && !np3.isNull()) nm3 = np3.readCString(); } catch (e) { swallowed("choice.js:chHookRl.onLeave", e); }
                                                     if (nm3.indexOf("ResourceExists") >= 0 || nm3 === "LoadResource") {
                                                         dbg("[Choice] VRP." + nm3 + " mp=0x" + mi3.readPointer().toString(16));
                                                     }
@@ -999,7 +1004,7 @@ function chDictPhysKeys(dict) {
             var ks = readStr(kp);
             if (ks) out.push(ks);
         }
-    } catch (e) {}
+    } catch (e) { swallowed("choice.js:chDictPhysKeys", e); }
     return out;
 }
 function chDictPhysCount(dict) {
@@ -1051,7 +1056,7 @@ function chDictPhysHasKey(dict, keyStr) {
             if (!kp || kp.isNull()) continue;
             if (readStr(kp) === keyStr) return true;
         }
-    } catch (e) {}
+    } catch (e) { swallowed("choice.js:chDictPhysHasKey", e); }
     return false;
 }
 function chKeepAlive() {
@@ -1087,9 +1092,9 @@ function installDiagHooks() {
                         try {
                             var self = a[0];
                             var id = "";
-                            try { var idMi = A.cgm(A.ogc(self), Memory.allocUtf8String("get_Id"), 0); if (idMi && !idMi.isNull()) id = readStr(invoke(idMi, self, [])); } catch (e) {}
+                            try { var idMi = A.cgm(A.ogc(self), Memory.allocUtf8String("get_Id"), 0); if (idMi && !idMi.isNull()) id = readStr(invoke(idMi, self, [])); } catch (e) { swallowed("choice.js:installDiagHooks.onEnter", e); }
                             if (id && id.indexOf("Trial") !== 0) dbg("[Choice] 游戏构造 UIChoiceHandler '" + id + "' (Initialize)");
-                        } catch (e) {}
+                        } catch (e) { swallowed("choice.js:installDiagHooks.onEnter#2", e); }
                     }
                 });
                 dbg("[Choice] UIChoiceHandler.Initialize hooked (诊断)");
@@ -1108,12 +1113,12 @@ function installDiagHooks() {
                             try {
                                 var id = readStr(a[1]);
                                 if (id && id.indexOf("Trial") !== 0) dbg("[Choice] 游戏 GetOrAddActor('" + id + "')");
-                            } catch (e) {}
+                            } catch (e) { swallowed("choice.js:hookGOA.onEnter", e); }
                         }
                     });
                     dbg("[Choice] GetOrAddActor hooked (诊断)");
                 }
-            } catch (e) {}
+            } catch (e) { swallowed("choice.js:hookGOA.onEnter#2", e); }
         })();
         // ResourceProviderManager.GetProvider 运行时路由 (回答游戏加载时 ProviderTypes 解析到哪)
         try {
@@ -1128,7 +1133,7 @@ function installDiagHooks() {
                                 try {
                                     var bt = Thread.backtrace(this.context, Backtracer.ACCURATE).slice(0, 10);
                                     var ga = null;
-                                    try { ga = Process.getModuleByName("GameAssembly_arm64.dylib"); } catch (e) {}
+                                    try { ga = Process.getModuleByName("GameAssembly_arm64.dylib"); } catch (e) { swallowed("choice.js:hookGOA.onEnter#3", e); }
                                     var base = ga ? ga.base : ptr(0);
                                     var names = bt.map(function (ad) {
                                         try {
@@ -1150,13 +1155,13 @@ function installDiagHooks() {
                                 var ours = chData.vrp && rp && !rp.isNull() && rp.equals(chData.vrp);
                                 if (k === chData.providerKey)
                                     dbg("[Choice] 游戏 GetProvider('" + k + "') → " + rc + (ours ? " 是 vrp" : " 不是/丢失"));
-                            } catch (e) {}
+                            } catch (e) { swallowed("choice.js:hookGOA.onLeave", e); }
                         }
                     });
                     dbg("[Choice] rpm.GetProvider hooked (诊断)");
                 }
             }
-        } catch (e) {}
+        } catch (e) { swallowed("choice.js:hookGOA.onLeave#2", e); }
         // VRP 全部加载入口 — 方法表遍历 attach 真实指针 (run11: get_method_from_name 对泛型方法
         // 返回的指针 ≠ 游戏 vtable 调用路径; 泛型方法共享体指针在方法表里, 直接 attach)
         // run25: 全量 attach 不按名字过滤 (旧 forEach 段已删, 避免重复 attach 同一指针)
@@ -1164,14 +1169,14 @@ function installDiagHooks() {
             if (chCls.vrp && !chCls.vrp.isNull()) {
                 chHookVrpMethods();
             }
-        } catch (e) {}
+        } catch (e) { swallowed("choice.js:hookGOA.onLeave#3", e); }
         // ResourceProvider 基类泛型方法 (run12: get_method_from_name 对泛型返回的指针不在调用路径
         // → 方法表遍历 attach 共享体; 游戏加载若走基类方法此处命中)
         try {
             var rpBase = findClassAcrossImages("Naninovel", "ResourceProvider");
             if (!rpBase || rpBase.isNull()) { dbg("[Choice] ResourceProvider 基类未找到 (rpBase=null)"); }
             else chHookClassMethods(rpBase, "base", false);   // run26 教训: all=true 风暴 — 只 hook 名称匹配的低频方法
-        } catch (e) {}
+        } catch (e) { swallowed("choice.js:hookGOA.onLeave#4", e); }
     } catch (e) { warn("[Choice] installDiagHooks err: " + e); }
 }
 
@@ -1190,7 +1195,7 @@ export function setupChoiceHandlerHooks() {
                         if (!this._self || this._self.isNull()) return;
                         var cn = A.cgn(A.ogc(this._self)).readCString();
                         if (cn === "TrialChoiceHandlerPanel") tryFinalizeChoiceHandlers();
-                    } catch (e) {}
+                    } catch (e) { swallowed("choice.js:setupChoiceHandlerHooks.onLeave", e); }
                 }
             });
             info("[Choice] CustomUI.Awake hooked");

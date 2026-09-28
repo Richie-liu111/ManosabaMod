@@ -1,6 +1,6 @@
 // ============ WitchBook 纹理域: PNG → Texture2D → AddressablesManager._loadedAssets ============
 // 缩略图 + @spawn ClueItem 共用; 镜像 Windows ModTextureHelper
-import { A, fieldOffset, findAllObjectOfType, findClassAcrossImages, getSystemClass, invokeOk, makeS, nv, readStr, wblog, dbg, error, warn } from "../utils.js";
+import { A, dbg, error, fieldOffset, findAllObjectOfType, findClassAcrossImages, getSystemClass, invokeOk, makeS, nv, readStr, swallowed, swallowedWarn, warn, wblog } from "../utils.js";
 import { fileReadBytes } from "../io.js";
 import { wbCls, wbData } from "./state.js";
 import { currentModIds, wbCats } from "./data.js";
@@ -46,7 +46,7 @@ export function findAddressablesManager() {
                 }
             }
         }
-    } catch (e) {}
+    } catch (e) { swallowed("witchbook/textures.js:findAddressablesManager", e); }
     // 2) 全局服务 (模糊匹配 Addressables 相关类名)
     try {
         var el = A.cfn(nv, "Naninovel", "Engine");
@@ -58,7 +58,7 @@ export function findAddressablesManager() {
             var cn = A.cgn(A.ogc(ep)).readCString();
             if (cn.indexOf("Addressables") >= 0) return ep;
         }
-    } catch (e) {}
+    } catch (e) { swallowed("witchbook/textures.js:findAddressablesManager#2", e); }
     return null;
 }
 export function registerTexturesInto(managerPtr) {
@@ -99,16 +99,21 @@ export function registerTexturesInto(managerPtr) {
 export function dictContainsKey(dict, key) {
     try {
         // .NET Dictionary: _entries(+0x18, Entry[]), _count(+0x20); Entry = hashCode(4)+next(4)+key(8)+value(8)
+        // 语义说明 (2026-09-25 教训): 这是**按值比较**的存在性判定 (自扫 entries, 比字符串),
+        // 与 session.js 的 dictHasIdVer (IdVersionPair 按**实例**匹配) 不是一回事 —— 这里键是 string,
+        // 值语义成立。唯一要注意的是删过的槽位: Remove() 把 hashCode 置 -1 但保留 key 指针,
+        // 所以必须跳过 hashCode<0 的死槽, 否则"删了却报存在"。
         var ents = dict.add(0x18).readPointer();
         if (ents.isNull()) return false;
         var cnt = ents.add(0x18).readS32();   // 数组长度 (容量)
         for (var i = 0; i < cnt; i++) {
             try {
                 var e = ents.add(0x20 + i * 24);
+                if (e.readS32() < 0) continue;   // 死槽 (已 Remove) — 不算存在
                 var k = e.add(8).readPointer();
                 if (!k.isNull() && readStr(k) === key) return true;
-            } catch (e2) {}
+            } catch (e2) { swallowedWarn("witchbook/textures.js:dictContainsKey", e2); }
         }
-    } catch (e) {}
+    } catch (e) { swallowedWarn("witchbook/textures.js:dictContainsKey#2", e); }
     return false;
 }

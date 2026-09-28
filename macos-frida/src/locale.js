@@ -4,7 +4,7 @@
 // @print/@toast/@choice 双语 (追加式 |#ID|) 共用同一套语言判定。
 // 2026-08-19: 试过 findSvc("LocalizationManager") + get_SelectedLocale 静默失败
 // (回退 zh-Hans), 该方案被 HandleLocaleChanged 跟踪取代。
-import { A, dbg, fieldOffset, findClassAcrossImages, invokeOk, readStr, wblog, warn } from "./utils.js";
+import { A, dbg, fieldOffset, findClassAcrossImages, invokeOk, readStr, swallowed, warn, wblog } from "./utils.js";
 
 var _locale = "zh-Hans";
 export function setCurrentLocale(l) { if (l) _locale = l; }
@@ -36,7 +36,7 @@ export function hookLocaleAccessors() {
         if (getMi && !getMi.isNull() && getMi.readPointer() && !getMi.readPointer().isNull()) {
             Interceptor.attach(getMi.readPointer(), {
                 onLeave: function (ret) {
-                    try { if (ret && !ret.isNull()) setCurrentLocale(readStr(ret)); } catch (e) {}
+                    try { if (ret && !ret.isNull()) setCurrentLocale(readStr(ret)); } catch (e) { swallowed("locale.js:hookLocaleAccessors.onLeave", e); }
                 }
             });
             found.get = true;
@@ -44,14 +44,14 @@ export function hookLocaleAccessors() {
         var setMi = A.cgm(cls, Memory.allocUtf8String("set_SelectedLocale"), 1);
         if (setMi && !setMi.isNull() && setMi.readPointer() && !setMi.readPointer().isNull()) {
             Interceptor.attach(setMi.readPointer(), {
-                onEnter: function (a) { try { setCurrentLocale(readStr(a[1])); } catch (e) {} }
+                onEnter: function (a) { try { setCurrentLocale(readStr(a[1])); } catch (e) { swallowed("locale.js:hookLocaleAccessors.onEnter", e); } }
             });
             found.set = true;
         }
         var selMi = A.cgm(cls, Memory.allocUtf8String("SelectLocale"), 1);
         if (selMi && !selMi.isNull() && selMi.readPointer() && !selMi.readPointer().isNull()) {
             Interceptor.attach(selMi.readPointer(), {
-                onEnter: function (a) { try { setCurrentLocale(readStr(a[1])); } catch (e) {} }
+                onEnter: function (a) { try { setCurrentLocale(readStr(a[1])); } catch (e) { swallowed("locale.js:hookLocaleAccessors.onEnter#2", e); } }
             });
             found.sel = true;
         }

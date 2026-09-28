@@ -46,6 +46,10 @@ if [ ! -f "$GAME" ]; then echo "错误: 找不到游戏 $GAME"; exit 1; fi
 # 日志分层: 机制日志默认关, MOD_DEBUG=1 开启; 游戏侧 Unity.LogError 始终全量
 if [ -d "$PWD/src" ]; then
     echo ">>> 构建 dist/manosabamod.js ..."
+    # 构建前静态校验: frida-compile 不校验具名导出, 写错要等 Frida 加载脚本才报 (2026-09-25 白跑一轮的教训)
+    if command -v node >/dev/null && [ -f "$PWD/tools/check-imports.mjs" ]; then
+        node "$PWD/tools/check-imports.mjs" || { echo "错误: 具名导入校验未通过, 已中止构建"; exit 1; }
+    fi
     if ! (command -v npx >/dev/null && npx --no-install frida-compile src/entry.js -o dist/manosabamod.js -S); then
         if [ -f "$PWD/node_modules/.bin/frida-compile" ]; then
             "$PWD/node_modules/.bin/frida-compile" src/entry.js -o dist/manosabamod.js -S || { echo "错误: frida-compile 构建失败"; exit 1; }
@@ -56,6 +60,12 @@ if [ -d "$PWD/src" ]; then
     fi
 fi
 if [ ! -f "$SCRIPT" ]; then echo "错误: 找不到脚本 $SCRIPT (构建失败?)"; exit 1; fi
+
+# 产物体检 (2026-09-25 "打包过、加载炸" 教训): frida-compile 只看源码, 不看产物结构;
+# 这里按 Frida 的读法拆一遍 (📦 片段表 + 每段语法), 不合法就别启动 —— 省一轮"跑起来才发现白测"。
+if command -v node >/dev/null && [ -f "$PWD/tools/bundle-check.mjs" ]; then
+    node "$PWD/tools/bundle-check.mjs" "$SCRIPT" || { echo "错误: 产物体检未通过, 已中止启动"; exit 1; }
+fi
 
 PY=/opt/anaconda3/bin/python3
 if ! $PY -c "import frida" 2>/dev/null; then
@@ -92,6 +102,14 @@ fi
 
 echo ">>> 游戏: $GAME"
 echo ">>> 脚本: $SCRIPT"
+# 打印包 md5: 排查时先核对"跑的是不是刚构建的那个包" (2026-09-25 教训: 容易误测旧包)
+if [ -f "$SCRIPT" ]; then
+    if command -v md5 >/dev/null; then
+        echo ">>> 包 md5: $(md5 -q "$SCRIPT") ($(wc -c < "$SCRIPT" | tr -d ' ') B)"
+    elif command -v md5sum >/dev/null; then
+        echo ">>> 包 md5: $(md5sum "$SCRIPT" | cut -d' ' -f1) ($(wc -c < "$SCRIPT" | tr -d ' ') B)"
+    fi
+fi
 echo ">>> Mod 日志: $MOD_LOG (MOD_DEBUG=${MOD_DEBUG:-0})"
 
 # 探针: PROBE=<文件路径> ./run_mod.sh — 附加独立探针脚本 (不走 📦 bundle, 与 bundle 并行)
@@ -107,6 +125,8 @@ GAME = os.environ['GAME']
 SCRIPT = os.environ['SCRIPT']
 MOD_ROOT = os.environ['MOD_ROOT']
 MOD_DEBUG = os.environ.get('MOD_DEBUG') == '1'
+MOD_SELFTEST = os.environ.get('MOD_SELFTEST') == '1'
+MOD_SELFTEST_BREAK = os.environ.get('MOD_SELFTEST_BREAK') == '1'
 MOD_LOG = os.environ.get('MOD_LOG') or ''
 MOD_NO_COLOR = os.environ.get('MOD_NO_COLOR') == '1'
 PLAYER_LOG = os.environ.get('PLAYER_LOG') or ''
@@ -228,11 +248,13 @@ print(f'>>> 已写入菜单文件: {menu_path}')
 
 # 📦 asset bundle 必须以 📦 开头 (frida 走 asset 编译); 变量经 Script.evaluate fragment 注入全局 (frida-tools REPL 同机制)
 MOD_DEBUG_JS = 'var MOD_DEBUG=true;' if MOD_DEBUG else ''
+MOD_SELFTEST_JS = 'var MOD_SELFTEST=true;' if MOD_SELFTEST else ''
+MOD_SELFTEST_BREAK_JS = 'var MOD_SELFTEST_BREAK=true;' if MOD_SELFTEST_BREAK else ''
 NO_UPDATE_JS = 'var NO_UPDATE_HOOK=true;' if os.environ.get('NO_UPDATE_HOOK') == '1' else ''
 # MOD_LOG/MOD_NO_COLOR 用 json.dumps (路径含空格/中文安全); 空 MOD_LOG → JS 端走默认兜底路径
 inject_code = ('var modList=%s;var MOD_ROOT=%s;var movieMap=%s;var chapterNames=%s;var MOD_LOG=%s;var MOD_NO_COLOR=%s;'
                % (mods_str, json.dumps(MOD_ROOT), movie_map_json, chapter_names_json, json.dumps(MOD_LOG), json.dumps(JS_NO_COLOR))) \
-              + MOD_DEBUG_JS + NO_UPDATE_JS
+              + MOD_DEBUG_JS + MOD_SELFTEST_JS + MOD_SELFTEST_BREAK_JS + NO_UPDATE_JS
 inj = 'Script.evaluate("mod-vars", %s);' % json.dumps(inject_code)
 inj_frag = f"{len(inj.encode('utf-8'))} /frida/mod-vars.js\n✄\n{inj}"
 bundle_body = JS_BASE[2:] if JS_BASE.startswith("📦\n") else JS_BASE
@@ -329,7 +351,7 @@ except KeyboardInterrupt:
     except OSError:
         pass  # 游戏已退出
 cleanup()
-print('>>> Mod 日志: %s (MOD_DEBUG=%s)' % (MOD_LOG or '<游戏根>/modlog.txt', MOD_DEBUG))
+print('>>> Mod 日志: %s (MOD_DEBUG=%s MOD_SELFTEST=%s%s)' % (MOD_LOG or '<游戏根>/modlog.txt', MOD_DEBUG, MOD_SELFTEST, ' BREAK=1 负对照' if MOD_SELFTEST_BREAK else ''))
 if PLAYER_LOG and os.path.isfile(PLAYER_LOG):
     print('>>> Unity 日志: %s' % PLAYER_LOG)
 ENDPY

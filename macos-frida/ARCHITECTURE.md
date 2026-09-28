@@ -493,6 +493,79 @@ string 指针的值是 `{len=8,"Mo"}` —— 即**一个 `System.String` 被当�
 - 取证用的 hook (get_Item 兜底 / 渲染前补字典 / ThrowHelper 取证 / 寄存器与栈扫描) 在确认修复后
   **已全部删除**, 生产包只保留"注入末尾按 `_state` 补全"这一条主干。
 
+### 7.11 "诊断代码永不静默" — 治反复返工的工程约定 (2026-09-28)
+
+7.6~7.10 四连修复本身只花了几小时, 但代价是 **~15 次构建 / ~12 次人工实测往返**, 其中前 10 轮
+基本在猜 —— 3 次错误假设 + 4 次**自己的诊断代码静默失败**。后者才是真根因:
+"看不到输出" 被误读成 "游戏没抛异常", 于是继续瞎猜。本节把教训变成可执行的约定。
+
+**四条约定**:
+
+1. **任何 `catch` 都不许完全无痕。** 223 处 `catch (e) {}` 已全部改掉 (198 处本体 +
+   `log.js`/`io.js` 手工):
+   - `swallowed("<文件>:<函数>", e)` —— 防御性探测/类没找到就跳过, **DEBUG 级** (默认关),
+     每 tag 只打前 3 条 + 1 条"后续静默", 计数留在 `swallowedStats()` (随 `[SELFTEST] SUMMARY` 输出);
+   - `swallowedWarn(...)` —— **关键路径**: 吞掉它就会静默产生"字典键丢了→图鉴打不开"这类 bug。
+     目前 41 处 (session 19 / pages 10 / characters 2 / textures 2 / dictheal 1 / utils 1 …)。
+   - 节流是必需的: 钩子里的异常可能每帧发生, 不节流会把日志淹掉 —— 那样又变成"看不见"。
+   - **例外 (必须保持安静)**: 崩溃/异常上下文 (`log.js` 的 `crashLine` / `setExceptionHandler` /
+     `SIGABRT` 钩子) —— 那里 console/RPC 会死锁, 只准直接写文件。
+   - 工具: `node tools/catch-audit.mjs` (干跑列清单) / `--apply` (改写 + 补 import + 升级 warn)。
+2. **同一条"存在性/语义"判定只准有一套说法。** 键存在性判定现有三套, 各自写清语义
+   (见 `utils.js:listContainsId` 上方注释): ① List 按值比 id; ② `Dictionary<IdVersionPair,…>` 按
+   **实例**匹配 (图鉴页面字典); ③ self-scan 时必须先过滤 `hashCode < 0` 的死槽。
+3. **硬编码偏移要有体检。** `fieldOffset(cls,name,fallback)` 在回退时会沿基类链核对真实偏移,
+   不一致 → `[WARN] fieldOffset:<字段>` 报警 (每个类+字段只体检一次, 不刷屏)。偏移速查:
+   `docs/OFFSETS.md`。
+4. **打包产物必须可核对。** 构建前跑 `tools/check-imports.mjs` (frida-compile **不校验具名导出**,
+   写错要等 Frida 加载才报 —— 2026-09-25 白跑一轮的直接原因); `run_mod.sh` 启动前打印包 md5;
+   `npm run deploy:check` 比 repo 产物与游戏目录产物。
+
+**回归脚手架** (把"人肉点测"降级为"跑一条命令"):
+
+- `src/witchbook/selftest.js` (仅 `MOD_SELFTEST=1` 装载): **字典不变式哨兵** —— 每页 × `_state` 里
+  每个 (id,ver), 取**游戏自己的键实例**问一次真实 `ContainsKey`, 必须 true; 外加 KNF 计数与页面统计。
+  这正是 7.10 那个坑的永久防线。
+- `test-tools/regression.py`: 复刻用户手动流程 (构建 → cp 到游戏目录 → **跑游戏目录的
+  `run_mod.sh`**) → 到点杀进程 → 读 `modlog.txt` 断言 → 退出码。
+- `test-tools/swallow-test.mjs`: `swallowed` 节流逻辑的纯 node 单测 (不需要游戏)。
+
+**两条流程不能分叉**: 仓库和游戏目录各有一份 `run_mod.sh`, 各自注入**自己旁边**的
+`dist/manosabamod.js`, 且只有自己旁边有 `src/` 时才重建 ⇒ 仓库那份会重建、游戏目录那份直接用现成的。
+改动要 `cp` 同步, `deploy:check` 就是防它俩分叉的。
+
+### 7.12 哨兵第一次真跑就抓到东西: "我们的记录" ≠ "游戏的状态" (2026-09-28)
+
+MOD_SELFTEST=1 跑一局 (Gapless 点图鉴 → 回标题 → Twilight 点图鉴), 11 轮里 **5 轮 FAIL**、
+**knf=0** (游戏没崩, 图鉴正常) —— 这种"看着没事但断言红了"正是要研究的。
+
+**证据链**:
+- FAIL 全部同一条: `字典缺键 profile 'Hiro' v0`, 且只出现在 Twilight 之后;
+- Twilight 的 `Main.nani` 第 7 行: `@update "Hiro" Category:"Profile" Version:0`; 剧本第 1 行还有
+  `@gosubResetBook System/System_ResetWitchBook` (游戏侧清空图鉴);
+- 但我们的 `>>> @update 拦截` 只打了 **15** 条 profile (Warden…Margo), **没有 Hiro**;
+- 原因: 'Hiro' 在 data.js 里被 "**首个 mod 优先**" 判给了先加载的 mod (Gapless, 字母序在前) →
+  在 Twilight 里 `isCurrentModItem(profile,'Hiro')` 为假 → 我们**按规矩忽略**了这条 @update。
+  而**游戏不管我们的规矩**, 照旧把 Hiro 写进 `_state`(16 条) 与 `_itemIds` →
+  字典里只有我们注入的 15 条 → `_state` 与字典出现分叉。
+
+**两个真问题 (都已修)**:
+1. **heal 读的是"我们的记录"而不是"游戏的状态"**: `healStateKeys` 遍历的是 `wbData.states`
+   (我们拦截到的东西), 而它的注释却写着"把该页 `_state` 里将要渲染的键逐个核对" —— 注释与代码不符。
+   ⇒ 改成读**页面自己的 `_state._list`** (∪ wbData.states 兜底)。与 7.10 同一个道理:
+   **判定要问游戏, 不要问自己的账本**。
+2. **哨兵的判据原本抓不到 7.10 那个坑**: 旧写法是"取字典自己的键实例 `dictFindKeyInstance` 问
+   ContainsKey" —— 那是**字典自己的键**, 恒为真。7.10 的真相是"字典里有这个键, 但**游戏手里的
+   那个实例**不在字典里", 所以必须用 `map 条目的 VersionedItem._idVersionPair`@0x28 (游戏真正拿去
+   查字典的实例) 去问。⇒ A1 改为逐条检查 map 条目的 lookup 实例 (值不是 VersionedItem 的页面
+   如 Map 退回用条目键, 避免读错字段误报)。
+3. 分级: 缺键**同时在渲染集合 (`_loadedDataItemMap`) 里** → FAIL (就是 7.10 那类, 会 KNF);
+   只在 `_state` 里 → `NOTE` (渲染不走它, 记录不判)。
+
+**教训**: ① 自愈/断言的**真相源必须是游戏对象本身**, 我们的 `wbData`/`wbData.states` 只是账本;
+② 哨兵要按**游戏实际怎么查**来设计 (查哪个实例、走哪条路), 否则写了也是自我安慰;
+③ "首个 mod 优先" 的去重只约束**我们注入什么**, 约束不了游戏自己的 `@update` —— 两边的账要能对上。
+
 ## 八、日志系统 (2026-08-10 引入)
 
 **动机**: 游戏进程崩溃时 Frida 脚本跟着死, console 缓冲丢失, macOS 系统日志经常

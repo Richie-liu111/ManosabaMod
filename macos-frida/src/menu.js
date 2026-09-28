@@ -1,6 +1,6 @@
 // ============ 菜单域: 菜单文本 (含翻页, 回迁自 16h 版) + 剧本注册 + StartGame @goto 重定向 ============
 // 镜像 Windows AddModStartMenu (ModResourceLoader.cs) + HookStartGame
-import { A, dbg, findClassAcrossImages, findSvc, findUnityImg, gotoModifiedCls, invoke, invokeOk, makeLocalResourceProvider, makeNamedStringCtor, makeS, makeUnityObject, readStr } from "./utils.js";
+import { A, dbg, findClassAcrossImages, findSvc, findUnityImg, gotoModifiedCls, invoke, invokeOk, makeLocalResourceProvider, makeNamedStringCtor, makeS, makeUnityObject, readStr, swallowed } from "./utils.js";
 
 var modScriptPrefix = "ModLoader";
 var modMenuScript = "ModStart";
@@ -116,7 +116,7 @@ export function registerMenuText() {
         psMem.add(8).writePointer(makeS(modScriptPrefix + "/Text"));
         var psCls = findClassAcrossImages("Naninovel", "ProvisionSource");
         var boxed = ptr(0);
-        if (A.vb && psCls && !psCls.isNull()) { try { boxed = A.vb(psCls, psMem); } catch (e3) {} }
+        if (A.vb && psCls && !psCls.isNull()) { try { boxed = A.vb(psCls, psMem); } catch (e3) { swallowed("menu.js:registerMenuText", e3); } }
 
         // LoadedResource ctor + AddHolder + AddLoadedResource
         var lrCtor = A.cgm(lrClass, Memory.allocUtf8String(".ctor"), 2);

@@ -13,13 +13,18 @@ export var gotoModifiedCls = null;
 
 // 日志输出统一走 log.js: console 彩色 (ERROR红/WARN黄/INFO青/DEBUG灰) + 文件明文 modlog.txt
 // wblog=INFO 默认显示; dbg=DEBUG 归 MOD_DEBUG (默认关)。导出名/签名不变 → 调用点零改动。
-import { debug as logDebug, info as logInfo, warn as logWarn, error as logError } from "./log.js";
+import { debug as logDebug, info as logInfo, warn as logWarn, error as logError,
+         swallowed as logSwallowed, swallowedWarn as logSwallowedWarn, swallowedStats as logSwallowedStats } from "./log.js";
 // 日志开关: 全局 MOD_DEBUG (run_mod.sh 可注入), 默认关
 export var MOD_DEBUG = (typeof globalThis !== "undefined" && globalThis.MOD_DEBUG) ? true : false;
 export function dbg() { if (MOD_DEBUG) logDebug.apply(null, arguments); }
 export function wblog(msg) { logInfo("[WitchBook] " + msg); }
 export function warn() { logWarn.apply(null, arguments); }
 export function error() { logError.apply(null, arguments); }
+// 被吞异常的留痕 (实现在 log.js; 见那里的说明): catch 里调用, 让"静默失败"不再完全无痕。
+export function swallowed(tag, e) { logSwallowed(tag, e); }
+export function swallowedWarn(tag, e) { logSwallowedWarn(tag, e); }
+export function swallowedStats() { return logSwallowedStats(); }
 
 // setter (ES modules import 绑定只读, 赋值必须在模块内; entry.js 初始化时调用)
 export function setImageHandles(nvImg, csImg, gigaImg) { nv = nvImg; cs = csImg; giga = gigaImg; }
@@ -114,7 +119,7 @@ export function invokeBool(mi, obj, args) {
     try {
         var k = A.cgn(A.ogc(ret)).readCString() || "";
         if (k.indexOf("Boolean") >= 0) return ret.add(0x10).readU8() === 1;
-    } catch (e) {}
+    } catch (e) { swallowedWarn("utils.js:invokeBool", e); }
     return ret.readU8() === 1;
 }
 // 0 参构造器调用 (用户已证可行)
@@ -227,15 +232,43 @@ export function findNestedClass(parentCls, name) {
             var nn = A.cgn(nc).readCString() || "";
             if (nn === name || nn.indexOf("." + name) >= 0) return nc;
         }
-    } catch (e) {}
+    } catch (e) { swallowed("utils.js:findNestedClass", e); }
     return ptr(0);
 }
-// 字段偏移: 动态查 (含基类) + 回退
+// 字段偏移: 动态查 + 回退 (步骤 2.4 加了"回退体检")
+// 注意 A.gf = il2cpp_class_get_field_from_name, **不查基类** → 继承字段总是走 fallback, 这是常态,
+// 不能当异常报 (报了就是刷屏噪音)。真正的风险是: 游戏更新改了布局, 硬编码 fallback 失准 →
+// 静默读到错误偏移 (最坏是内存破坏)。所以体检的是"基类上该字段的真实偏移 vs 硬编码值"是否一致。
+var _foProbe = {};
+function fieldOffsetProbe(cls, name, fallback) {
+    try {
+        if (!A.cgp) return;
+        var up = cls;
+        for (var d = 0; d < 8 && up && !up.isNull(); d++) {
+            up = A.cgp(up);
+            if (!up || up.isNull()) break;
+            var f = A.gf(up, Memory.allocUtf8String(name));
+            if (f && !f.isNull()) {
+                var real = A.fo(f);
+                if (real !== fallback) {
+                    swallowedWarn("fieldOffset:" + name, "硬编码 0x" + fallback.toString(16) +
+                        " 与基类实际 0x" + real.toString(16) + " 不符 — 游戏可能更新了布局, 请核对 docs/OFFSETS.md");
+                }
+                return;
+            }
+        }
+    } catch (e) { swallowed("utils.js:fieldOffsetProbe", e); }
+}
 export function fieldOffset(cls, name, fallback) {
     try {
         var f = A.gf(cls, Memory.allocUtf8String(name));
         if (f && !f.isNull()) return A.fo(f);
-    } catch (e) {}
+        if (fallback !== undefined) {                       // 走回退 → 每个 (类,字段) 只体检一次
+            var c = ptr(cls).toInt32();
+            var per = _foProbe[c] || (_foProbe[c] = {});
+            if (per[name] === undefined) { per[name] = 1; fieldOffsetProbe(cls, name, fallback); }
+        }
+    } catch (e) { swallowed("utils.js:fieldOffset", e); }
     return fallback;
 }
 // macOS IL2CPP 泛型共享守卫: WitchBookPageBase._itemIds 在 CluePage 实例化为 Graphic[]、
@@ -363,7 +396,7 @@ export function findAllObjectOfType(cls) {
                 var resCls = findClassAcrossImages("UnityEngine", "Resources");
                 var mia = A.cgm(resCls, Memory.allocUtf8String("FindObjectsOfTypeAll"), 1);
                 if (mia && !mia.isNull() && mia.readPointer() && !mia.readPointer().isNull()) arr = invoke(mia, ptr(0), [typeObj]);
-            } catch (e) {}
+            } catch (e) { swallowed("utils.js:findAllObjectOfType", e); }
         }
         if (!arr || arr.isNull()) return [];
         var len = arr.add(0x18).readS32();
@@ -400,6 +433,12 @@ export function findAllObjectOfTypeAll(cls) {
 }
 // List<T> 里是否已有 id。List 布局: _items(T[])@+0x10, _size(int)@+0x18, _version@+0x1C
 // 数组元素在 arr+0x20 (SZARRAY 数据区)
+// 语义说明 (键存在性判定的三套方案, 别混用 —— 2026-09-25):
+//   ① 本函数: List 元素按**值**比 id 字符串 —— 用于 List<string>/List<VersionedItem> 这类"值即身份"的容器 ✓
+//   ② session.js 的 dictHasIdVer / dictFindKeyInstance: Dictionary<IdVersionPair,…> **按实例**匹配
+//      (游戏侧哈希按对象身份; 详见那里的长注释) —— 图鉴页面字典必须用这套
+//   ③ textures.js 的 dictContainsKey: string 键的自扫比对 (值语义) —— 用于纹理注册表
+//   优先用游戏自己的 ContainsKey; 必须自扫时才选 ①②③ 中语义正确的那一个。
 export function listContainsId(list, id, idOff) {
     try {
         var cnt = list.add(0x18).readS32(), items = list.add(0x10).readPointer();
@@ -408,7 +447,7 @@ export function listContainsId(list, id, idOff) {
             if (e.isNull()) continue;
             if (readStr(e.add(idOff).readPointer()) === id) return true;
         }
-    } catch (e) {}
+    } catch (e) { swallowed("utils.js:listContainsId", e); }
     return false;
 }
 
@@ -430,7 +469,7 @@ export function makeUnityObject(cls) {
     try {
         var mpFn = new NativeFunction(ctorMi.readPointer(), 'void', ['pointer']);
         mpFn(o);
-    } catch (e) { }
+    } catch (e) { swallowed("utils.js:makeUnityObject", e); }
     return o;
 }
 

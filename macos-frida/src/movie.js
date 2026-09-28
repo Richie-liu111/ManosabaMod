@@ -5,7 +5,7 @@
 //   get_UrlStreaming 默认 false → 走 videoLoader 加载 VideoClip → 无 provider 即失败,
 //   导致整个 goto 中止 (黑屏)。修法: 对 mod 视频强制 UrlStreaming=true (跳过 VideoClip),
 //   BuildStreamUrl 返回本地绝对路径, VideoPlayer 直接播放文件。
-import { A, dbg, findClassAcrossImages, makeS, readStr } from "./utils.js";
+import { A, dbg, findClassAcrossImages, makeS, readStr, swallowed } from "./utils.js";
 
 var modMovies = (typeof movieMap !== "undefined" && movieMap) ? movieMap : {};
 var pendingMovieName = null;
@@ -37,7 +37,7 @@ export function setupMovieHooks() {
                         var nm = readStr(a[1]);
                         dbg("[v3] Movie Play: '" + nm + "' mod=" + isModMovie(nm));
                         if (isModMovie(nm)) playingMovieName = nm;
-                    } catch (e) {}
+                    } catch (e) { swallowed("movie.js:setupMovieHooks.onEnter", e); }
                 }
             });
         }
@@ -48,10 +48,12 @@ export function setupMovieHooks() {
                     pendingMovieName = null;
                     var nm = readStr(a[1]);
                     if (isModMovie(nm)) pendingMovieName = nm;
-                } catch (e) {}
+                } catch (e) { swallowed("movie.js:setupMovieHooks.onEnter#2", e); }
             }
         });
         // 流式判定: mod 视频强制 true (跳过 VideoClip 加载, 预加载不再失败)
+        // 注: 下面 onLeave 里 `ret.toInt32() === 1` 是**正确**写法 —— onLeave 拿到的是原始返回寄存器,
+        //     不是 il2cpp_runtime_invoke 的装箱对象 (三上下文见 ARCHITECTURE.md 7.4 / choice.js chBool 注释)。
         Interceptor.attach(urlMi.readPointer(), {
             onEnter: function () { this._self = this.context.x0; },
             onLeave: function (ret) {
@@ -69,7 +71,7 @@ export function setupMovieHooks() {
                     // 兜底: 读 playedMovieName 字段
                     var cur = readStr(this._self.add(pnOff));
                     if (isModMovie(cur)) ret.replace(ptr(1));
-                } catch (e) {}
+                } catch (e) { swallowed("movie.js:setupMovieHooks.onLeave", e); }
             }
         });
         // BuildStreamUrl: mod 视频 → 本地绝对路径 (VideoPlayer 认绝对路径)
@@ -79,7 +81,7 @@ export function setupMovieHooks() {
                 try {
                     var p = modMovies[this._nm];
                     if (p) { ret.replace(makeS(p)); dbg("[v3] Movie URL -> " + p); }
-                } catch (e) {}
+                } catch (e) { swallowed("movie.js:setupMovieHooks.onLeave#2", e); }
             }
         });
         movieHooksReady = true;

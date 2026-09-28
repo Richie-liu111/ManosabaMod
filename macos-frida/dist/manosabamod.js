@@ -1,28 +1,29 @@
 📦
-40439 /src/entry.js
+41695 /src/entry.js
 1938 /src/banner.js
 5796 /src/chapterdisplay.js
-83411 /src/choice.js
-206106 /src/credit.js
-22709 /src/cutin.js
-4554 /src/io.js
-5858 /src/locale.js
-9445 /src/log.js
-15046 /src/menu.js
-5211 /src/movie.js
-15229 /src/providers.js
-13453 /src/scripttext.js
-26595 /src/utils.js
-21084 /src/witchbook/characters.js
-14658 /src/witchbook/data.js
-6922 /src/witchbook/dictheal.js
-18994 /src/witchbook/index.js
-26755 /src/witchbook/pages.js
-43343 /src/witchbook/session.js
+87992 /src/choice.js
+208941 /src/credit.js
+23214 /src/cutin.js
+4600 /src/io.js
+6152 /src/locale.js
+11089 /src/log.js
+15128 /src/menu.js
+5832 /src/movie.js
+15506 /src/providers.js
+13586 /src/scripttext.js
+29591 /src/utils.js
+21479 /src/witchbook/characters.js
+14873 /src/witchbook/data.js
+9031 /src/witchbook/dictheal.js
+20196 /src/witchbook/index.js
+27710 /src/witchbook/pages.js
+14648 /src/witchbook/selftest.js
+46141 /src/witchbook/session.js
 2673 /src/witchbook/state.js
-6346 /src/witchbook/textures.js
+7233 /src/witchbook/textures.js
 ✄
-import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, wblog } from "./utils.js";
+import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, swallowed, wblog } from "./utils.js";
 import { clearCutInCaches, preloadCutInTextures, setupCutInHooks } from "./cutin.js";
 import { clearCreditCaches, setupCreditHooks } from "./credit.js";
 import { initChoiceHandlers, setupChoiceHandlerHooks } from "./choice.js";
@@ -55,7 +56,9 @@ try {
                 Interceptor.replace(i2, new NativeCallback(function () { return 2; }, 'int', [])); h = true; } });
     }
 }
-catch (e) { }
+catch (e) {
+    swallowed("entry.js:onLeave", e);
+}
 var E = {}, dom = null;
 var shouldLogLoadAndPlay = true;
 // 诊断 hook (goto 链路/加载链/SetException 栈回溯) 仅在 MOD_DEBUG=1 时装, 默认不装
@@ -482,7 +485,9 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                             if (stxt)
                                 logLevel(level, "[v3] " + tag + " [+0x" + eo.toString(16) + "] " + stxt);
                         }
-                        catch (e5) { }
+                        catch (e5) {
+                            swallowed("entry.js:collectUtf16", e5);
+                        }
                     }
                 }
                 else {
@@ -491,7 +496,9 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                         if (full)
                             logLevel(level, "[v3] " + tag + " FULL: " + full);
                     }
-                    catch (e) { }
+                    catch (e) {
+                        swallowed("entry.js:collectUtf16#2", e);
+                    }
                 }
                 // 移除多偏移 UTF-16 尝试 (0x08/0x10/0x18/0x0C): C# 字符串是引用类型,
                 // 直接从对象实例内存读 UTF-16 是错的 — 读到的全是垃圾 (如 KeyNotFoundException
@@ -549,6 +556,9 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         // 异常对象的字段布局在 macOS IL2CPP 上与 Windows dump 不完全一致 (读实例内存拿不稳 message),
         // 所以在**构造那一刻**抓参数 —— 消息 + 原生调用栈 (模块+偏移, 可离线 objdump 对回去)。
         // 只在真抛异常时触发, 无常态开销。
+        // 2026-09-28 降噪: 取证已完成, 这行降到 dbg (MOD_DEBUG=1 才出)。**常态化守卫已移交**
+        // src/witchbook/selftest.js —— 它在 MOD_SELFTEST=1 时装 ThrowHelper 钩子计数 + 断言字典不变式,
+        // 那条是"回归里能判成败"的, 比人手看日志可靠。
         try {
             var knfCls = null;
             var knfNames = [["System.Collections.Generic", "KeyNotFoundException"], ["System", "KeyNotFoundException"]];
@@ -561,7 +571,9 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                             break;
                         }
                     }
-                    catch (eK) { }
+                    catch (eK) {
+                        swallowed("entry.js:doInit", eK);
+                    }
                 }
             }
             if (!knfCls)
@@ -585,9 +597,11 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                                             return "?";
                                         }
                                     }).join(" ← ");
-                                    wblog("KeyNotFoundException 抛出 (argc=" + narg + "): " + msg + " | 栈: " + bt);
+                                    dbg("[v3] KeyNotFoundException 抛出 (argc=" + narg + "): " + msg + " | 栈: " + bt);
                                 }
-                                catch (eM) { }
+                                catch (eM) {
+                                    swallowed("entry.js:knfCtorHook.onEnter", eM);
+                                }
                             }
                         });
                     })(ka);
@@ -632,22 +646,30 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                         try {
                             resetWitchBookSession();
                         }
-                        catch (e) { }
+                        catch (e) {
+                            swallowed("entry.js:onTitleActivate.onLeave", e);
+                        }
                         // 回标题 → 清 CutIn 实例缓存 (旧实例指针可能失效)
                         try {
                             clearCutInCaches();
                         }
-                        catch (e) { }
+                        catch (e) {
+                            swallowed("entry.js:onTitleActivate.onLeave#2", e);
+                        }
                         // 首次进标题 → 预加载全部 CutIn 纹理 (把审判触发的解码卡顿挪到菜单空闲期)
                         try {
                             preloadCutInTextures();
                         }
-                        catch (e) { }
+                        catch (e) {
+                            swallowed("entry.js:onTitleActivate.onLeave#3", e);
+                        }
                         // 回标题 → 清 Credit 演出状态 (disarm + 还原残留祖先; comp 指针保留, 字段探针复核)
                         try {
                             clearCreditCaches();
                         }
-                        catch (e) { }
+                        catch (e) {
+                            swallowed("entry.js:onTitleActivate.onLeave#4", e);
+                        }
                         if (typeof modList !== "undefined" && modList && modList.length)
                             registerMenu(modList);
                         else
@@ -678,7 +700,9 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                             if (wbCls)
                                 registerTexturesInto(null);
                         }
-                        catch (e3) { }
+                        catch (e3) {
+                            swallowed("entry.js:onTitleActivate.onLeave#5", e3);
+                        }
                         // 重定向放到队列, 避免在 hook 回调里做托管调用
                         setTimeout(function () { hookStartGame(); }, 100);
                     }
@@ -911,7 +935,7 @@ export function setupChapterDisplayHooks() {
 //       providersMap.Add + GetProvider 验证 → registered
 //   之后 actor 由游戏自己构造 (GetOrAddActor → Activator → LoadUIPrefabAsync →
 //       provider 链 → 我们的 vrp.Resources); 只读诊断钩子确认游戏走到哪一步。
-import { A, dbg, fieldOffset, findAllObjectOfType, findClassAcrossImages, findSvc, getSystemClass, invoke, invokeOk, makeS, pngDims, readStr, warn } from "./utils.js";
+import { A, dbg, fieldOffset, findAllObjectOfType, findClassAcrossImages, findSvc, getSystemClass, invoke, invokeOk, makeS, pngDims, readStr, swallowed, warn } from "./utils.js";
 import { fileReadBytes, readJSONFile } from "./io.js";
 import { info } from "./log.js";
 import { startReinjectWindow } from "./providers.js";
@@ -1095,7 +1119,9 @@ function chSwapPortrait(clone, sprite) {
                     go = g2;
             }
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("choice.js:chSwapPortrait", e);
+        }
         var gicMi = A.cgm(chCls.gameObject, Memory.allocUtf8String("GetComponentsInChildren"), 2);
         if (!gicMi || gicMi.isNull()) {
             warn("[Choice] GetComponentsInChildren NOT FOUND");
@@ -1123,7 +1149,9 @@ function chSwapPortrait(clone, sprite) {
                     if (rt && !rt.isNull())
                         score = Math.abs(rt.add(12).readFloat()); // Rect.height
                 }
-                catch (e2) { }
+                catch (e2) {
+                    swallowed("choice.js:chSwapPortrait#2", e2);
+                }
             }
             if (score > bestScore) {
                 bestScore = score;
@@ -1170,7 +1198,9 @@ function chFindResourceLoader() {
                 return p;
             }
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("choice.js:chFindResourceLoader", e);
+        }
     }
     return null;
 }
@@ -1210,7 +1240,9 @@ function chStealResourceGOClass() {
                     }
                 }
             }
-            catch (e2) { }
+            catch (e2) {
+                swallowed("choice.js:chStealResourceGOClass", e2);
+            }
         });
         if (out) {
             chData.resGOClass = out;
@@ -1245,7 +1277,9 @@ function chTriggerGOClass() {
                 if (A.cgn(A.ogc(c)).readCString() === "ChoiceHandlersConfiguration")
                     cfg = c;
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("choice.js:chTriggerGOClass", e);
+            }
         }
         var trigId = "Trial";
         if (cfg && !cfg.isNull()) {
@@ -1254,7 +1288,9 @@ function chTriggerGOClass() {
                 if (dhid)
                     trigId = dhid;
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("choice.js:chTriggerGOClass#2", e);
+            }
         }
         try {
             var goaMi = A.cgm(A.ogc(mgr), Memory.allocUtf8String("GetOrAddActor"), 1);
@@ -1278,13 +1314,17 @@ function chTriggerGOClass() {
                     try {
                         laMi = A.cgm(A.ogc(bl), Memory.allocUtf8String("LoadAsync"), ac);
                     }
-                    catch (e) { }
+                    catch (e) {
+                        swallowed("choice.js:chTriggerGOClass#3", e);
+                    }
                 });
                 if (!laMi || laMi.isNull()) {
                     try {
                         laMi = A.cgm(A.ogc(bl), Memory.allocUtf8String("Load"), 2);
                     }
-                    catch (e) { }
+                    catch (e) {
+                        swallowed("choice.js:chTriggerGOClass#4", e);
+                    }
                 }
                 if (laMi && !laMi.isNull()) {
                     invoke(laMi, bl, [makeS("ChoiceButtons/Trial/Objection"), ptr(0)]);
@@ -1301,6 +1341,11 @@ function chTriggerGOClass() {
     }
 }
 // ============ bool 返回值 (探针 run 7 教训: 值类型返回装箱, 直接 readU8 是 klass 指针低位) ============
+// 读法三上下文 (详见 ARCHITECTURE.md 7.4, 2026-09-25 复审确认本处写法正确):
+//   ① il2cpp_runtime_invoke 的返回值 → **装箱** System.Boolean 对象指针, 值在 +0x10 (本函数上半支)
+//   ② Interceptor.onLeave 的 ret   → 原始返回寄存器, ret.toInt32() === 1 才对 (见 movie.js:59)
+//   ③ directCall (methodPointer 直调) → 按真实返回类型读 (见 credit.js dcBool)
+// 本函数的 fallback (ret.readU8() === 1) 是给"未装箱"的历史路径兜底, 不是 bug。
 function chBool(r) {
     var ret = r && r.ok ? r.ret : null;
     if (!ret || ret.isNull())
@@ -1310,7 +1355,9 @@ function chBool(r) {
         if (k.indexOf("Boolean") >= 0)
             return ret.add(0x10).readU8() === 1;
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("choice.js:chBool", e);
+    }
     return ret.readU8() === 1;
 }
 // ============ 托管链 (镜像 C# 四步, 全部 invoke + 自验证) ============
@@ -1405,7 +1452,9 @@ function chRegisterMeta(hd) {
                 }
             }
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("choice.js:chRegisterMeta", e);
+        }
         meta.add(fieldOffset(chCls.choiceHandlerMeta, "Implementation", 0x10)).writePointer(makeS(implStr));
         // Loader: 真 ResourceLoaderConfiguration (PathPrefix + ProviderTypes)
         var loader = A.on(chCls.resourceLoaderConfig);
@@ -1464,7 +1513,9 @@ function chRegisterMeta(hd) {
         try {
             meta.add(fieldOffset(chCls.choiceHandlerMeta, "WaitHideOnChoice", 0x30)).writeU8(0);
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("choice.js:chRegisterMeta#2", e);
+        }
         // 读回核对
         var implBack = readStr(meta.add(fieldOffset(chCls.choiceHandlerMeta, "Implementation", 0x10)).readPointer());
         var ldrBack = meta.add(fieldOffset(chCls.choiceHandlerMeta, "Loader", 0x18)).readPointer();
@@ -1583,7 +1634,9 @@ function tryFinalizeChoiceHandlers() {
                         }
                     }
                 }
-                catch (e) { }
+                catch (e) {
+                    swallowed("choice.js:tryFinalizeChoiceHandlers", e);
+                }
             }
             if (!cfg || !metaMap || metaMap.isNull()) {
                 dbg("[Choice] Configuration NOT FOUND, 稍后重试");
@@ -1745,7 +1798,9 @@ function chHookDictTryGetValue() {
                 if (np && !np.isNull())
                     nm = np.readCString();
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("choice.js:chHookDictTryGetValue", e);
+            }
             var mp = mi.readPointer();
             if ((nm === "TryGetValue" || nm === "ContainsKey" || nm === "get_Item") && mp && !mp.isNull()) {
                 var mnm2 = nm;
@@ -1757,7 +1812,9 @@ function chHookDictTryGetValue() {
                             try {
                                 key = readStr(a[1]);
                             }
-                            catch (e) { }
+                            catch (e) {
+                                swallowed("choice.js:chHookDictTryGetValue.onEnter", e);
+                            }
                             // run16: 全不过滤 — 验证特化体理论: 游戏加载 MyMod 时查了哪些 dict/key
                             // (风暴抑制: 只在 key 与 MyMod/ModChoice 相关时打印; 否则打 1 字符标记)
                             if (key.indexOf("MyMod") >= 0 || key.indexOf("ModChoice") >= 0 ||
@@ -1766,12 +1823,16 @@ function chHookDictTryGetValue() {
                                 try {
                                     selfCls = A.cgn(A.ogc(self)).readCString();
                                 }
-                                catch (e) { }
+                                catch (e) {
+                                    swallowed("choice.js:chHookDictTryGetValue.onEnter#2", e);
+                                }
                                 dbg("[Choice] " + mnm2 + " self=" + self + " (" + selfCls + ") key='" + key + "'" +
                                     (chData.vrpDict && self.equals(chData.vrpDict) ? " ←我们的 dict" : ""));
                             }
                         }
-                        catch (e) { }
+                        catch (e) {
+                            swallowed("choice.js:chHookDictTryGetValue.onEnter#3", e);
+                        }
                     }
                 });
                 dbg("[Choice] Dict.TryGetValue hooked (过滤我们的 vrp dict) @" + mp);
@@ -1817,7 +1878,9 @@ function chHookClassMethods(cls, tag, all) {
                 if (np && !np.isNull())
                     nm = np.readCString();
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("choice.js:chHookClassMethods", e);
+            }
             if (mp && !mp.isNull() && !seen[mp.toString()] &&
                 (all || /^(Load|Locate|ResourceExists|SupportsType|GetLoaded|AddResource|SetResource|RemoveResource|Run|Create|Handle|InitializeProvisionSources|Cancel|IsLocationCached|LocateCached)/.test(nm))) {
                 seen[mp.toString()] = true;
@@ -1831,7 +1894,9 @@ function chHookClassMethods(cls, tag, all) {
                                 try {
                                     path = readStr(a[1]);
                                 }
-                                catch (e) { }
+                                catch (e) {
+                                    swallowed("choice.js:chHookClassMethods.onEnter", e);
+                                }
                                 if (mnm === "InitializeProvisionSources")
                                     path = ""; // 无 path 参数, 抑制 a[1] 误读
                                 // 节流: 高频方法只打前 NOISY_LIMIT 条 + 之后每 NOISY_STEP 条一条
@@ -1871,7 +1936,9 @@ function chHookClassMethods(cls, tag, all) {
                                 // RL-P.Load ProvisionSources 诊断 + backtrace: 已完成诊断, 暂时静默减少噪音
                                 // (历史定位: 7181 / 11259 行噪音来自这两段, 一帧多次 Sfx/Bgm 加载触发)
                             }
-                            catch (e) { }
+                            catch (e) {
+                                swallowed("choice.js:chHookClassMethods.onEnter#2", e);
+                            }
                         },
                         onLeave: function (retval) {
                             // InitializeProvisionSources onLeave: wipe 点本身. 诊断观察时机 —
@@ -1917,7 +1984,9 @@ function chIsExec(addr) {
                 return true;
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("choice.js:chIsExec", e);
+    }
     return false;
 }
 function chStubResolve(addr) {
@@ -1935,7 +2004,9 @@ function chStubResolve(addr) {
             return target;
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("choice.js:chStubResolve", e);
+    }
     return null;
 }
 // stub 链解析: 外层 LDR/BR stub → 内层 stub (LDR+解引用+BR)。
@@ -1955,7 +2026,9 @@ function chHookStubBody(stub, tag) {
             for (var hh2 = 0; hh2 < 48; hh2++)
                 hexs2.push(body.add(hh2).readU8().toString(16).padStart(2, "0"));
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("choice.js:chHookStubBody", e);
+        }
         dbg("[Choice] " + tag + " stub2 开头96B: " + hexs2.join(" "));
         // 只读: slotB @stub2+0x28 (run24 实证 = 最终真体)
         var slot = body.add(0x28).readPointer();
@@ -1969,7 +2042,9 @@ function chHookStubBody(stub, tag) {
             for (var hh = 0; hh < 16; hh++)
                 hexs.push(slot.add(hh).readU8().toString(16).padStart(2, "0"));
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("choice.js:chHookStubBody#2", e);
+        }
         dbg("[Choice] " + tag + " 最终真体开头32B: " + hexs.join(" "));
         // 只读 dump BL 目标 (不 attach — run24 实证真体 0 BL 目标, 泛型调用全间接)
         var tgts = chDumpBlTargets(slot, 0x800, tag);
@@ -1996,7 +2071,9 @@ function chDumpBlTargets(addr, len) {
                 try {
                     ga3 = Process.getModuleByName("GameAssembly_arm64.dylib");
                 }
-                catch (e) { }
+                catch (e) {
+                    swallowed("choice.js:chDumpBlTargets", e);
+                }
                 var b3 = ga3 ? ga3.base : ptr(0);
                 var off = "";
                 if (b3 && tgt.compare(b3) >= 0 && tgt.compare(b3.add(0x7000000)) < 0)
@@ -2018,7 +2095,9 @@ function chHookBlTargets(addr, len, tag) {
         try {
             ga4 = Process.getModuleByName("GameAssembly_arm64.dylib");
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("choice.js:chHookBlTargets", e);
+        }
         var b4 = ga4 ? ga4.base : ptr(0);
         var count = 0;
         tgts.forEach(function (t) {
@@ -2031,13 +2110,17 @@ function chHookBlTargets(addr, len, tag) {
                 if (b4 && ptr(t).compare(b4) >= 0 && ptr(t).compare(b4.add(0x7000000)) < 0)
                     off = " GA+" + ptr(t).sub(b4).toString(16);
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("choice.js:chHookBlTargets#2", e);
+            }
             Interceptor.attach(ptr(t), {
                 onEnter: function () {
                     try {
                         dbg("[Choice] BL:" + tag + " 目标 @" + ptr(t) + off);
                     }
-                    catch (e) { }
+                    catch (e) {
+                        swallowed("choice.js:chHookBlTargets.onEnter", e);
+                    }
                 }
             });
         });
@@ -2069,20 +2152,28 @@ function chDumpMethods(cls, tag) {
                 if (np && !np.isNull())
                     nm = np.readCString();
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("choice.js:chDumpMethods", e);
+            }
             var pc = -1, isG = false, isI = false;
             try {
                 pc = A.mpc ? A.mpc(mi) : -1;
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("choice.js:chDumpMethods#2", e);
+            }
             try {
                 isG = A.mig ? !!A.mig(mi) : false;
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("choice.js:chDumpMethods#3", e);
+            }
             try {
                 isI = A.mii ? !!A.mii(mi) : false;
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("choice.js:chDumpMethods#4", e);
+            }
             rows.push(nm + "/" + pc + (isG ? "G" : "-") + (isI ? "I" : "-") + "@" + mp);
             mi = A.cgmAll(cls, iter);
         }
@@ -2114,7 +2205,9 @@ function chHookRl() {
                 try {
                     pn = A.cgn(par).readCString();
                 }
-                catch (e) { }
+                catch (e) {
+                    swallowed("choice.js:chHookRl", e);
+                }
                 dbg("[Choice] RL 父类=" + pn);
                 chHookClassMethods(par, "RL-P");
                 chDumpMethods(par, "RL-P");
@@ -2132,7 +2225,9 @@ function chHookRl() {
                             if (np2 && !np2.isNull())
                                 nm2 = np2.readCString();
                         }
-                        catch (e) { }
+                        catch (e) {
+                            swallowed("choice.js:chHookRl#2", e);
+                        }
                         if (nm2 === "Load" || nm2 === "LoadAll") {
                             var mp2 = mi2.readPointer();
                             if (mp2 && !mp2.isNull()) {
@@ -2142,7 +2237,9 @@ function chHookRl() {
                                     for (var hh = 0; hh < 32; hh++)
                                         hexs.push(mp2.add(hh).readU8().toString(16).padStart(2, "0"));
                                 }
-                                catch (e) { }
+                                catch (e) {
+                                    swallowed("choice.js:chHookRl#3", e);
+                                }
                                 dbg("[Choice] RL-P." + nm2 + "@" + mp2 + " 开头64B: " + hexs.join(" "));
                                 chHookStubBody(mp2, "RL-P-" + nm2);
                             }
@@ -2193,7 +2290,9 @@ function chHookRl() {
                                                         try {
                                                             goCls = findClassAcrossImages("UnityEngine", "GameObject");
                                                         }
-                                                        catch (e2) { }
+                                                        catch (e2) {
+                                                            swallowed("choice.js:chHookRl.onEnter", e2);
+                                                        }
                                                         var goName = goCls && !goCls.isNull() ? A.cgn(goCls).readCString() : "?";
                                                         dbg("[Choice] Resource.Object klass=" + objName + " vs GameObject klass=" + goName + (objCls.equals(goCls) ? " — 匹配" : " — 不匹配"));
                                                     }
@@ -2251,7 +2350,9 @@ function chHookRl() {
                                                         if (np3 && !np3.isNull())
                                                             nm3 = np3.readCString();
                                                     }
-                                                    catch (e) { }
+                                                    catch (e) {
+                                                        swallowed("choice.js:chHookRl.onLeave", e);
+                                                    }
                                                     if (nm3.indexOf("ResourceExists") >= 0 || nm3 === "LoadResource") {
                                                         dbg("[Choice] VRP." + nm3 + " mp=0x" + mi3.readPointer().toString(16));
                                                     }
@@ -2303,7 +2404,9 @@ function chDictPhysKeys(dict) {
                 out.push(ks);
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("choice.js:chDictPhysKeys", e);
+    }
     return out;
 }
 function chDictPhysCount(dict) {
@@ -2371,7 +2474,9 @@ function chDictPhysHasKey(dict, keyStr) {
                 return true;
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("choice.js:chDictPhysHasKey", e);
+    }
     return false;
 }
 function chKeepAlive() {
@@ -2419,11 +2524,15 @@ function installDiagHooks() {
                                 if (idMi && !idMi.isNull())
                                     id = readStr(invoke(idMi, self, []));
                             }
-                            catch (e) { }
+                            catch (e) {
+                                swallowed("choice.js:installDiagHooks.onEnter", e);
+                            }
                             if (id && id.indexOf("Trial") !== 0)
                                 dbg("[Choice] 游戏构造 UIChoiceHandler '" + id + "' (Initialize)");
                         }
-                        catch (e) { }
+                        catch (e) {
+                            swallowed("choice.js:installDiagHooks.onEnter#2", e);
+                        }
                     }
                 });
                 dbg("[Choice] UIChoiceHandler.Initialize hooked (诊断)");
@@ -2448,13 +2557,17 @@ function installDiagHooks() {
                                 if (id && id.indexOf("Trial") !== 0)
                                     dbg("[Choice] 游戏 GetOrAddActor('" + id + "')");
                             }
-                            catch (e) { }
+                            catch (e) {
+                                swallowed("choice.js:hookGOA.onEnter", e);
+                            }
                         }
                     });
                     dbg("[Choice] GetOrAddActor hooked (诊断)");
                 }
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("choice.js:hookGOA.onEnter#2", e);
+            }
         })();
         // ResourceProviderManager.GetProvider 运行时路由 (回答游戏加载时 ProviderTypes 解析到哪)
         try {
@@ -2472,7 +2585,9 @@ function installDiagHooks() {
                                     try {
                                         ga = Process.getModuleByName("GameAssembly_arm64.dylib");
                                     }
-                                    catch (e) { }
+                                    catch (e) {
+                                        swallowed("choice.js:hookGOA.onEnter#3", e);
+                                    }
                                     var base = ga ? ga.base : ptr(0);
                                     var names = bt.map(function (ad) {
                                         try {
@@ -2502,14 +2617,18 @@ function installDiagHooks() {
                                 if (k === chData.providerKey)
                                     dbg("[Choice] 游戏 GetProvider('" + k + "') → " + rc + (ours ? " 是 vrp" : " 不是/丢失"));
                             }
-                            catch (e) { }
+                            catch (e) {
+                                swallowed("choice.js:hookGOA.onLeave", e);
+                            }
                         }
                     });
                     dbg("[Choice] rpm.GetProvider hooked (诊断)");
                 }
             }
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("choice.js:hookGOA.onLeave#2", e);
+        }
         // VRP 全部加载入口 — 方法表遍历 attach 真实指针 (run11: get_method_from_name 对泛型方法
         // 返回的指针 ≠ 游戏 vtable 调用路径; 泛型方法共享体指针在方法表里, 直接 attach)
         // run25: 全量 attach 不按名字过滤 (旧 forEach 段已删, 避免重复 attach 同一指针)
@@ -2518,7 +2637,9 @@ function installDiagHooks() {
                 chHookVrpMethods();
             }
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("choice.js:hookGOA.onLeave#3", e);
+        }
         // ResourceProvider 基类泛型方法 (run12: get_method_from_name 对泛型返回的指针不在调用路径
         // → 方法表遍历 attach 共享体; 游戏加载若走基类方法此处命中)
         try {
@@ -2529,7 +2650,9 @@ function installDiagHooks() {
             else
                 chHookClassMethods(rpBase, "base", false); // run26 教训: all=true 风暴 — 只 hook 名称匹配的低频方法
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("choice.js:hookGOA.onLeave#4", e);
+        }
     }
     catch (e) {
         warn("[Choice] installDiagHooks err: " + e);
@@ -2556,7 +2679,9 @@ export function setupChoiceHandlerHooks() {
                         if (cn === "TrialChoiceHandlerPanel")
                             tryFinalizeChoiceHandlers();
                     }
-                    catch (e) { }
+                    catch (e) {
+                        swallowed("choice.js:setupChoiceHandlerHooks.onLeave", e);
+                    }
                 }
             });
             info("[Choice] CustomUI.Awake hooked");
@@ -2640,7 +2765,7 @@ export function initChoiceHandlers() {
 //     懒加载工厂自建 + GCI 子树扫描 + 全程分阶段日志
 // 原则 (项目惯例): 只做加法+自清理, 不改任何游戏现有对象; 全程 try/catch 不崩。
 //   错误路径一律写安全默认时长 → nani @Wait 永不悬挂 (R4)。
-import { A, dbg, directCall, findClassAcrossImages, findSvc, findAllObjectOfType, getSystemClass, invoke, invokeOk, makeS, nv, pngDims, readStr, warn, error } from "./utils.js";
+import { A, dbg, directCall, error, findAllObjectOfType, findClassAcrossImages, findSvc, getSystemClass, invoke, invokeOk, makeS, nv, pngDims, readStr, swallowed, warn } from "./utils.js";
 import { getIO } from "./io.js"; // run-24-2: 写文件走 io.js 绑定 (Module.findExportByName 在 bundle 内不可用, io.js 的 findGlobalExportByName 实证可用)
 import { readJSONFile, openForWrite, writeString, fileSync, fileReadBytes } from "./io.js";
 import { info } from "./log.js";
@@ -2743,17 +2868,23 @@ var fgt = null, mgp = null;
 try {
     fgt = A.fgt;
 }
-catch (e) { }
+catch (e) {
+    swallowed("credit.js:zeroCT", e);
+}
 try {
     mgp = A.mgp;
 }
-catch (e) { }
+catch (e) {
+    swallowed("credit.js:zeroCT#2", e);
+}
 // run-12 修复: A.gn 从未在 entry.js 绑定 (只有 A.cgp=class_get_parent) — cgmChain 继承链回退必崩
 try {
     if (!A.gn && A.cgp)
         A.gn = A.cgp;
 }
-catch (e) { }
+catch (e) {
+    swallowed("credit.js:zeroCT#3", e);
+}
 if (!fgt || !mgp) {
     try {
         var gaMod = Process.findModuleByName("GameAssembly.dylib");
@@ -2770,7 +2901,9 @@ if (!fgt || !mgp) {
             }
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("credit.js:zeroCT#4", e);
+    }
 }
 // ============ 类解析 ============
 function resolveCreditClasses() {
@@ -2849,7 +2982,9 @@ function getFontName(tmp) {
                 return readStr(nm.ret) || "?";
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("credit.js:getFontName", e);
+    }
     return "?";
 }
 // 枚举 staff content 下全部 TMP 标签 (含 inactive — GetComponentsInChildren(Type,bool))
@@ -2886,7 +3021,9 @@ function enumerateLabels() {
                 if (gg.ok)
                     eGo = gg.ret;
             }
-            catch (e2) { }
+            catch (e2) {
+                swallowed("credit.js:enumerateLabels", e2);
+            }
             var active = eGo ? dcBool(cgmChain(A.ogc(eGo), "get_activeSelf", 0), eGo) : false;
             var nm = eGo ? getGoName(eGo) : "?";
             // run-12: 标签自身名全叫 "Label", 语种标识可能在父包装节点 (thanks 侧就是 Label_Ja/Label_ZhHans 风格)
@@ -2910,7 +3047,9 @@ function enumerateLabels() {
                         }
                     }
                 }
-                catch (e3) { }
+                catch (e3) {
+                    swallowed("credit.js:enumerateLabels#2", e3);
+                }
             }
             comp.labels.push({ tmp: e, go: eGo, name: nm, parent: pn, grand: gn, active: active, font: getFontName(e) });
         }
@@ -3123,7 +3262,9 @@ function spawnCreditsUI() {
             isTypeArg = (ptn === "System.Type");
             dbg("[v3][Credit] GetUI 参数类型: " + ptn + " → " + (isTypeArg ? "Type 重载" : "string 重载"));
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("credit.js:spawnCreditsUI", e);
+        }
         var r = invokeOk(mi, uiMgr, isTypeArg ? [A.tgo(A.cgt(cls.creditsUI))] : [makeS("CreditsUI")]);
         if (r.ok && r.ret && !r.ret.isNull()) {
             var rn = clsName(A.ogc(r.ret));
@@ -3706,7 +3847,9 @@ function restoreAncestors() {
         try {
             invoke(cgmChain(A.ogc(activatedAncestors[i]), "SetActive", 1), activatedAncestors[i], [boolPtr(false)]);
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("credit.js:restoreAncestors", e);
+        }
     }
     activatedAncestors = [];
 }
@@ -3763,7 +3906,9 @@ function thanksProbeWrite(obj, fname) {
             if (ch)
                 new NativeFunction(ch, "int", ["pointer", "int"])(Memory.allocUtf8String(path), 0o644);
         }
-        catch (e2) { }
+        catch (e2) {
+            swallowed("credit.js:thanksProbeWrite", e2);
+        }
         info("[v3][Credit] 探针: 已写出 " + fname + " (" + (wrote / 1024).toFixed(0) + "KB)");
     }
     catch (e) {
@@ -3869,7 +4014,9 @@ function installThanksProbe() {
                 }
                 thanksProbe.rows.push({ k: 1, t: now, text: s });
             }
-            catch (e2) { }
+            catch (e2) {
+                swallowed("credit.js:tmpEnter", e2);
+            }
         };
         var attached = 0;
         if (tmpSet && !tmpSet.isNull() && !tmpSet.readPointer().isNull()) {
@@ -3890,7 +4037,9 @@ function installThanksProbe() {
                         if (s && s.length > 1)
                             info("[v3][Credit] 探针[set_Text]: " + s.slice(0, 60));
                     }
-                    catch (e2) { } } });
+                    catch (e2) {
+                        swallowed("credit.js:tmpEnter.onEnter", e2);
+                    } } });
                 attached++;
             }
         }
@@ -3899,7 +4048,9 @@ function installThanksProbe() {
             Interceptor.attach(miClear.readPointer(), { onEnter: function () { try {
                     thanksProbe.rows.push({ k: 0, t: Date.now() - thanksProbe.t0 });
                 }
-                catch (e2) { } } });
+                catch (e2) {
+                    swallowed("credit.js:tmpEnter.onEnter#2", e2);
+                } } });
         }
         // run-30b: hook CreditRollSpecialThanks.ShowAsync — 共犯页在 PlayAsync 链路哪一环触发 (调用时机)
         try {
@@ -3924,7 +4075,9 @@ function installThanksProbe() {
             thanksProbe.flushTimer = setInterval(function () { try {
                 thanksProbeFlush();
             }
-            catch (e4) { } }, 3000);
+            catch (e4) {
+                swallowed("credit.js:tmpEnter.onEnter#3", e4);
+            } }, 3000);
     }
     catch (e) {
         warn("[v3][Credit] installThanksProbe err: " + e);
@@ -3936,7 +4089,9 @@ function thanksProbeFlush() {
             return;
         thanksProbeWrite({ n: thanksProbe.rows.length, rows: thanksProbe.rows }, "thanks-rows.json");
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("credit.js:thanksProbeFlush", e);
+    }
 }
 // ============ 数据 json ============
 function loadCreditData(path) {
@@ -4143,7 +4298,9 @@ function setStillAlpha(st, a) {
         if (st && st.cg && !st.cg.isNull())
             invoke(cgmChain(A.ogc(st.cg), "set_alpha", 1), st.cg, [fPtr(a)]);
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("credit.js:setStillAlpha", e);
+    }
 }
 function findStills() {
     try {
@@ -4186,7 +4343,9 @@ function findStills() {
                     }
                 }
             }
-            catch (e4) { }
+            catch (e4) {
+                swallowed("credit.js:findStills", e4);
+            }
         }
         function collectOne(es, arr, idx) {
             var go = null;
@@ -4195,7 +4354,9 @@ function findStills() {
                 if (gg.ok)
                     go = gg.ret;
             }
-            catch (e2) { }
+            catch (e2) {
+                swallowed("credit.js:collectOne", e2);
+            }
             var nm = go ? getGoName(go) : "?";
             var cg = es.add(0x20).readPointer(); // EndingStill._canvasGroup@0x20
             var sp = "?", act = "?", imgRef = null, vanillaSpr = null;
@@ -4223,7 +4384,9 @@ function findStills() {
                     }
                 }
             }
-            catch (e3) { }
+            catch (e3) {
+                swallowed("credit.js:collectOne#2", e3);
+            }
             arr.push({ comp: es, go: go, name: nm, cg: cg, img: imgRef, vanillaSpr: vanillaSpr });
             info("[v3][Credit] still #" + (idx + 1) + ": " + nm + " active=" + act + " cg=" + (cg && !cg.isNull() ? cg : "null") + " sprite=" + sp + (vanillaSpr ? " (img 已存)" : " (无 Image!)"));
         }
@@ -4352,7 +4515,9 @@ function loadStillSprite(path, vanillaSpr) {
                         if (ppuV > 0)
                             ppu = ppuV;
                     }
-                    catch (e3) { }
+                    catch (e3) {
+                        swallowed("credit.js:loadStillSprite", e3);
+                    }
                 }
                 var rectMi = A.cgm(cls.sprite, Memory.allocUtf8String("get_rect"), 0);
                 if (rectMi && !rectMi.isNull()) {
@@ -4363,7 +4528,9 @@ function loadStillSprite(path, vanillaSpr) {
                             rh = rp.add(12).readFloat();
                         }
                     }
-                    catch (e2) { }
+                    catch (e2) {
+                        swallowed("credit.js:loadStillSprite#2", e2);
+                    }
                 }
                 var pivMi = A.cgm(cls.sprite, Memory.allocUtf8String("get_pivot"), 0);
                 if (pivMi && !pivMi.isNull() && rw > 0.001 && rh > 0.001) {
@@ -4377,14 +4544,18 @@ function loadStillSprite(path, vanillaSpr) {
                             }
                         }
                     }
-                    catch (e4) { }
+                    catch (e4) {
+                        swallowed("credit.js:loadStillSprite#3", e4);
+                    }
                 }
                 if (!(px >= 0 && px <= 1))
                     px = 0.5;
                 if (!(py >= 0 && py <= 1))
                     py = 0.5;
             }
-            catch (e5) { }
+            catch (e5) {
+                swallowed("credit.js:loadStillSprite#4", e5);
+            }
         }
         var spr = makeStillSprite(ent.tex, ent.w, ent.h, px, py, ppu);
         if (!spr) {
@@ -4461,7 +4632,9 @@ function scheduleStillReDump() {
                             nm2 = (nmR2.ok && nmR2.ret) ? (readStr(nmR2.ret) || "?") : "?";
                         }
                     }
-                    catch (e2) { }
+                    catch (e2) {
+                        swallowed("credit.js:scheduleStillReDump", e2);
+                    }
                 }
                 out.push(i + "=" + nm2);
             }
@@ -4668,7 +4841,9 @@ function restoreStillSprites() {
             if (setSprMi && !setSprMi.isNull())
                 invoke(setSprMi, st.img, [st.vanillaSpr]);
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("credit.js:restoreStillSprites", e);
+        }
     }
 }
 // run-31: 清自定义 sprite/纹理缓存 (置空 JS 引用 → Unity GC 回收纹理) — 仅 doEnd/abortCredit 调
@@ -4687,7 +4862,9 @@ function stopStills() {
         restoreStillSprites();
         comp.stillState = "idle";
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("credit.js:stopStills", e);
+    }
 }
 // ============ phase=1: staff 滚动 ============
 function doStaff() {
@@ -4797,7 +4974,9 @@ function doStaff() {
                             posInfo.push("#" + di + "=?");
                     }
                 }
-                catch (e) { }
+                catch (e) {
+                    swallowed("credit.js:doStaff", e);
+                }
             }
             dbg("[v3][Credit] staff 标签诊断 color[" + colorInfo.join(" | ") + "] pos[" + posInfo.join(" | ") + "]");
         }
@@ -5576,7 +5755,9 @@ var startCompletionPoll = function () {
                     if (creditState.extract)
                         thanksProbeFlush();
                 }
-                catch (e5) { }
+                catch (e5) {
+                    swallowed("credit.js:startCompletionPoll", e5);
+                }
                 writeVar("g_creditDone", 1);
             }
         }, (creditState.extract ? 2400000 : 360000)); // run-30: 探针模式原版全流程(共犯 459+420 人拼行)可超 10 分钟; 普通原版 360s (run-24 bloom 片尾)
@@ -5612,7 +5793,9 @@ var startCompletionPoll = function () {
                         if (creditState.extract)
                             thanksProbeFlush();
                     }
-                    catch (e5) { }
+                    catch (e5) {
+                        swallowed("credit.js:pollFn", e5);
+                    }
                     writeVar("g_creditDone", 1);
                     writeVar("g_thanksDuration", elapsed + 3);
                     info("[v3][Credit] 原版演出完成 (canvas disabled) +" + elapsed.toFixed(0) + "s — g_creditDone=1, g_thanksDuration=" + (elapsed + 3).toFixed(0));
@@ -5992,7 +6175,9 @@ function thanksEnterPage(p) {
             try {
                 invoke(cgmChain(A.ogc(p.cg), "set_alpha", 1), p.cg, [fPtr(0)]);
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("credit.js:thanksEnterPage", e);
+            }
         }
     }
     catch (e) {
@@ -6063,7 +6248,9 @@ function doProduction() {
             ensureHierarchy();
             ensureCanvasRenderable();
         }
-        catch (e2) { }
+        catch (e2) {
+            swallowed("credit.js:doProduction", e2);
+        }
         var h = dcFloat(cgmChain(ks, "get_ContentHeight", 0), prod);
         var timing = readDirectorTiming();
         var speed = (timing && timing.speed > 0) ? timing.speed
@@ -6113,7 +6300,9 @@ function stopThanks() {
         }
         comp.thanksPaging = null;
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("credit.js:stopThanks", e);
+    }
 }
 function doThanks() {
     try {
@@ -6282,7 +6471,9 @@ function dumpThanksTMPs(kt) {
         }
         dbg("[v3][Credit] thanks TMP 子树 (" + len + "): " + parts.join(" | "));
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("credit.js:dumpThanksTMPs", e);
+    }
 }
 // ============ phase=3: end 清理 ============
 function doEnd() {
@@ -6324,7 +6515,9 @@ function doEnd() {
             try {
                 invoke(cgmChain(A.ogc(deactivatedLabels[i]), "SetActive", 1), deactivatedLabels[i], [boolPtr(true)]);
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("credit.js:doEnd", e);
+            }
         }
         deactivatedLabels = [];
         stopStills(); // run-26: still 定时器/alpha 收尾 + run-31: 恢复原版 sprite
@@ -6351,7 +6544,9 @@ function abortCredit(reason) {
                     invoke(stMi, comp.creditsUI, []);
             }
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("credit.js:abortCredit", e);
+        }
         creditState.armed = false;
         creditState.phase = 0;
         return;
@@ -6363,13 +6558,17 @@ function abortCredit(reason) {
                 invoke(cgmChain(A.ogc(comp.rollThanks), "Clear", 0), comp.rollThanks, []);
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("credit.js:abortCredit#2", e);
+    }
     try {
         var roll = (!comp.rollScroll || comp.rollScroll.isNull()) ? comp.rollThanks : comp.rollScroll;
         if (roll && !roll.isNull())
             invoke(cgmChain(A.ogc(roll), "DisableCanvas", 0), roll, []);
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("credit.js:abortCredit#3", e);
+    }
     stopStills(); // run-26: still 定时器/alpha 收尾 + run-31: 恢复原版 sprite
     clearStillCaches(); // run-31: 清自定义 sprite/纹理缓存
     stopThanks(); // run-28: 共犯翻页定时器收尾
@@ -6452,11 +6651,15 @@ function onSVV(a) {
 function onDirectorPlay(a) { try {
     captureFromDirector(a[0], "director.PlayAsync");
 }
-catch (e) { } }
+catch (e) {
+    swallowed("credit.js:onDirectorPlay", e);
+} }
 function onDirectorAwake(a) { try {
     captureFromDirector(a[0], "director.Awake");
 }
-catch (e) { } }
+catch (e) {
+    swallowed("credit.js:onDirectorAwake", e);
+} }
 function onCreditsUIPlayEnter(a) {
     try {
         if (!comp.creditsUI || comp.creditsUI.isNull()) {
@@ -6464,13 +6667,17 @@ function onCreditsUIPlayEnter(a) {
             info("[v3][Credit] CreditsUI 实例已捕获 (PlayAsync): " + a[0]);
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("credit.js:onCreditsUIPlayEnter", e);
+    }
 }
 function onCreditsUIPlayLeave() {
     try {
         scanUiRolls(comp.creditsUI, "PlayAsync后");
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("credit.js:onCreditsUIPlayLeave", e);
+    }
 }
 function onScrollAsync(a) {
     try {
@@ -6478,7 +6685,9 @@ function onScrollAsync(a) {
             return; // 我方 phase=1 的调用
         captureRolls(a[0], "原版 ScrollAsync");
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("credit.js:onScrollAsync", e);
+    }
 }
 function onShowAsync(a) {
     try {
@@ -6511,7 +6720,9 @@ function onScriptLoad(a) {
         if (creditState.armed)
             abortCredit("剧本切换 '" + (readStr(a[1]) || "?") + "'");
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("credit.js:onScriptLoad", e);
+    }
 }
 // ============ 入口 ============
 export function setupCreditHooks() {
@@ -6574,7 +6785,9 @@ export function clearCreditCaches() {
             try {
                 invoke(cgmChain(A.ogc(deactivatedLabels[i]), "SetActive", 1), deactivatedLabels[i], [boolPtr(true)]);
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("credit.js:clearCreditCaches", e);
+            }
         }
         deactivatedLabels = [];
         restoreAncestors();
@@ -6592,7 +6805,7 @@ export function clearCreditCaches() {
 //   → 我们按 sprite 名替换 Image/SpriteRenderer 的 sprite (原版激活逻辑不动)。
 // 移植自 v3.js 16h (仅 sprite 替换, 无 shader 覆盖 — Windows Shaders 配置未支持);
 // 日志分级 (ARCHIVE 教训 2/3): hooks 就绪/注册数 = info, 机制证据 = dbg, 失败 = warn/error。
-import { A, dbg, directCall, error, findClassAcrossImages, getSystemClass, invoke, invokeOk, makeS, pngDims, readStr, warn } from "./utils.js";
+import { A, dbg, directCall, error, findClassAcrossImages, getSystemClass, invoke, invokeOk, makeS, pngDims, readStr, swallowed, warn } from "./utils.js";
 import { fileReadBytes, readJSONFile } from "./io.js";
 import { info } from "./log.js";
 var cutInCls = null; // 解析好的类表
@@ -6801,7 +7014,9 @@ function ensureCutInCache(inst) {
             if (ggMi && !ggMi.isNull())
                 go = invoke(ggMi, inst, []);
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("cutin.js:ensureCutInCache", e);
+        }
         if (go && !go.isNull()) {
             var gicMi = A.cgm(cutInCls.gameObject, Memory.allocUtf8String("GetComponentsInChildren"), 2);
             var getImgSprMi = A.cgm(cutInCls.image, Memory.allocUtf8String("get_sprite"), 0);
@@ -6883,7 +7098,9 @@ function getOrCreateCutInSprite(reg, vanillaName, vanillaSpr) {
                             rh = rp.add(12).readFloat();
                         }
                     }
-                    catch (e2) { }
+                    catch (e2) {
+                        swallowed("cutin.js:getOrCreateCutInSprite", e2);
+                    }
                 }
                 if (pivMi && !pivMi.isNull() && rw > 0.001 && rh > 0.001) {
                     try {
@@ -6896,7 +7113,9 @@ function getOrCreateCutInSprite(reg, vanillaName, vanillaSpr) {
                             }
                         }
                     }
-                    catch (e4) { }
+                    catch (e4) {
+                        swallowed("cutin.js:getOrCreateCutInSprite#2", e4);
+                    }
                 }
                 // 归一化守卫: 缓冲垃圾或 rect 无效 → 回落 0.5 (蓝本 rect 无效时的同款回落)
                 if (!(px >= 0 && px <= 1))
@@ -6904,7 +7123,9 @@ function getOrCreateCutInSprite(reg, vanillaName, vanillaSpr) {
                 if (!(py >= 0 && py <= 1))
                     py = 0.5;
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("cutin.js:getOrCreateCutInSprite#3", e);
+            }
         }
         dbg("[v3] CutIn Sprite.Create '" + vanillaName + "' pivot=(" + px.toFixed(3) + "," + py.toFixed(3) + ") ppu=" + ppu + " rect=" + rw.toFixed(1) + "x" + rh.toFixed(1) + " tex=" + ent.w + "x" + ent.h);
         cutInData.spriteCache[cacheKey] = makeModSprite(ent.tex, ent.w, ent.h, px, py, ppu);
@@ -6933,7 +7154,9 @@ function dumpCutInShaders(cache) {
                         sdr = getObjName(sh) || "?";
                 }
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("cutin.js:dumpCutInShaders", e);
+            }
             out.push(i + "='" + (cache.rendererNames[i] || "(无名)") + "' shader=" + sdr);
         }
         dbg("[v3] CutIn 渲染器 shader: " + out.join(" | "));
@@ -6955,7 +7178,9 @@ function scheduleSpriteReDump(cache, reg, tag) {
                         if (getSprMi && !getSprMi.isNull())
                             sp = invoke(getSprMi, cache.renderers[i], []);
                     }
-                    catch (e) { }
+                    catch (e) {
+                        swallowed("cutin.js:scheduleSpriteReDump", e);
+                    }
                     names.push(i + "=" + (sp && !sp.isNull() ? (getObjName(sp) || "?") : "null"));
                 }
                 dbg("[v3] CutIn " + tag + " 后 sprite: " + names.join(" | "));
@@ -7244,7 +7469,9 @@ export function fileSync(fd) {
         if (io.fsync && fd >= 0)
             return io.fsync(fd);
     }
-    catch (e) { }
+    catch (e) {
+        iodbg("[io] fileSync err: " + e);
+    }
     return -1;
 }
 
@@ -7255,7 +7482,7 @@ export function fileSync(fd) {
 // @print/@toast/@choice 双语 (追加式 |#ID|) 共用同一套语言判定。
 // 2026-08-19: 试过 findSvc("LocalizationManager") + get_SelectedLocale 静默失败
 // (回退 zh-Hans), 该方案被 HandleLocaleChanged 跟踪取代。
-import { A, dbg, fieldOffset, findClassAcrossImages, invokeOk, readStr, wblog, warn } from "./utils.js";
+import { A, dbg, fieldOffset, findClassAcrossImages, invokeOk, readStr, swallowed, warn, wblog } from "./utils.js";
 var _locale = "zh-Hans";
 export function setCurrentLocale(l) { if (l)
     _locale = l; }
@@ -7292,7 +7519,9 @@ export function hookLocaleAccessors() {
                         if (ret && !ret.isNull())
                             setCurrentLocale(readStr(ret));
                     }
-                    catch (e) { }
+                    catch (e) {
+                        swallowed("locale.js:hookLocaleAccessors.onLeave", e);
+                    }
                 }
             });
             found.get = true;
@@ -7303,7 +7532,9 @@ export function hookLocaleAccessors() {
                 onEnter: function (a) { try {
                     setCurrentLocale(readStr(a[1]));
                 }
-                catch (e) { } }
+                catch (e) {
+                    swallowed("locale.js:hookLocaleAccessors.onEnter", e);
+                } }
             });
             found.set = true;
         }
@@ -7313,7 +7544,9 @@ export function hookLocaleAccessors() {
                 onEnter: function (a) { try {
                     setCurrentLocale(readStr(a[1]));
                 }
-                catch (e) { } }
+                catch (e) {
+                    swallowed("locale.js:hookLocaleAccessors.onEnter#2", e);
+                } }
             });
             found.sel = true;
         }
@@ -7407,7 +7640,9 @@ function defaultLogPath() {
                 return ps.slice(0, ps.length - 4).join("/") + "/modlog.txt";
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowedWarn("log.js:defaultLogPath", e);
+    } // 推导日志路径失败 = 日志系统降级, 必须可见
     return null;
 }
 export function initLog(path, noColor) {
@@ -7473,6 +7708,45 @@ export function logBanner(art) {
         if (_fd >= 0)
             writeString(_fd, ln + "\n");
     }
+}
+// ===== 被吞异常的留痕 (步骤 2.1, 2026-09-25 教训) =====
+// 那次排查最贵的一课不是某个 bug, 而是**诊断代码自己静默失败** (钩子被过滤 / 方法名写错 /
+// 函数在此版本不存在), "看不到输出" 被误读成 "游戏没抛异常", 白跑好几轮。
+// 所以: 任何 catch 都不许完全无痕。默认用 swallowed (DEBUG 级), 关键路径用 swallowedWarn (WARN 级)。
+// 节流: 每个 tag 只打前 3 条, 之后静默累计 (防每帧异常刷屏); 计数经 swallowedStats() 取。
+var _swallow = {};
+function _swallowLog(isWarn, tag, e) {
+    try {
+        var s = _swallow[tag] || (_swallow[tag] = { n: 0, shown: 0 });
+        s.n++;
+        var msg;
+        if (s.shown < 3) {
+            s.shown++;
+            msg = "catch: " + tag + " — " + (e && e.message ? e.message : e);
+        }
+        else if (s.shown === 3) {
+            s.shown++;
+            msg = "catch: " + tag + " — (同类后续静默, 见 swallowedStats)";
+        }
+        else
+            return;
+        if (isWarn)
+            warn(msg);
+        else
+            debug(msg);
+    }
+    catch (e2) { /* 日志自身绝不能抛 (否则 catch 里再炸一层) */ }
+}
+export function swallowed(tag, e) { _swallowLog(false, tag, e); }
+export function swallowedWarn(tag, e) { _swallowLog(true, tag, e); }
+export function swallowedStats() {
+    var out = [];
+    try {
+        for (var k in _swallow)
+            out.push(k + "=" + _swallow[k].n);
+    }
+    catch (e) { }
+    return out;
 }
 // ===== 崩溃前 flush =====
 // 进程将崩溃时 (SIGSEGV/SIGABRT 等) 追加一条尾部标记到文件。回调运行在异常上下文,
@@ -7599,7 +7873,7 @@ function installCrashHandlerFallback() {
 ✄
 // ============ 菜单域: 菜单文本 (含翻页, 回迁自 16h 版) + 剧本注册 + StartGame @goto 重定向 ============
 // 镜像 Windows AddModStartMenu (ModResourceLoader.cs) + HookStartGame
-import { A, dbg, findClassAcrossImages, findSvc, findUnityImg, gotoModifiedCls, invoke, invokeOk, makeLocalResourceProvider, makeNamedStringCtor, makeS, makeUnityObject, readStr } from "./utils.js";
+import { A, dbg, findClassAcrossImages, findSvc, findUnityImg, gotoModifiedCls, invoke, invokeOk, makeLocalResourceProvider, makeNamedStringCtor, makeS, makeUnityObject, readStr, swallowed } from "./utils.js";
 var modScriptPrefix = "ModLoader";
 var modMenuScript = "ModStart";
 // ============ 菜单文本 (镜像 Windows AddModStartMenu, 简化) ============
@@ -7734,7 +8008,9 @@ export function registerMenuText() {
             try {
                 boxed = A.vb(psCls, psMem);
             }
-            catch (e3) { }
+            catch (e3) {
+                swallowed("menu.js:registerMenuText", e3);
+            }
         }
         // LoadedResource ctor + AddHolder + AddLoadedResource
         var lrCtor = A.cgm(lrClass, Memory.allocUtf8String(".ctor"), 2);
@@ -7950,7 +8226,7 @@ export function hookStartGame() {
 //   get_UrlStreaming 默认 false → 走 videoLoader 加载 VideoClip → 无 provider 即失败,
 //   导致整个 goto 中止 (黑屏)。修法: 对 mod 视频强制 UrlStreaming=true (跳过 VideoClip),
 //   BuildStreamUrl 返回本地绝对路径, VideoPlayer 直接播放文件。
-import { A, dbg, findClassAcrossImages, makeS, readStr } from "./utils.js";
+import { A, dbg, findClassAcrossImages, makeS, readStr, swallowed } from "./utils.js";
 var modMovies = (typeof movieMap !== "undefined" && movieMap) ? movieMap : {};
 var pendingMovieName = null;
 var playingMovieName = null;
@@ -7990,7 +8266,9 @@ export function setupMovieHooks() {
                         if (isModMovie(nm))
                             playingMovieName = nm;
                     }
-                    catch (e) { }
+                    catch (e) {
+                        swallowed("movie.js:setupMovieHooks.onEnter", e);
+                    }
                 }
             });
         }
@@ -8003,10 +8281,14 @@ export function setupMovieHooks() {
                     if (isModMovie(nm))
                         pendingMovieName = nm;
                 }
-                catch (e) { }
+                catch (e) {
+                    swallowed("movie.js:setupMovieHooks.onEnter#2", e);
+                }
             }
         });
         // 流式判定: mod 视频强制 true (跳过 VideoClip 加载, 预加载不再失败)
+        // 注: 下面 onLeave 里 `ret.toInt32() === 1` 是**正确**写法 —— onLeave 拿到的是原始返回寄存器,
+        //     不是 il2cpp_runtime_invoke 的装箱对象 (三上下文见 ARCHITECTURE.md 7.4 / choice.js chBool 注释)。
         Interceptor.attach(urlMi.readPointer(), {
             onEnter: function () { this._self = this.context.x0; },
             onLeave: function (ret) {
@@ -8031,7 +8313,9 @@ export function setupMovieHooks() {
                     if (isModMovie(cur))
                         ret.replace(ptr(1));
                 }
-                catch (e) { }
+                catch (e) {
+                    swallowed("movie.js:setupMovieHooks.onLeave", e);
+                }
             }
         });
         // BuildStreamUrl: mod 视频 → 本地绝对路径 (VideoPlayer 认绝对路径)
@@ -8045,7 +8329,9 @@ export function setupMovieHooks() {
                         dbg("[v3] Movie URL -> " + p);
                     }
                 }
-                catch (e) { }
+                catch (e) {
+                    swallowed("movie.js:setupMovieHooks.onLeave#2", e);
+                }
             }
         });
         movieHooksReady = true;
@@ -8059,7 +8345,7 @@ export function setupMovieHooks() {
 ✄
 // ============ provider 管线注册 (镜像 Windows AddModLoader, inflated 泛型版) ============
 // 含: 剧本/本地化/voice/audio/背景 provider 注入; 立绘注册在 witchbook/characters.js
-import { A, dbg, findClassAcrossImages, findSvc, getGenericArgClass, invoke, invokeOk, makeLocalResourceProvider, makeS, populateConvertersDict, readStr, wblog, error, warn } from "./utils.js";
+import { A, dbg, error, findClassAcrossImages, findSvc, getGenericArgClass, invoke, invokeOk, makeLocalResourceProvider, makeS, populateConvertersDict, readStr, swallowed, warn, wblog } from "./utils.js";
 import { addCharacterProviders } from "./witchbook/characters.js";
 // 扫描 ResourceLoader.ProvisionSources (List<ProvisionSource>) 现有条目, 返回 {cnt, has, items}
 // ProvisionSource struct = { IResourceProvider Provider @+0; string PathPrefix @+8 } (16B)
@@ -8097,10 +8383,14 @@ function _scanProvisionSources(rl, prefix) {
                     }
                 }
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("providers.js:_scanProvisionSources", e);
+            }
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("providers.js:_scanProvisionSources#2", e);
+    }
     return out;
 }
 // 把 provision source 插入 ResourceLoader 的 ProvisionSources
@@ -8363,7 +8653,9 @@ function _reinjectAll() {
             }
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("providers.js:_reinjectAll", e);
+    }
     for (var mi = 0; mi < modList.length; mi++) {
         try {
             addModLoader(root, modList[mi].key);
@@ -8378,7 +8670,9 @@ function _reinjectAll() {
         try {
             afterCnt = _scanProvisionSources(scriptLoader, "").cnt;
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("providers.js:_reinjectAll#2", e);
+        }
         dbg("[v3] 重注入后 scriptLoader ProvisionSources: " + beforeCnt + " → " + afterCnt + " (addModLoader 错误 " + errors + ")");
     }
 }
@@ -8389,7 +8683,7 @@ export function setupLocaleReinjectHooks() {
 }
 
 ✄
-import { A, dbg, findClassAcrossImages, makeS, readStr, wblog } from "./utils.js";
+import { A, dbg, findClassAcrossImages, makeS, readStr, swallowed, wblog } from "./utils.js";
 var hooked = false;
 var cnt = { append: 0, fmt: 0, gto: 0, getText: 0, display: 0, tostr: 0 };
 function isWrapped(s) {
@@ -8634,7 +8928,9 @@ function onGetTextLeave(ret) {
         cnt.getText++;
         logStrip("get_Text", s, inner, cnt.getText);
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("scripttext.js:onGetTextLeave", e);
+    }
 }
 function onGetTextOrNullLeave(ret) {
     try {
@@ -8648,7 +8944,9 @@ function onGetTextOrNullLeave(ret) {
         cnt.gto++;
         logStrip("GetTextOrNull", s, inner, cnt.gto);
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("scripttext.js:onGetTextOrNullLeave", e);
+    }
 }
 function attachIf(mi, onEnter, onLeave) {
     if (!mi || mi.isNull())
@@ -8758,7 +9056,7 @@ export var allImgs = [];
 export var gotoModifiedCls = null;
 // 日志输出统一走 log.js: console 彩色 (ERROR红/WARN黄/INFO青/DEBUG灰) + 文件明文 modlog.txt
 // wblog=INFO 默认显示; dbg=DEBUG 归 MOD_DEBUG (默认关)。导出名/签名不变 → 调用点零改动。
-import { debug as logDebug, info as logInfo, warn as logWarn, error as logError } from "./log.js";
+import { debug as logDebug, info as logInfo, warn as logWarn, error as logError, swallowed as logSwallowed, swallowedWarn as logSwallowedWarn, swallowedStats as logSwallowedStats } from "./log.js";
 // 日志开关: 全局 MOD_DEBUG (run_mod.sh 可注入), 默认关
 export var MOD_DEBUG = (typeof globalThis !== "undefined" && globalThis.MOD_DEBUG) ? true : false;
 export function dbg() { if (MOD_DEBUG)
@@ -8766,6 +9064,10 @@ export function dbg() { if (MOD_DEBUG)
 export function wblog(msg) { logInfo("[WitchBook] " + msg); }
 export function warn() { logWarn.apply(null, arguments); }
 export function error() { logError.apply(null, arguments); }
+// 被吞异常的留痕 (实现在 log.js; 见那里的说明): catch 里调用, 让"静默失败"不再完全无痕。
+export function swallowed(tag, e) { logSwallowed(tag, e); }
+export function swallowedWarn(tag, e) { logSwallowedWarn(tag, e); }
+export function swallowedStats() { return logSwallowedStats(); }
 // setter (ES modules import 绑定只读, 赋值必须在模块内; entry.js 初始化时调用)
 export function setImageHandles(nvImg, csImg, gigaImg) { nv = nvImg; cs = csImg; giga = gigaImg; }
 export function setGotoModifiedCls(c) { gotoModifiedCls = c; }
@@ -8882,7 +9184,9 @@ export function invokeBool(mi, obj, args) {
         if (k.indexOf("Boolean") >= 0)
             return ret.add(0x10).readU8() === 1;
     }
-    catch (e) { }
+    catch (e) {
+        swallowedWarn("utils.js:invokeBool", e);
+    }
     return ret.readU8() === 1;
 }
 // 0 参构造器调用 (用户已证可行)
@@ -9050,17 +9354,57 @@ export function findNestedClass(parentCls, name) {
                 return nc;
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("utils.js:findNestedClass", e);
+    }
     return ptr(0);
 }
-// 字段偏移: 动态查 (含基类) + 回退
+// 字段偏移: 动态查 + 回退 (步骤 2.4 加了"回退体检")
+// 注意 A.gf = il2cpp_class_get_field_from_name, **不查基类** → 继承字段总是走 fallback, 这是常态,
+// 不能当异常报 (报了就是刷屏噪音)。真正的风险是: 游戏更新改了布局, 硬编码 fallback 失准 →
+// 静默读到错误偏移 (最坏是内存破坏)。所以体检的是"基类上该字段的真实偏移 vs 硬编码值"是否一致。
+var _foProbe = {};
+function fieldOffsetProbe(cls, name, fallback) {
+    try {
+        if (!A.cgp)
+            return;
+        var up = cls;
+        for (var d = 0; d < 8 && up && !up.isNull(); d++) {
+            up = A.cgp(up);
+            if (!up || up.isNull())
+                break;
+            var f = A.gf(up, Memory.allocUtf8String(name));
+            if (f && !f.isNull()) {
+                var real = A.fo(f);
+                if (real !== fallback) {
+                    swallowedWarn("fieldOffset:" + name, "硬编码 0x" + fallback.toString(16) +
+                        " 与基类实际 0x" + real.toString(16) + " 不符 — 游戏可能更新了布局, 请核对 docs/OFFSETS.md");
+                }
+                return;
+            }
+        }
+    }
+    catch (e) {
+        swallowed("utils.js:fieldOffsetProbe", e);
+    }
+}
 export function fieldOffset(cls, name, fallback) {
     try {
         var f = A.gf(cls, Memory.allocUtf8String(name));
         if (f && !f.isNull())
             return A.fo(f);
+        if (fallback !== undefined) { // 走回退 → 每个 (类,字段) 只体检一次
+            var c = ptr(cls).toInt32();
+            var per = _foProbe[c] || (_foProbe[c] = {});
+            if (per[name] === undefined) {
+                per[name] = 1;
+                fieldOffsetProbe(cls, name, fallback);
+            }
+        }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("utils.js:fieldOffset", e);
+    }
     return fallback;
 }
 // macOS IL2CPP 泛型共享守卫: WitchBookPageBase._itemIds 在 CluePage 实例化为 Graphic[]、
@@ -9224,7 +9568,9 @@ export function findAllObjectOfType(cls) {
                 if (mia && !mia.isNull() && mia.readPointer() && !mia.readPointer().isNull())
                     arr = invoke(mia, ptr(0), [typeObj]);
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("utils.js:findAllObjectOfType", e);
+            }
         }
         if (!arr || arr.isNull())
             return [];
@@ -9275,6 +9621,12 @@ export function findAllObjectOfTypeAll(cls) {
 }
 // List<T> 里是否已有 id。List 布局: _items(T[])@+0x10, _size(int)@+0x18, _version@+0x1C
 // 数组元素在 arr+0x20 (SZARRAY 数据区)
+// 语义说明 (键存在性判定的三套方案, 别混用 —— 2026-09-25):
+//   ① 本函数: List 元素按**值**比 id 字符串 —— 用于 List<string>/List<VersionedItem> 这类"值即身份"的容器 ✓
+//   ② session.js 的 dictHasIdVer / dictFindKeyInstance: Dictionary<IdVersionPair,…> **按实例**匹配
+//      (游戏侧哈希按对象身份; 详见那里的长注释) —— 图鉴页面字典必须用这套
+//   ③ textures.js 的 dictContainsKey: string 键的自扫比对 (值语义) —— 用于纹理注册表
+//   优先用游戏自己的 ContainsKey; 必须自扫时才选 ①②③ 中语义正确的那一个。
 export function listContainsId(list, id, idOff) {
     try {
         var cnt = list.add(0x18).readS32(), items = list.add(0x10).readPointer();
@@ -9286,7 +9638,9 @@ export function listContainsId(list, id, idOff) {
                 return true;
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("utils.js:listContainsId", e);
+    }
     return false;
 }
 // 找 UnityEngine.CoreModule image
@@ -9311,7 +9665,9 @@ export function makeUnityObject(cls) {
         var mpFn = new NativeFunction(ctorMi.readPointer(), 'void', ['pointer']);
         mpFn(o);
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("utils.js:makeUnityObject", e);
+    }
     return o;
 }
 export function makeNullStr(str) {
@@ -9374,7 +9730,7 @@ export function makeLocalResourceProvider(root) {
 ✄
 // ============ WitchBook 角色域: 立绘 provider 注册 + CharacterData/AuthorData 注入 + Profile 姓名覆写 ============
 // 镜像 Windows AddRichCharacter/AddSimpleCharacter + TryInjectCharacterData + TryInjectAuthorData + ProfilePageRefreshContent_Patch
-import { A, dbg, fieldOffset, findClassAcrossImages, findFirstObjectOfType, findSvc, invoke, invokeBool, invokeOk, listContainsId, makeLocalResourceProvider, makeS, populateConvertersDict, readStr, wblog, error, warn } from "../utils.js";
+import { A, dbg, error, fieldOffset, findClassAcrossImages, findFirstObjectOfType, findSvc, invoke, invokeBool, invokeOk, listContainsId, makeLocalResourceProvider, makeS, populateConvertersDict, readStr, swallowed, swallowedWarn, warn, wblog } from "../utils.js";
 import { wbCls, wbCurrentMod, wbData } from "./state.js";
 import { buildLocalizedTextArray, localeValue, pickLocaleText, resolveLocale, unionLocaleKeys } from "./data.js";
 import { getCurrentLocale, syncLocaleFromEngine } from "../locale.js";
@@ -9399,7 +9755,9 @@ function stealListStringClass(metaMap) {
             return A.ogc(pt);
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("witchbook/characters.js:stealListStringClass", e);
+    }
     return ptr(0);
 }
 // 立绘 provider: ① providersMap.Add(prefix, LRP(Texture2D)) ② CharacterManagerExtended 注册 ActorMetadata
@@ -9458,7 +9816,9 @@ export function addCharacterProviders(root, prefix) {
                     break;
                 }
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("witchbook/characters.js:texFn", e);
+            }
         }
         if (!cfg || cfg.isNull()) {
             dbg("[v3] CharacterManager.Configuration 未找到 (get_MetadataMap)");
@@ -9699,7 +10059,9 @@ export function hookProfileName() {
                     try {
                         syncLocaleFromEngine();
                     }
-                    catch (e) { } // 兜底: 主动查一次 LocalizationManager (启动即目标语言)
+                    catch (e) {
+                        swallowedWarn("witchbook/characters.js:hookProfileName.onLeave", e);
+                    } // 兜底: 主动查一次 LocalizationManager (启动即目标语言)
                     var loc = getCurrentLocale(); // 跟随当前语言 (ja → AsaChiri/IrisuM 等)
                     var tpl = buildAuthorTemplate(cc, loc);
                     if (!tpl)
@@ -9709,7 +10071,9 @@ export function hookProfileName() {
                     if (tpl)
                         invokeOk(setTxt, label, [makeS(tpl)]);
                 }
-                catch (e) { }
+                catch (e) {
+                    swallowedWarn("witchbook/characters.js:hookProfileName.onLeave#2", e);
+                }
             }
         });
         wblog("ProfilePage 姓名覆写 hook 就绪");
@@ -9816,7 +10180,7 @@ export function injectAuthorData() {
 
 ✄
 // ============ WitchBook 数据域: 分类表 / 数据加载 / 版本项构建 / 本地化工具 ============
-import { A, dbg, fieldOffset, findClassAcrossImages, getGenericArgClass, invokeOk, makeS, wblog, error, warn } from "../utils.js";
+import { A, dbg, error, fieldOffset, findClassAcrossImages, getGenericArgClass, invokeOk, makeS, swallowed, warn, wblog } from "../utils.js";
 import { fileExists, readJSONFile } from "../io.js";
 import { setWbReady, wbData, wbCurrentMod, wbReady, wbCls } from "./state.js";
 import { registerLocalizedDict } from "./pages.js";
@@ -9938,14 +10302,18 @@ export function loadWitchBookData() {
                         if (fileExists(tp))
                             rec.path = tp;
                     }
-                    catch (e) { }
+                    catch (e) {
+                        swallowed("witchbook/data.js:loadWitchBookData", e);
+                    }
                     if (!rec.path) {
                         try {
                             var tp2 = texDir + "/" + grp.Id + ".jpg";
                             if (fileExists(tp2))
                                 rec.path = tp2;
                         }
-                        catch (e) { }
+                        catch (e) {
+                            swallowed("witchbook/data.js:loadWitchBookData#2", e);
+                        }
                     }
                     if (rec.path)
                         wbData.texPaths[grp.Id] = rec.path;
@@ -10152,7 +10520,7 @@ export function injectVersions(list, addMi, vItemCls, cat, id, rec, page) {
 //   字典已有的键实例。本模块只保留"缺了就补"的那一条主干 (补时同样复用键实例, 所以补得上)。
 // 顺带记录的第二个坑: .NET Dictionary 的 Remove 只把 Entry.hashCode 置 -1, **键的指针留在数组里**
 //   → 只看键会把这些"已删除残留"当成存在 (dictHasIdVer 已按 hashCode >= 0 判定存活)。
-import { A, dbg, fieldOffset, findAllObjectOfType, findClassAcrossImages, getGenericArgClass, invokeBool, readStr, wblog, warn, error } from "../utils.js";
+import { A, dbg, error, fieldOffset, findAllObjectOfType, findClassAcrossImages, getGenericArgClass, invokeBool, readStr, swallowed, swallowedWarn, warn, wblog } from "../utils.js";
 import { wbCls, wbData } from "./state.js";
 import { isCurrentModItem, makeIdVersionPair, wbCats } from "./data.js";
 import { dictHasIdVer, readDataItemsIndex, writeLocalizedDictEntry } from "./session.js";
@@ -10176,7 +10544,9 @@ function pageSpecs() {
             out.push({ cat: MAP_SPEC, key: "map", pageCls: wbCls.mapPage, locOff: MAP_SPEC.locOff, dataCls: wbCls.mapData, mapOnly: true });
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("witchbook/dictheal.js:pageSpecs", e);
+    }
     return out;
 }
 // 从分类的 Data 资产取 (id, ver) 的 item; 版本对不上时退回该 id 的第一条并告警 (数据不一致)
@@ -10233,7 +10603,9 @@ export function healDictKey(dict, spec, id, ver, ivp) {
                 dbg("[WitchBook] " + spec.key + " 补后核对 ContainsKey=" + invokeBool(ck, dict, [usedKey]));
             }
         }
-        catch (e4) { }
+        catch (e4) {
+            swallowedWarn("witchbook/dictheal.js:healDictKey", e4);
+        }
         return true;
     }
     catch (e) {
@@ -10242,7 +10614,11 @@ export function healDictKey(dict, spec, id, ver, ivp) {
     }
 }
 // 每次注入末尾: 把该页 `_state` 里"将要渲染的键"逐个核对, 缺就补 (mod 条目用 mod 文本, 原版从 Data 重建)。
-// 渲染门槛就是 _state, 所以这层足够覆盖"游戏接下来会查的键"; 也是本轮 KNF 的正式兜底。
+// **真相源必须是页面自己的 `_state._list`, 不是我们的 wbData.states** —— 2026-09-28 实测抓到的分叉:
+//   Twilight 的 Main.nani 有 `@update "Hiro" Category:"Profile" Version:0`, 而 'Hiro' 被 data.js 的
+//   "首个 mod 优先"判给了先加载的 mod (Gapless) → 我们按规矩忽略这条 @update (它"不是当前 mod 的条目"),
+//   但**游戏照旧把它写进 _state**。只信 wbData.states 就永远不 heal 它 → 字典缺这个键,
+//   而 `_state` 里它一直在 (哨兵连续 5 轮报 FAIL)。与 7.10 同源: 判定要问游戏, 不要问我们自己的记录。
 export function healStateKeys(page, cat) {
     try {
         var spec = null, specs = pageSpecs();
@@ -10256,11 +10632,40 @@ export function healStateKeys(page, cat) {
         var dict = page.add(fieldOffset(spec.pageCls, "_localizedTextData", spec.locOff)).readPointer();
         if (dict.isNull())
             return 0;
+        var n = 0, done = {};
+        // ① 页面真实 _state._list (含游戏自己写进去的、非本 mod 的键)
+        try {
+            var st = page.add(fieldOffset(spec.pageCls, "_state", 0x48)).readPointer();
+            if (!st.isNull()) {
+                var lst = st.add(fieldOffset(wbCls.versionedState, "_list", 0x10)).readPointer();
+                if (!lst.isNull()) {
+                    var cnt = lst.add(0x18).readS32(), arr = lst.add(0x10).readPointer();
+                    if (!arr.isNull() && cnt > 0 && cnt <= 5000) {
+                        for (var r = 0; r < cnt; r++) {
+                            var se = arr.add(0x20 + r * 8).readPointer();
+                            if (se.isNull())
+                                continue;
+                            var sid = readStr(se.add(0x10).readPointer()), sver = se.add(0x18).readS32();
+                            if (!sid)
+                                continue;
+                            done[sid + "@" + sver] = 1;
+                            if (healDictKey(dict, spec, sid, sver, null))
+                                n++;
+                        }
+                    }
+                }
+            }
+        }
+        catch (e1) {
+            swallowed("witchbook/dictheal.js:healStateKeys", e1);
+        }
+        // ② 我们的记录 (兜底: 游戏还没写进 _state, 或 _state 读失败)
         var stMap = (wbData.states || {})[cat.name] || {};
-        var n = 0;
         for (var id in stMap)
-            if (healDictKey(dict, spec, id, stMap[id] | 0, null))
-                n++;
+            if (!done[id + "@" + (stMap[id] | 0)]) {
+                if (healDictKey(dict, spec, id, stMap[id] | 0, null))
+                    n++;
+            }
         return n;
     }
     catch (e) {
@@ -10283,11 +10688,12 @@ export function healStateKeys(page, cat) {
 //   3. 显示: Interceptor.replace CluePage.RefreshPageContent / SetupItemButton —— mod 线索直接设
 //      _subjectLabel/_descriptionLabel/_thumbnail (绕开 _localizedTextData 的 KeyNotFoundException)。
 // 数据来源: 运行时读 <MOD_ROOT>/<modKey>/info.json 的 Clues 字段 + 扫 WitchBook/Clues/*.png。
-import { A, dbg, ensureItemIdsString, fieldOffset, findAllObjectOfType, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, wblog, error, warn } from "../utils.js";
+import { A, dbg, ensureItemIdsString, error, fieldOffset, findAllObjectOfType, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, swallowed, warn, wblog } from "../utils.js";
 import { initCatStateMaps, resetWbOverrides, setWbCls, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbPrevMod } from "./state.js";
 import { isCurrentModItem, loadWitchBookData, wbCatByIdx, wbCats } from "./data.js";
 import { clearAllWitchBookPages, clearBookViaVanilla, detectCurrentMod, findAllPages, hookClearState, rebuildAllPages } from "./session.js";
 import { injectPage, hookRefreshLocalized } from "./pages.js";
+import { runSelftest, setupSelftest } from "./selftest.js";
 import { registerTexturesInto } from "./textures.js";
 import { hookProfileName } from "./characters.js";
 export function resolveWitchBookClasses() {
@@ -10349,7 +10755,9 @@ export function setupWitchBookHooks() {
                 if (uvMi && !uvMi.isNull() && typeof NO_UPDATE_HOOK === 'undefined')
                     Interceptor.attach(uvMi.readPointer(), { onEnter: onWitchBookUpdate });
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("witchbook/index.js:setupWitchBookHooks", e);
+            }
         });
         // macOS 泛型共享根治: 游戏自身 WitchBookPageBase.UpdateVersion 里 _itemIds.Contains(id)
         // 在 Graphic[]/Canvas[] 上抛 MAE → 崩/黑屏 (原版 macOS bug, 加载器写入只是放大器)。
@@ -10379,11 +10787,15 @@ export function setupWitchBookHooks() {
                         Interceptor.attach(uvP, { onEnter: function (a) { try {
                                 ensureItemIdsString(a[0], A.ogc(a[0]));
                             }
-                            catch (e) { } } });
+                            catch (e) {
+                                swallowed("witchbook/index.js:setupWitchBookHooks.onEnter", e);
+                            } } });
                         wblog("page UpdateVersion hook (" + A.cgn(uvc).readCString() + " " + uvn + " 参) @" + uvP);
                     }
                 }
-                catch (e) { }
+                catch (e) {
+                    swallowed("witchbook/index.js:setupWitchBookHooks.onEnter#2", e);
+                }
             }
         }
         catch (e) {
@@ -10394,6 +10806,7 @@ export function setupWitchBookHooks() {
         // @clearBook (ClearWitchBook 命令) → ClearState: 清 wbData.states + 复位面板
         // 修: 剧本内 @clearBook 后自定义证物无法清除 (applyStates 复活) + 上方面板冻结残留
         hookClearState();
+        setupSelftest(); // MOD_SELFTEST=1 时: 挂 KNF 计数 (平时不挂)
         // RefreshPageContent onEnter: 重新预填 _localizedTextData
         // 修 InitializePages→LoadDataAsync 异步重建 map 时清掉注入导致 KeyNotFoundException
         hookRefreshLocalized();
@@ -10407,7 +10820,9 @@ export function setupWitchBookHooks() {
                             tryInjectWitchBook(); // 内部处理 mod 切换清理 (状态+面板) + 注入
                         } });
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("witchbook/index.js:setupWitchBookHooks.onEnter#3", e);
+            }
         });
         // @spawn "Clue" → SpawnableClue.SetSpawnParameters 后注册纹理 (spawn 可能早于图鉴打开)
         try {
@@ -10423,12 +10838,16 @@ export function setupWitchBookHooks() {
                                 registerTexturesInto(null); // 用全局 AddressablesManager
                             }
                         }
-                        catch (e) { }
+                        catch (e) {
+                            swallowed("witchbook/index.js:setupWitchBookHooks.onLeave", e);
+                        }
                     }
                 });
             }
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("witchbook/index.js:setupWitchBookHooks.onLeave#2", e);
+        }
         // 剧本加载 → 识别当前 mod (匹配 Enter 路径), 用于按 mod 注入线索
         try {
             var slCls2 = findClassAcrossImages("Naninovel", "ScriptLoader");
@@ -10439,12 +10858,16 @@ export function setupWitchBookHooks() {
                             try {
                                 detectCurrentMod(readStr(a[1]));
                             }
-                            catch (e) { }
+                            catch (e) {
+                                swallowed("witchbook/index.js:setupWitchBookHooks.onEnter#4", e);
+                            }
                         } });
                 }
             }
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("witchbook/index.js:setupWitchBookHooks.onEnter#5", e);
+        }
         wblog("hooks 就绪");
     }
     catch (e) {
@@ -10482,6 +10905,7 @@ export function tryInjectWitchBook() {
         var pages2 = findAllPages();
         if (pages2.length)
             registerTexturesInto(pages2[0].add(fieldOffset(A.ogc(pages2[0]), "_addressableAssetLoader", 0x50)).readPointer());
+        runSelftest("开图鉴/切mod");
         wblog("tryInjectWitchBook 完成");
     }
     catch (e) {
@@ -10522,7 +10946,9 @@ function dumpPageFieldTypes() {
                 }
                 dbg("  [页面] " + pcn + " " + parts.join(" "));
             }
-            catch (e3) { }
+            catch (e3) {
+                swallowed("witchbook/index.js:dumpPageFieldTypes", e3);
+            }
         }
     }
     catch (e) {
@@ -10563,7 +10989,9 @@ function isItemIdInPage(cat, id) {
             if (readStr(arr.add(0x20 + i * 8).readPointer()) === id)
                 return true;
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("witchbook/index.js:isItemIdInPage", e);
+    }
     return false;
 }
 // 合帧补注入: 只重注入脏分类 + 补一次纹理 (对比 tryInjectWitchBook: 全分类 + mod 切换处理)
@@ -10581,6 +11009,7 @@ export function flushWitchBookDirty(reason) {
         if (ps.length)
             registerTexturesInto(ps[0].add(fieldOffset(A.ogc(ps[0]), "_addressableAssetLoader", 0x50)).readPointer());
         dbg("[v3][WitchBook] 合帧补注入 (" + reason + "): " + names.join(","));
+        runSelftest("突发合帧:" + reason);
     }
     catch (e) {
         error("flushWitchBookDirty err: " + e);
@@ -10625,7 +11054,7 @@ export function onWitchBookUpdate(args) {
 
 ✄
 // ============ WitchBook 页面注入域: 注入 Page._loadedDataItemMap + _itemIds + _state + 本地化字典预填 ============
-import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, findAllObjectOfTypeAll, getGenericArgClass, getSystemClass, invokeBool, invokeOk, listContainsId, makeS, readStr, wblog, dbg, error, warn } from "../utils.js";
+import { A, dbg, ensureItemIdsString, error, fieldIsStringArray, fieldOffset, findAllObjectOfType, findAllObjectOfTypeAll, getGenericArgClass, getSystemClass, invokeBool, invokeOk, listContainsId, makeS, readStr, swallowed, swallowedWarn, warn, wblog } from "../utils.js";
 import { fileExists } from "../io.js";
 import { wbCls, wbData, wbOverrides } from "./state.js";
 import { currentModIds, fullLocaleTags, injectVersions, isCurrentModItem, localeValue, pickLocaleText, resolveLocale, wbCats } from "./data.js";
@@ -10671,7 +11100,9 @@ function findMapEntryPtr(mapList, id, off) {
                 return e;
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("witchbook/pages.js:findMapEntryPtr", e);
+    }
     return null;
 }
 // 覆写换血的幂等判定: 页面 map 里该 id 的那条, 是不是我们上一轮换血注入的那一个?
@@ -10790,7 +11221,9 @@ export function ensureStateEntriesDict(page, cat) {
                 wblog(cat.name + "._localizedTextData 由 " + prev + " 条降到 " + cnt + " 条 (游戏重建过)");
             _lastDictCnt[cat.name] = cnt;
         }
-        catch (e0) { }
+        catch (e0) {
+            swallowedWarn("witchbook/pages.js:ensureStateEntriesDict", e0);
+        }
         var stMap = wbData.states[cat.name] || {};
         if (!Object.keys(stMap).length)
             return 0;
@@ -10890,7 +11323,9 @@ export function applyStates(page, cat) {
             if (!stList2.isNull())
                 listN = stList2.add(0x18).readS32();
         }
-        catch (e2) { }
+        catch (e2) {
+            swallowedWarn("witchbook/pages.js:applyStates", e2);
+        }
         dbg(cat.name + "Page 状态应用 " + applied + " 条 (_state._list=" + listN + ")"); // B2 已结案: 降 dbg
     }
     catch (e) {
@@ -10915,10 +11350,14 @@ export function getFirstDictValue(dict) {
                 if (v && !v.isNull())
                     return v;
             }
-            catch (e) { }
+            catch (e) {
+                swallowedWarn("witchbook/pages.js:getFirstDictValue", e);
+            }
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowedWarn("witchbook/pages.js:getFirstDictValue#2", e);
+    }
     return null;
 }
 export function registerLocalizedDict(page, b) {
@@ -10939,20 +11378,28 @@ export function registerLocalizedDict(page, b) {
             try {
                 cnt = outer.add(0x20).readS32();
             }
-            catch (e) { }
+            catch (e) {
+                swallowedWarn("witchbook/pages.js:registerLocalizedDict", e);
+            }
             var ivpId = "?", ivpVer = -1;
             try {
                 ivpId = readStr(b.ivp.add(0x10).readPointer());
             }
-            catch (e) { }
+            catch (e) {
+                swallowedWarn("witchbook/pages.js:registerLocalizedDict#2", e);
+            }
             try {
                 ivpVer = b.ivp.add(0x18).readS32();
             }
-            catch (e) { }
+            catch (e) {
+                swallowedWarn("witchbook/pages.js:registerLocalizedDict#3", e);
+            }
             var outerClsName = A.cgn(outerCls).readCString();
             dbg("[WitchBook] " + cat.name + " registerDict '" + b.id + "' 进入: dict size=" + cnt + " cls=" + outerClsName + " ivp.Id='" + ivpId + "' ivp.Ver=" + ivpVer);
         }
-        catch (e) { }
+        catch (e) {
+            swallowedWarn("witchbook/pages.js:registerLocalizedDict#4", e);
+        }
         // 重要: 切语言后 RefreshPageContent 会重复触发, 但游戏只会重新读取 _localizedTextData[ivp][locale]
         // 如果只是 ContainsKey=true 就跳过, inner dict 里仍是旧 locale 集 (如只有 zh-Hans),
         // 切到日文后游戏查 inner[ja] → KeyNotFoundException.
@@ -11003,7 +11450,9 @@ export function registerLocalizedDict(page, b) {
                     if (!ifaceCls.isNull())
                         ltsCls = getGenericArgClass(ifaceCls, 1);
                 }
-                catch (e) { }
+                catch (e) {
+                    swallowedWarn("witchbook/pages.js:registerLocalizedDict#5", e);
+                }
             }
             var ltsCtor = (ltsCls && !ltsCls.isNull()) ? A.cgm(ltsCls, Memory.allocUtf8String(".ctor"), 2) : null;
             if (!ltsCls || ltsCls.isNull() || !ltsCtor || ltsCtor.isNull()) {
@@ -11077,7 +11526,9 @@ export function registerLocalizedDict(page, b) {
                         invokeOk(addNum, numDict, [b.ivp, makeS(vrec.numbering || "")]);
                 }
             }
-            catch (e) { }
+            catch (e) {
+                swallowedWarn("witchbook/pages.js:registerLocalizedDict#6", e);
+            }
         }
         dbg(cat.name + "._localizedTextData 预填 '" + b.id + "' v" + b.ver + " (" + innerName + ")");
     }
@@ -11146,9 +11597,304 @@ export function hookRefreshLocalized() {
 }
 
 ✄
+// ============ 自检 (仅在 MOD_SELFTEST=1 时装载/挂钩; 平时完全不介入) ============
+// 目的: 把"人工点图鉴 + 肉眼看日志"变成"跑一次就给出 PASS/FAIL 的断言"。
+// 背景 (2026-09-25): 那次"图鉴打不开"排查了十几轮, 每次都要人重启游戏、点图鉴、贴日志;
+//   而真正的判据(字典键能不能查到)其实可以机器判。这个模块就是把那个判据固化下来。
+// 断言项:
+//   A. **字典不变式**(最重要): 每页 × _state 里每个 (id, version) → 取字典里"游戏自己的键实例",
+//      调游戏的 ContainsKey → 必须 true。这正是"IdVersionPair 按实例匹配"那个坑的永久哨兵。
+//   B. KeyNotFoundException 计数必须为 0 —— ThrowHelper 钩子**只在自检态**挂。
+//   C. 页面统计 (map 条数 / _itemIds 唯一数 / _state 条数) —— 给人核对, 机器不判。
+// 输出: 每轮 `[SELFTEST] PASS/FAIL <名称>` + 收尾 `[SELFTEST] SUMMARY pass=N fail=M knf=K`
+// 宿主 `test-tools/regression.py` 就是 grep 这些行来判断成败。
+import { A, error, fieldOffset, findAllObjectOfTypeAll, findClassAcrossImages, invokeBool, readStr, swallowed, swallowedStats, warn, wblog } from "../utils.js";
+import { wbCls } from "./state.js";
+import { makeIdVersionPair, wbCats } from "./data.js";
+import { dictFindKeyInstance, dictHasIdVer } from "./session.js";
+var _stats = { pass: 0, fail: 0, note: 0, knf: 0, rounds: 0, hooked: false };
+// 扫描 `_loadedDataItemMap` 的每个活条目 → { id, ver, 游戏查字典时用的那个 IdVersionPair 实例 }
+// 为什么是它: 2026-09-25 的 KNF 根因是"字典里有键, 但游戏手里的实例不是它" —— 只有拿**这个实例**
+// 去问 ContainsKey 才能发现; 拿 id/ver 去问 (或拿字典自己的键实例) 永远为真, 查不出问题。
+function scanMapLookups(page, pageCls) {
+    var out = [];
+    try {
+        var ml = page.add(fieldOffset(pageCls, "_loadedDataItemMap", 0x88)).readPointer();
+        if (ml.isNull())
+            return out;
+        var ents = ml.add(0x18).readPointer();
+        if (ents.isNull())
+            return out;
+        var cap = ents.add(0x18).readS32();
+        if (cap < 0 || cap > 20000)
+            return out;
+        for (var i = 0; i < cap; i++) {
+            try {
+                var e = ents.add(0x20 + i * 24);
+                if (e.readS32() < 0)
+                    continue; // 死槽 (已 Remove)
+                var k = e.add(8).readPointer(), v = e.add(16).readPointer();
+                if (k.isNull() || v.isNull())
+                    continue;
+                // 只有值是 VersionedItem 时, +0x28 才是 `_idVersionPair`。别的页 (如 Map 的
+                // MapDataItem) 值类型不同 → 退回用条目自己的键 (那是游戏自己插进去的, 必然在字典里),
+                // 避免把"读错字段拿到的垃圾指针"报成 FAIL。
+                var lookup = k, vcn = "";
+                try {
+                    vcn = A.cgn(A.ogc(v)).readCString() || "";
+                }
+                catch (e4) { }
+                if (vcn.indexOf("VersionedItem") >= 0)
+                    lookup = v.add(0x28).readPointer();
+                out.push({ id: readStr(k.add(0x10).readPointer()), ver: k.add(0x18).readS32(), lookup: lookup });
+            }
+            catch (e2) { }
+        }
+    }
+    catch (e3) { }
+    return out;
+}
+export function selftestEnabled() {
+    try {
+        return typeof MOD_SELFTEST !== "undefined" && !!MOD_SELFTEST;
+    }
+    catch (e) {
+        return false;
+    }
+}
+// 负对照 (MOD_SELFTEST_BREAK=1): A1 故意改用"值相等但**实例不同**"的 IdVersionPair 去问字典。
+// 这正是 2026-09-25 那个坑的本质 (游戏按实例匹配, 我们却拿等价实例查) → 哨兵**必须**报 FAIL。
+// 用途: 证明哨兵不是"永远绿"的摆设 (回归脚本的 --self-proof 断言的就是这条)。
+export function selfProofEnabled() {
+    try {
+        return typeof MOD_SELFTEST_BREAK !== "undefined" && !!MOD_SELFTEST_BREAK;
+    }
+    catch (e) {
+        return false;
+    }
+}
+// ===== B. KNF 计数 (只统计, 不修; 自检态才挂钩) =====
+export function setupSelftest() {
+    if (!selftestEnabled() || _stats.hooked)
+        return 0;
+    _stats.hooked = true;
+    try {
+        var cls = findClassAcrossImages("System", "ThrowHelper") || findClassAcrossImages("System.Collections.Generic", "ThrowHelper");
+        var mi = cls && !cls.isNull() ? A.cgm(cls, Memory.allocUtf8String("GetKeyNotFoundException"), 1) : null;
+        if (mi && !mi.isNull()) {
+            Interceptor.attach(mi.readPointer(), {
+                onEnter: function (a) {
+                    try {
+                        // 静态方法 → 第一个形参在 a[0]; 两个槽位都试并按类名校验 (上次按实例方法读 a[1] 静默白跑一轮)
+                        var k = null;
+                        for (var i = 0; i < 2 && !k; i++) {
+                            var p = a[i];
+                            if (!p || p.isNull())
+                                continue;
+                            try {
+                                if (A.cgn(A.ogc(p)).readCString() === "IdVersionPair")
+                                    k = p;
+                            }
+                            catch (e1) {
+                                swallowed("witchbook/selftest.js:setupSelftest.onEnter", e1);
+                            }
+                        }
+                        _stats.knf++;
+                        if (k) {
+                            var id = readStr(k.add(0x10).readPointer()), ver = k.add(0x18).readS32();
+                            wblog("[SELFTEST] FAIL KeyNotFoundException: id='" + id + "' v" + ver);
+                        }
+                        else {
+                            wblog("[SELFTEST] FAIL KeyNotFoundException (参数非 IdVersionPair)");
+                        }
+                    }
+                    catch (e) {
+                        error("[SELFTEST] KNF 计数 err: " + e);
+                    }
+                }
+            });
+            wblog("[SELFTEST] 已启用 (MOD_SELFTEST=1) — KNF 计数 + 字典不变式断言");
+        }
+        else {
+            warn("[SELFTEST] ThrowHelper.GetKeyNotFoundException 未找到, KNF 计数不可用");
+        }
+        return 1;
+    }
+    catch (e) {
+        error("[SELFTEST] setup err: " + e);
+        return 0;
+    }
+}
+// ===== A + C. 每轮断言与统计 =====
+export function runSelftest(round) {
+    if (!selftestEnabled())
+        return;
+    try {
+        _stats.rounds++;
+        // 受管 4 分类 + Map (Map 的字典同为 IdVersionPair 键, 同样要查)
+        var specs = [];
+        var names = Object.keys(wbCats);
+        for (var i = 0; i < names.length; i++) {
+            var cat = wbCats[names[i]];
+            specs.push({ key: cat.name, pageCls: wbCls.pages[cat.name], locOff: cat.locOff });
+        }
+        if (wbCls.mapPage === undefined) {
+            try {
+                wbCls.mapPage = findClassAcrossImages("WitchTrials.Views", "MapPage");
+            }
+            catch (e0) {
+                wbCls.mapPage = null;
+            }
+        }
+        if (wbCls.mapPage && !wbCls.mapPage.isNull())
+            specs.push({ key: "map", pageCls: wbCls.mapPage, locOff: 0xC0 });
+        for (var s = 0; s < specs.length; s++) {
+            var sp = specs[s];
+            if (!sp.pageCls || sp.pageCls.isNull())
+                continue;
+            var pages = findAllObjectOfTypeAll(sp.pageCls);
+            if (!pages.length) {
+                wblog("[SELFTEST] FAIL " + sp.key + ": 页面实例不存在");
+                _stats.fail++;
+                continue;
+            }
+            try {
+                var page = pages[0];
+                var dict = page.add(fieldOffset(sp.pageCls, "_localizedTextData", sp.locOff)).readPointer();
+                if (dict.isNull()) {
+                    wblog("[SELFTEST] FAIL " + sp.key + ": _localizedTextData 为 null");
+                    _stats.fail++;
+                    continue;
+                }
+                var ck = A.cgm(A.ogc(dict), Memory.allocUtf8String("ContainsKey"), 1);
+                // —— A1. **渲染键的判据** (2026-09-25 那个坑的直接防线) ——
+                // 游戏查字典用的是 map 条目自己的 IdVersionPair 实例 (`VersionedItem._idVersionPair`@0x28),
+                // 不是"值相等的另一个实例"。所以这里必须拿**那个实例**去问 ContainsKey —— 只查
+                // "字典自己有没有这个 (id,ver)" 是查不出那次 bug 的 (字典里有, 但游戏手里的实例不在里面)。
+                var look = scanMapLookups(page, sp.pageCls);
+                var inMap = {}, mapN = look.length, badMap = 0;
+                var selfproof = selfProofEnabled(); // 负对照: 换等价实例去问
+                for (var li = 0; li < look.length; li++) {
+                    var L = look[li];
+                    if (L.id)
+                        inMap[L.id] = 1;
+                    var probe = L.lookup;
+                    if (selfproof) {
+                        try {
+                            probe = makeIdVersionPair(L.id, L.ver);
+                        }
+                        catch (e5) {
+                            probe = L.lookup;
+                        }
+                    }
+                    var ok = false;
+                    if (probe && !probe.isNull() && ck && !ck.isNull()) {
+                        try {
+                            ok = invokeBool(ck, dict, [probe]);
+                        }
+                        catch (e2) {
+                            swallowed("witchbook/selftest.js:runSelftest#2", e2);
+                        }
+                    }
+                    if (ok)
+                        _stats.pass++;
+                    else {
+                        _stats.fail++;
+                        badMap++;
+                        wblog("[SELFTEST] FAIL " + (selfproof ? "负对照 " : "") + sp.key + " 渲染键查不到: '" + L.id + "' v" + L.ver +
+                            (L.lookup && !L.lookup.isNull() ? " (map 条目的 ivp 实例不在字典里)" : " (map 条目 ivp=null)"));
+                    }
+                }
+                // —— A2. `_state` 里的键: 字典里得有活条目 ——
+                // 分级: 同时在 map 里 (会被渲染) → FAIL; 只在 state 里 (渲染不走它) → NOTE (记录, 不判)。
+                // 为什么分级: 游戏自己的 `@update` 会写入**非本 mod** 的键 (2026-09-28 实测: Twilight 的
+                // `@update "Hiro"` 被"首个 mod 优先"判给了别的 mod), 那种键渲染根本不碰 → 不算致命。
+                var stList = null;
+                try {
+                    var st = page.add(fieldOffset(sp.pageCls, "_state", 0x48)).readPointer();
+                    if (!st.isNull())
+                        stList = st.add(fieldOffset(wbCls.versionedState, "_list", 0x10)).readPointer();
+                }
+                catch (e1) {
+                    swallowed("witchbook/selftest.js:runSelftest", e1);
+                }
+                var stateN = 0, badKeys = 0, notes = 0;
+                if (stList && !stList.isNull()) {
+                    var sc = stList.add(0x18).readS32(), sa = stList.add(0x10).readPointer();
+                    if (sa.isNull() || sc < 0 || sc > 5000)
+                        sc = 0;
+                    for (var r = 0; r < sc; r++) {
+                        var se = sa.add(0x20 + r * 8).readPointer();
+                        if (se.isNull())
+                            continue;
+                        var id = readStr(se.add(0x10).readPointer()), ver = se.add(0x18).readS32();
+                        if (!id)
+                            continue;
+                        stateN++;
+                        if (dictHasIdVer(dict, id, ver)) {
+                            _stats.pass++;
+                            continue;
+                        }
+                        if (inMap[id]) {
+                            _stats.fail++;
+                            badKeys++;
+                            wblog("[SELFTEST] FAIL 字典缺键 " + sp.key + " '" + id + "' v" + ver + " (且在渲染集合里)");
+                        }
+                        else {
+                            _stats.note++;
+                            notes++;
+                            wblog("[SELFTEST] NOTE 状态有键但字典无 (不在渲染集合, 暂无害): " + sp.key + " '" + id + "' v" + ver);
+                        }
+                    }
+                }
+                // —— C. 统计 (不判) ——
+                var idsN = 0, idsUniq = 0;
+                try {
+                    var arr = page.add(fieldOffset(sp.pageCls, "_itemIds", 0x98)).readPointer();
+                    if (!arr.isNull()) {
+                        var len = arr.add(0x18).readS32(), seen = {};
+                        for (var q = 0; q < len && q < 5000; q++) {
+                            var str = readStr(arr.add(0x20 + q * 8).readPointer());
+                            if (!str)
+                                continue;
+                            idsN++;
+                            seen[str] = 1;
+                        }
+                        idsUniq = Object.keys(seen).length;
+                    }
+                }
+                catch (e3) {
+                    swallowed("witchbook/selftest.js:runSelftest#3", e3);
+                }
+                wblog("[SELFTEST] stats " + sp.key + ": map=" + mapN + " _itemIds=" + idsN + "(唯一 " + idsUniq + ") _state=" + stateN +
+                    (badMap ? " 渲染缺=" + badMap : "") + (badKeys ? " 缺键=" + badKeys : "") + (notes ? " 仅状态=" + notes : ""));
+            }
+            catch (e4) {
+                error("[SELFTEST] " + sp.key + " 断言 err: " + e4);
+                _stats.fail++;
+            }
+        }
+        wblog("[SELFTEST] SUMMARY round=" + _stats.rounds + " pass=" + _stats.pass + " fail=" + _stats.fail + " note=" + _stats.note + " knf=" + _stats.knf +
+            (round ? " (" + round + ")" : ""));
+        // 被吞掉的异常 (步骤 2.1): 自检态顺手报一次, 让"静默失败"在回归里也可见
+        try {
+            var sw = swallowedStats();
+            if (sw.length)
+                wblog("[SELFTEST] swallowed " + sw.join(" "));
+        }
+        catch (e5) {
+            swallowed("witchbook/selftest.js:runSelftest", e5);
+        }
+    }
+    catch (e) {
+        error("[SELFTEST] run err: " + e);
+    }
+}
+
+✄
 // ============ WitchBook 会话隔离域: mod 切换检测 / 整页重建 / 状态清理 / 面板默认值 ============
 // 镜像 Windows ModClueLoader + ModWitchBookPatch: mod 切换/回标题时从原版基座重建, 防残留继承
-import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, findFirstObjectOfType, findSvc, getGenericArgClass, getSystemClass, invoke, invokeOk, listContainsId, makeS, readStr, wblog, error, warn } from "../utils.js";
+import { A, ensureItemIdsString, error, fieldIsStringArray, fieldOffset, findAllObjectOfType, findFirstObjectOfType, findSvc, getGenericArgClass, getSystemClass, invoke, invokeOk, listContainsId, makeS, readStr, swallowed, swallowedWarn, warn, wblog } from "../utils.js";
 import { wbCats, currentModSet, localeValue, makeIdVersionPair, unionLocaleKeys } from "./data.js";
 import { initCatStateMaps, resetWbOverrides, setWbCurrentMod, setWbDefaultsCaptured, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbDefaultsCaptured, wbPageDefaults, wbVanillaMap } from "./state.js";
 import { getFirstDictValue } from "./pages.js";
@@ -11177,7 +11923,9 @@ export function detectCurrentMod(path) {
         if (wbCls && wbCls.pages)
             tryInjectWitchBook();
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("witchbook/session.js:detectCurrentMod", e);
+    }
 }
 export function resetWitchBookSession() {
     setWbCurrentMod(null);
@@ -11195,7 +11943,9 @@ export function resetWitchBookSession() {
             clearAllWitchBookPages();
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("witchbook/session.js:resetWitchBookSession", e);
+    }
     wblog("会话重置 (回标题)");
 }
 // ===== Override 处理: mod 定义的原版同 id 条目应覆盖原版显示 (镜像 Windows modXxxOverrideIds) =====
@@ -11290,7 +12040,9 @@ export function rebuildItemIdsFromMap(page, pageCls, mapList, vItemCls, idOff) {
             narr.add(0x20 + i * 8).writePointer(makeS(ids[i]));
         page.add(fieldOffset(pageCls, "_itemIds", 0x98)).writePointer(narr);
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("witchbook/session.js:rebuildItemIdsFromMap", e);
+    }
 }
 // 在字典的 entries 里找 (id, ver) 对应的**键实例** (IdVersionPair 指针)。
 // 含"已删除的残留": .NET Dictionary 的 Remove 只把 hashCode 置 -1, 键的指针仍留在数组里, 且那正是
@@ -11311,10 +12063,14 @@ export function dictFindKeyInstance(dict, id, ver) {
                 if (readStr(k.add(0x10).readPointer()) === id && k.add(0x18).readS32() === ver)
                     return k;
             }
-            catch (e2) { }
+            catch (e2) {
+                swallowedWarn("witchbook/session.js:dictFindKeyInstance", e2);
+            }
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowedWarn("witchbook/session.js:dictFindKeyInstance#2", e);
+    }
     return null;
 }
 // 字典是否已有 (id, version) 条目 (IdVersionPair: Id@0x10, Version@0x18)
@@ -11339,10 +12095,14 @@ export function dictHasIdVer(dict, id, ver) {
                 if (readStr(k.add(0x10).readPointer()) === id && k.add(0x18).readS32() === ver)
                     return true;
             }
-            catch (e2) { }
+            catch (e2) {
+                swallowedWarn("witchbook/session.js:dictHasIdVer", e2);
+            }
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowedWarn("witchbook/session.js:dictHasIdVer#2", e);
+    }
     return false;
 }
 // 用快照值新建 VersionedItem<TItem> 包装对象。
@@ -11402,7 +12162,9 @@ export function restorePageFromData(page, pageCls, cat) {
                 try {
                     okCls = (A.ogc(rc.item).toString() === expectItemCls.toString());
                 }
-                catch (e4) { }
+                catch (e4) {
+                    swallowedWarn("witchbook/session.js:restorePageFromData", e4);
+                }
                 if (!okCls) {
                     // A3: 悬空不要丢 —— 按 id 从 Data._items 把原版 item 取回来复用 (Data 才是权威来源,
                     // 且与页面同寿命)。版本号仍用快照里的值 (它是捕获时读出的整数, 不会悬空),
@@ -11414,7 +12176,9 @@ export function restorePageFromData(page, pageCls, cat) {
                     try {
                         dOk = !!dItem && !dItem.isNull() && A.ogc(dItem).toString() === expectItemCls.toString();
                     }
-                    catch (e6) { }
+                    catch (e6) {
+                        swallowedWarn("witchbook/session.js:restorePageFromData#2", e6);
+                    }
                     if (!dOk) {
                         bad++;
                         continue;
@@ -11432,7 +12196,9 @@ export function restorePageFromData(page, pageCls, cat) {
                     if (ki && !ki.isNull())
                         vi.add(fieldOffset(vItemCls, "_idVersionPair", 0x28)).writePointer(ki);
                 }
-                catch (e7) { }
+                catch (e7) {
+                    swallowedWarn("witchbook/session.js:restorePageFromData#3", e7);
+                }
             }
             if (vi && !vi.isNull() && addMi && !addMi.isNull() && invokeOk(addMi, mapList, [vi]).ok)
                 added++;
@@ -11460,7 +12226,9 @@ export function restorePageFromData(page, pageCls, cat) {
                 }
             }
         }
-        catch (e2) { }
+        catch (e2) {
+            swallowedWarn("witchbook/session.js:restorePageFromData#4", e2);
+        }
         wblog(cat.name + " 整页重建: " + added + " 条 (原版基座)");
     }
     catch (e) {
@@ -11483,7 +12251,9 @@ export function rebuildAllPages() {
                         continue;
                     restorePageFromData(pages[pi], pc, cat);
                 }
-                catch (e) { }
+                catch (e) {
+                    swallowedWarn("witchbook/session.js:rebuildAllPages", e);
+                }
             }
         }
     }
@@ -11610,7 +12380,9 @@ export function readLocalizedArray(arrPtr, off) {
             out[tag] = text;
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("witchbook/session.js:readLocalizedArray", e);
+    }
     return out;
 }
 // 从页面结构中移除指定 id 的条目 (mod 切换时清理旧 mod 数据; pageCls 区分各分类页面)
@@ -11635,7 +12407,9 @@ export function clearModItemsFromPage(page, pageCls, idSet) {
                     if (idSet[readStr(e.add(idOff).readPointer())])
                         idxs.push(i);
                 }
-                catch (e2) { }
+                catch (e2) {
+                    swallowedWarn("witchbook/session.js:clearModItemsFromPage", e2);
+                }
             }
             if (rmMi && !rmMi.isNull()) {
                 for (var r = idxs.length - 1; r >= 0; r--) {
@@ -11673,7 +12447,9 @@ export function clearModItemsFromPage(page, pageCls, idSet) {
                             try {
                                 kcls = A.ogc(k);
                             }
-                            catch (e3) { }
+                            catch (e3) {
+                                swallowedWarn("witchbook/session.js:clearModItemsFromPage#2", e3);
+                            }
                             if (!kcls || kcls.toString() !== idPairCls.toString()) {
                                 alien++;
                                 continue;
@@ -11683,7 +12459,9 @@ export function clearModItemsFromPage(page, pageCls, idSet) {
                         if (kid && idSet[kid])
                             toDel.push(k);
                     }
-                    catch (e2) { }
+                    catch (e2) {
+                        swallowedWarn("witchbook/session.js:clearModItemsFromPage#3", e2);
+                    }
                 }
                 if (alien)
                     warn("clearModItemsFromPage: " + alien + " 个非 IdVersionPair 字典键已跳过 (容器曾被污染?)");
@@ -11717,7 +12495,9 @@ export function clearModItemsFromPage(page, pageCls, idSet) {
             var curOff = fieldOffset(pageCls, "_currentItemId", 0xA0);
             page.add(curOff).writePointer(makeS(""));
         }
-        catch (e) { }
+        catch (e) {
+            swallowedWarn("witchbook/session.js:clearModItemsFromPage#4", e);
+        }
         if (removed > 0)
             wblog("清除旧 mod 条目 " + removed + " 条");
     }
@@ -11750,7 +12530,9 @@ export function removeStateEntries(page, pageCls, idSet) {
                 if (sid && idSet[sid])
                     sidxs.push(si);
             }
-            catch (e2) { }
+            catch (e2) {
+                swallowedWarn("witchbook/session.js:removeStateEntries", e2);
+            }
         }
         for (var sr = sidxs.length - 1; sr >= 0; sr--) {
             var sb = Memory.alloc(4);
@@ -11786,7 +12568,9 @@ export function clearPageState(page, keepSet) {
                 if (!id || (keepSet && !keepSet[id]))
                     idxs.push(i);
             }
-            catch (e2) { }
+            catch (e2) {
+                swallowedWarn("witchbook/session.js:clearPageState", e2);
+            }
         }
         for (var r = idxs.length - 1; r >= 0; r--) {
             var ib = Memory.alloc(4);
@@ -11838,7 +12622,9 @@ export function capturePageDefaults(page) {
                     d.labels[fn] = readStr(t) || "";
                 }
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("witchbook/session.js:capturePageDefaults", e);
+            }
         });
         // 默认纹理不在这里缓存: _defaultTexture 由 WitchBookItemThumbnail.Awake/Reset 设定后不再改动,
         // 恢复时从活着的缩略图对象上现读即可 (缓存裸指针在页面重建后会悬空 → C1)
@@ -11878,7 +12664,9 @@ export function restorePageDefaults(page) {
                 if (mi && !mi.isNull())
                     invokeOk(mi, tmp, [makeS(d.labels[fn])]);
             }
-            catch (e) { }
+            catch (e) {
+                swallowedWarn("witchbook/session.js:restorePageDefaults", e);
+            }
         });
         try {
             var thf = A.gf(pageCls, Memory.allocUtf8String("_thumbnail"));
@@ -11900,11 +12688,15 @@ export function restorePageDefaults(page) {
                 }
             }
         }
-        catch (e) { }
+        catch (e) {
+            swallowedWarn("witchbook/session.js:restorePageDefaults#2", e);
+        }
         try {
             page.add(0xA0).writePointer(makeS(""));
         }
-        catch (e) { } // _currentItemId 不恢复, 始终清空
+        catch (e) {
+            swallowedWarn("witchbook/session.js:restorePageDefaults#3", e);
+        } // _currentItemId 不恢复, 始终清空
         wblog("已恢复 " + clsName + " 面板默认值");
     }
     catch (e) {
@@ -11931,7 +12723,9 @@ export function findAllPages() {
             try {
                 capturePageDefaults(out[k]);
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("witchbook/session.js:findAllPages", e);
+            }
         }
         setWbDefaultsCaptured(true);
     }
@@ -11957,7 +12751,9 @@ export function findAllPages() {
                 try {
                     cvi = getGenericArgClass(A.ogc(mlist), 0);
                 }
-                catch (e5) { }
+                catch (e5) {
+                    swallowed("witchbook/session.js:findAllPages#2", e5);
+                }
                 var cIdOff = (cvi && !cvi.isNull()) ? fieldOffset(cvi, "_id", 0x10) : 0x10;
                 var cVerOff = (cvi && !cvi.isNull()) ? fieldOffset(cvi, "_version", 0x18) : 0x18;
                 var cItemOff = (cvi && !cvi.isNull()) ? fieldOffset(cvi, "_item", 0x20) : 0x20;
@@ -11975,7 +12771,9 @@ export function findAllPages() {
                 wblog(ccat.name + " 捕获原版基座 " + recs.length + " 条");
             }
         }
-        catch (e) { }
+        catch (e) {
+            swallowed("witchbook/session.js:findAllPages#3", e);
+        }
     }
     return out;
 }
@@ -12001,7 +12799,9 @@ export function clearAllWitchBookPages() {
                 clearPageState(pages[i], keep);
                 restorePageDefaults(pages[i]);
             }
-            catch (e) { }
+            catch (e) {
+                swallowedWarn("witchbook/session.js:clearAllWitchBookPages", e);
+            }
         }
     }
     catch (e) {
@@ -12014,7 +12814,9 @@ export function findWitchBookUi() {
         if (s)
             return s;
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("witchbook/session.js:findWitchBookUi", e);
+    }
     try {
         if (wbCls && wbCls.witchBookUi && !wbCls.witchBookUi.isNull()) {
             var arr = findAllObjectOfType(wbCls.witchBookUi);
@@ -12022,7 +12824,9 @@ export function findWitchBookUi() {
                 return arr[0];
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("witchbook/session.js:findWitchBookUi#2", e);
+    }
     return null;
 }
 // 镜像 @clearBook (ClearWitchBook 命令): 调 WitchBookUi.ClearState(category) 全 5 分类
@@ -12083,7 +12887,9 @@ export function hookClearState() {
                             continue;
                         restorePageDefaults(pages[i]);
                     }
-                    catch (e2) { }
+                    catch (e2) {
+                        swallowed("witchbook/session.js:handle", e2);
+                    }
                 }
                 wblog("ClearState 挂钩: '" + catName + "' 状态已清 + 面板复位");
             }
@@ -12104,11 +12910,15 @@ export function hookClearState() {
                     onLeave: function () { try {
                         handle(this._cat);
                     }
-                    catch (e) { } }
+                    catch (e) {
+                        swallowed("witchbook/session.js:handle.onLeave", e);
+                    } }
                 });
                 wblog("hook " + A.cgn(cls).readCString() + ".ClearState(category)");
             }
-            catch (e) { }
+            catch (e) {
+                swallowed("witchbook/session.js:handle.onLeave#2", e);
+            }
         });
     }
     catch (e) {
@@ -12169,7 +12979,7 @@ export function resetWbOverrides() {
 ✄
 // ============ WitchBook 纹理域: PNG → Texture2D → AddressablesManager._loadedAssets ============
 // 缩略图 + @spawn ClueItem 共用; 镜像 Windows ModTextureHelper
-import { A, fieldOffset, findAllObjectOfType, findClassAcrossImages, getSystemClass, invokeOk, makeS, nv, readStr, wblog, dbg, error, warn } from "../utils.js";
+import { A, dbg, error, fieldOffset, findAllObjectOfType, findClassAcrossImages, getSystemClass, invokeOk, makeS, nv, readStr, swallowed, swallowedWarn, warn, wblog } from "../utils.js";
 import { fileReadBytes } from "../io.js";
 import { wbCls, wbData } from "./state.js";
 import { currentModIds, wbCats } from "./data.js";
@@ -12235,7 +13045,9 @@ export function findAddressablesManager() {
             }
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("witchbook/textures.js:findAddressablesManager", e);
+    }
     // 2) 全局服务 (模糊匹配 Addressables 相关类名)
     try {
         var el = A.cfn(nv, "Naninovel", "Engine");
@@ -12251,7 +13063,9 @@ export function findAddressablesManager() {
                 return ep;
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowed("witchbook/textures.js:findAddressablesManager#2", e);
+    }
     return null;
 }
 export function registerTexturesInto(managerPtr) {
@@ -12315,6 +13129,10 @@ export function registerTexturesInto(managerPtr) {
 export function dictContainsKey(dict, key) {
     try {
         // .NET Dictionary: _entries(+0x18, Entry[]), _count(+0x20); Entry = hashCode(4)+next(4)+key(8)+value(8)
+        // 语义说明 (2026-09-25 教训): 这是**按值比较**的存在性判定 (自扫 entries, 比字符串),
+        // 与 session.js 的 dictHasIdVer (IdVersionPair 按**实例**匹配) 不是一回事 —— 这里键是 string,
+        // 值语义成立。唯一要注意的是删过的槽位: Remove() 把 hashCode 置 -1 但保留 key 指针,
+        // 所以必须跳过 hashCode<0 的死槽, 否则"删了却报存在"。
         var ents = dict.add(0x18).readPointer();
         if (ents.isNull())
             return false;
@@ -12322,13 +13140,19 @@ export function dictContainsKey(dict, key) {
         for (var i = 0; i < cnt; i++) {
             try {
                 var e = ents.add(0x20 + i * 24);
+                if (e.readS32() < 0)
+                    continue; // 死槽 (已 Remove) — 不算存在
                 var k = e.add(8).readPointer();
                 if (!k.isNull() && readStr(k) === key)
                     return true;
             }
-            catch (e2) { }
+            catch (e2) {
+                swallowedWarn("witchbook/textures.js:dictContainsKey", e2);
+            }
         }
     }
-    catch (e) { }
+    catch (e) {
+        swallowedWarn("witchbook/textures.js:dictContainsKey#2", e);
+    }
     return false;
 }

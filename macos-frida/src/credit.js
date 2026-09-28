@@ -23,7 +23,7 @@
 //     懒加载工厂自建 + GCI 子树扫描 + 全程分阶段日志
 // 原则 (项目惯例): 只做加法+自清理, 不改任何游戏现有对象; 全程 try/catch 不崩。
 //   错误路径一律写安全默认时长 → nani @Wait 永不悬挂 (R4)。
-import { A, dbg, directCall, findClassAcrossImages, findSvc, findAllObjectOfType, getSystemClass, invoke, invokeOk, makeS, nv, pngDims, readStr, warn, error } from "./utils.js";
+import { A, dbg, directCall, error, findAllObjectOfType, findClassAcrossImages, findSvc, getSystemClass, invoke, invokeOk, makeS, nv, pngDims, readStr, swallowed, warn } from "./utils.js";
 import { getIO } from "./io.js";   // run-24-2: 写文件走 io.js 绑定 (Module.findExportByName 在 bundle 内不可用, io.js 的 findGlobalExportByName 实证可用)
 import { readJSONFile, openForWrite, writeString, fileSync, fileReadBytes } from "./io.js";
 import { info } from "./log.js";
@@ -92,10 +92,10 @@ function zeroCT() { var p = Memory.alloc(16); p.writeU64(0); p.add(8).writeU64(0
 // il2cpp_field_get_type / il2cpp_method_get_param — 导出在 GameAssembly.dylib (entry.js E 表同源)。
 // run-6 实证 findExportByName(null) 只搜主程序 → 绑定失败 → 一律用 A.fgt/A.mgp (entry.js 已绑) + dylib 兜底
 var fgt = null, mgp = null;
-try { fgt = A.fgt; } catch (e) {}
-try { mgp = A.mgp; } catch (e) {}
+try { fgt = A.fgt; } catch (e) { swallowed("credit.js:zeroCT", e); }
+try { mgp = A.mgp; } catch (e) { swallowed("credit.js:zeroCT#2", e); }
 // run-12 修复: A.gn 从未在 entry.js 绑定 (只有 A.cgp=class_get_parent) — cgmChain 继承链回退必崩
-try { if (!A.gn && A.cgp) A.gn = A.cgp; } catch (e) {}
+try { if (!A.gn && A.cgp) A.gn = A.cgp; } catch (e) { swallowed("credit.js:zeroCT#3", e); }
 if (!fgt || !mgp) {
     try {
         var gaMod = Process.findModuleByName("GameAssembly.dylib");
@@ -103,7 +103,7 @@ if (!fgt || !mgp) {
             if (!fgt) { var fE = gaMod.findExportByName("il2cpp_field_get_type"); if (fE) fgt = new NativeFunction(fE, 'pointer', ['pointer']); }
             if (!mgp) { var mE = gaMod.findExportByName("il2cpp_method_get_param"); if (mE) mgp = new NativeFunction(mE, 'pointer', ['pointer', 'uint32']); }
         }
-    } catch (e) {}
+    } catch (e) { swallowed("credit.js:zeroCT#4", e); }
 }
 
 // ============ 类解析 ============
@@ -170,7 +170,7 @@ function getFontName(tmp) {
             var nm = invokeOk(cgmChain(A.ogc(f.ret), "get_name", 0), f.ret, []);
             if (nm.ok && nm.ret && !nm.ret.isNull()) return readStr(nm.ret) || "?";
         }
-    } catch (e) {}
+    } catch (e) { swallowed("credit.js:getFontName", e); }
     return "?";
 }
 // 枚举 staff content 下全部 TMP 标签 (含 inactive — GetComponentsInChildren(Type,bool))
@@ -197,7 +197,7 @@ function enumerateLabels() {
             try {
                 var gg = invokeOk(cgmChain(A.ogc(e), "get_gameObject", 0), e, []);
                 if (gg.ok) eGo = gg.ret;
-            } catch (e2) {}
+            } catch (e2) { swallowed("credit.js:enumerateLabels", e2); }
             var active = eGo ? dcBool(cgmChain(A.ogc(eGo), "get_activeSelf", 0), eGo) : false;
             var nm = eGo ? getGoName(eGo) : "?";
             // run-12: 标签自身名全叫 "Label", 语种标识可能在父包装节点 (thanks 侧就是 Label_Ja/Label_ZhHans 风格)
@@ -218,7 +218,7 @@ function enumerateLabels() {
                             }
                         }
                     }
-                } catch (e3) {}
+                } catch (e3) { swallowed("credit.js:enumerateLabels#2", e3); }
             }
             comp.labels.push({ tmp: e, go: eGo, name: nm, parent: pn, grand: gn, active: active, font: getFontName(e) });
         }
@@ -373,7 +373,7 @@ function spawnCreditsUI() {
             var ptn = (pcls && !pcls.isNull()) ? A.cgn(pcls).readCString() : "?";
             isTypeArg = (ptn === "System.Type");
             dbg("[v3][Credit] GetUI 参数类型: " + ptn + " → " + (isTypeArg ? "Type 重载" : "string 重载"));
-        } catch (e) {}
+        } catch (e) { swallowed("credit.js:spawnCreditsUI", e); }
         var r = invokeOk(mi, uiMgr, isTypeArg ? [A.tgo(A.cgt(cls.creditsUI))] : [makeS("CreditsUI")]);
         if (r.ok && r.ret && !r.ret.isNull()) {
             var rn = clsName(A.ogc(r.ret));
@@ -765,7 +765,7 @@ function ensureCanvasRenderable() {
 }
 function restoreAncestors() {
     for (var i = 0; i < activatedAncestors.length; i++) {
-        try { invoke(cgmChain(A.ogc(activatedAncestors[i]), "SetActive", 1), activatedAncestors[i], [boolPtr(false)]); } catch (e) {}
+        try { invoke(cgmChain(A.ogc(activatedAncestors[i]), "SetActive", 1), activatedAncestors[i], [boolPtr(false)]); } catch (e) { swallowed("credit.js:restoreAncestors", e); }
     }
     activatedAncestors = [];
 }
@@ -808,7 +808,7 @@ function thanksProbeWrite(obj, fname) {
         //   Frida writeUtf8String 返回值不可靠 (实测写出 800KB 全零)
         var wrote = writeString(fd, JSON.stringify(obj, null, 1));
         fileSync(fd);
-        try { var ch = Module.findGlobalExportByName("chmod"); if (ch) new NativeFunction(ch, "int", ["pointer", "int"])(Memory.allocUtf8String(path), 0o644); } catch (e2) {}
+        try { var ch = Module.findGlobalExportByName("chmod"); if (ch) new NativeFunction(ch, "int", ["pointer", "int"])(Memory.allocUtf8String(path), 0o644); } catch (e2) { swallowed("credit.js:thanksProbeWrite", e2); }
         info("[v3][Credit] 探针: 已写出 " + fname + " (" + (wrote / 1024).toFixed(0) + "KB)");
     } catch (e) { warn("[v3][Credit] 探针写盘 err: " + e); }
 }
@@ -877,7 +877,7 @@ function installThanksProbe() {
                 var now = Date.now() - thanksProbe.t0;
                 if (last && last.k === 1 && last.text === s && now - last.t < 80) { last.t = now; return; }
                 thanksProbe.rows.push({ k: 1, t: now, text: s });
-            } catch (e2) {}
+            } catch (e2) { swallowed("credit.js:tmpEnter", e2); }
         };
         var attached = 0;
         if (tmpSet && !tmpSet.isNull() && !tmpSet.readPointer().isNull()) { Interceptor.attach(tmpSet.readPointer(), { onEnter: tmpEnter }); attached++; }
@@ -887,13 +887,13 @@ function installThanksProbe() {
         if (cl && !cl.isNull()) {
             var mi = A.cgm(cl, Memory.allocUtf8String("set_Text"), 1);
             if (mi && !mi.isNull() && !mi.readPointer().isNull()) {
-                Interceptor.attach(mi.readPointer(), { onEnter: function (a) { try { var s = readStr(a[1]); if (s && s.length > 1) info("[v3][Credit] 探针[set_Text]: " + s.slice(0, 60)); } catch (e2) {} } });
+                Interceptor.attach(mi.readPointer(), { onEnter: function (a) { try { var s = readStr(a[1]); if (s && s.length > 1) info("[v3][Credit] 探针[set_Text]: " + s.slice(0, 60)); } catch (e2) { swallowed("credit.js:tmpEnter.onEnter", e2); } } });
                 attached++;
             }
         }
         var miClear = A.cgm(cl, Memory.allocUtf8String("Clear"), 0);
         if (miClear && !miClear.isNull() && !miClear.readPointer().isNull()) {
-            Interceptor.attach(miClear.readPointer(), { onEnter: function () { try { thanksProbe.rows.push({ k: 0, t: Date.now() - thanksProbe.t0 }); } catch (e2) {} } });
+            Interceptor.attach(miClear.readPointer(), { onEnter: function () { try { thanksProbe.rows.push({ k: 0, t: Date.now() - thanksProbe.t0 }); } catch (e2) { swallowed("credit.js:tmpEnter.onEnter#2", e2); } } });
         }
         // run-30b: hook CreditRollSpecialThanks.ShowAsync — 共犯页在 PlayAsync 链路哪一环触发 (调用时机)
         try {
@@ -911,14 +911,14 @@ function installThanksProbe() {
         } catch (e3) { warn("[v3][Credit] 探针 ShowAsync hook err: " + e3); }
         thanksProbe.attached = true;
         info("[v3][Credit] 探针已挂 (SpecialThanksLabel.set_Text + Clear + ShowAsync — 逐行富文本 + 时序)");
-        if (!thanksProbe.flushTimer) thanksProbe.flushTimer = setInterval(function () { try { thanksProbeFlush(); } catch (e4) {} }, 3000);
+        if (!thanksProbe.flushTimer) thanksProbe.flushTimer = setInterval(function () { try { thanksProbeFlush(); } catch (e4) { swallowed("credit.js:tmpEnter.onEnter#3", e4); } }, 3000);
     } catch (e) { warn("[v3][Credit] installThanksProbe err: " + e); }
 }
 function thanksProbeFlush() {
     try {
         if (!thanksProbe.rows.length) return;
         thanksProbeWrite({ n: thanksProbe.rows.length, rows: thanksProbe.rows }, "thanks-rows.json");
-    } catch (e) {}
+    } catch (e) { swallowed("credit.js:thanksProbeFlush", e); }
 }
 
 // ============ 数据 json ============
@@ -1066,7 +1066,7 @@ function lineEm(text) {     // run-29: 行富文本档位字号 (1.7em→2 / 1.3
 function setStillAlpha(st, a) {
     try {
         if (st && st.cg && !st.cg.isNull()) invoke(cgmChain(A.ogc(st.cg), "set_alpha", 1), st.cg, [fPtr(a)]);
-    } catch (e) {}
+    } catch (e) { swallowed("credit.js:setStillAlpha", e); }
 }
 function findStills() {
     try {
@@ -1099,14 +1099,14 @@ function findStills() {
                         info("[v3][Credit] still: _stills@0x58 数组 " + order.length + " 个 (原版顺序)");
                     }
                 }
-            } catch (e4) {}
+            } catch (e4) { swallowed("credit.js:findStills", e4); }
         }
         function collectOne(es, arr, idx) {
             var go = null;
             try {
                 var gg = invokeOk(cgmChain(A.ogc(es), "get_gameObject", 0), es, []);
                 if (gg.ok) go = gg.ret;
-            } catch (e2) {}
+            } catch (e2) { swallowed("credit.js:collectOne", e2); }
             var nm = go ? getGoName(go) : "?";
             var cg = es.add(0x20).readPointer();     // EndingStill._canvasGroup@0x20
             var sp = "?", act = "?", imgRef = null, vanillaSpr = null;
@@ -1129,7 +1129,7 @@ function findStills() {
                         }
                     }
                 }
-            } catch (e3) {}
+            } catch (e3) { swallowed("credit.js:collectOne#2", e3); }
             arr.push({ comp: es, go: go, name: nm, cg: cg, img: imgRef, vanillaSpr: vanillaSpr });
             info("[v3][Credit] still #" + (idx + 1) + ": " + nm + " active=" + act + " cg=" + (cg && !cg.isNull() ? cg : "null") + " sprite=" + sp + (vanillaSpr ? " (img 已存)" : " (无 Image!)"));
         }
@@ -1208,16 +1208,16 @@ function loadStillSprite(path, vanillaSpr) {
         if (vanillaSpr && !vanillaSpr.isNull()) {
             try {
                 var ppuMi = A.cgm(cls.sprite, Memory.allocUtf8String("get_pixelsPerUnit"), 0);
-                if (ppuMi && !ppuMi.isNull()) { try { var ppuV = directCall(ppuMi, "float", [vanillaSpr]); if (ppuV > 0) ppu = ppuV; } catch (e3) {} }
+                if (ppuMi && !ppuMi.isNull()) { try { var ppuV = directCall(ppuMi, "float", [vanillaSpr]); if (ppuV > 0) ppu = ppuV; } catch (e3) { swallowed("credit.js:loadStillSprite", e3); } }
                 var rectMi = A.cgm(cls.sprite, Memory.allocUtf8String("get_rect"), 0);
-                if (rectMi && !rectMi.isNull()) { try { var rp = invoke(rectMi, vanillaSpr, []); if (rp && !rp.isNull()) { rw = rp.add(8).readFloat(); rh = rp.add(12).readFloat(); } } catch (e2) {} }
+                if (rectMi && !rectMi.isNull()) { try { var rp = invoke(rectMi, vanillaSpr, []); if (rp && !rp.isNull()) { rw = rp.add(8).readFloat(); rh = rp.add(12).readFloat(); } } catch (e2) { swallowed("credit.js:loadStillSprite#2", e2); } }
                 var pivMi = A.cgm(cls.sprite, Memory.allocUtf8String("get_pivot"), 0);
                 if (pivMi && !pivMi.isNull() && rw > 0.001 && rh > 0.001) {
-                    try { var pp = invoke(pivMi, vanillaSpr, []); if (pp && !pp.isNull()) { var pvx = pp.readFloat(), pvy = pp.add(4).readFloat(); if (isFinite(pvx) && isFinite(pvy)) { px = pvx / rw; py = pvy / rh; } } } catch (e4) {}
+                    try { var pp = invoke(pivMi, vanillaSpr, []); if (pp && !pp.isNull()) { var pvx = pp.readFloat(), pvy = pp.add(4).readFloat(); if (isFinite(pvx) && isFinite(pvy)) { px = pvx / rw; py = pvy / rh; } } } catch (e4) { swallowed("credit.js:loadStillSprite#3", e4); }
                 }
                 if (!(px >= 0 && px <= 1)) px = 0.5;
                 if (!(py >= 0 && py <= 1)) py = 0.5;
-            } catch (e5) {}
+            } catch (e5) { swallowed("credit.js:loadStillSprite#4", e5); }
         }
         var spr = makeStillSprite(ent.tex, ent.w, ent.h, px, py, ppu);
         if (!spr) { warn("[v3][Credit] still Sprite.Create 失败 '" + path + "' (该位原版)"); stillsSprCache[path] = null; return null; }
@@ -1269,7 +1269,7 @@ function scheduleStillReDump() {
                             var nmR2 = invokeOk(cgmChain(A.ogc(spR.ret), "get_name", 0), spR.ret, []);
                             nm2 = (nmR2.ok && nmR2.ret) ? (readStr(nmR2.ret) || "?") : "?";
                         }
-                    } catch (e2) {}
+                    } catch (e2) { swallowed("credit.js:scheduleStillReDump", e2); }
                 }
                 out.push(i + "=" + nm2);
             }
@@ -1407,7 +1407,7 @@ function restoreStillSprites() {
         try {
             var setSprMi = A.cgm(cls.image, Memory.allocUtf8String("set_sprite"), 1);
             if (setSprMi && !setSprMi.isNull()) invoke(setSprMi, st.img, [st.vanillaSpr]);
-        } catch (e) {}
+        } catch (e) { swallowed("credit.js:restoreStillSprites", e); }
     }
 }
 // run-31: 清自定义 sprite/纹理缓存 (置空 JS 引用 → Unity GC 回收纹理) — 仅 doEnd/abortCredit 调
@@ -1420,7 +1420,7 @@ function stopStills() {
         for (var i = 0; i < (comp.stills || []).length; i++) setStillAlpha(comp.stills[i], 0);
         restoreStillSprites();
         comp.stillState = "idle";
-    } catch (e) {}
+    } catch (e) { swallowed("credit.js:stopStills", e); }
 }
 
 // ============ phase=1: staff 滚动 ============
@@ -1508,7 +1508,7 @@ function doStaff() {
                             posInfo.push("#" + di + "=(" + apR.ret.readFloat().toFixed(1) + "," + apR.ret.add(4).readFloat().toFixed(1) + ")");
                         } else posInfo.push("#" + di + "=?");
                     }
-                } catch (e) {}
+                } catch (e) { swallowed("credit.js:doStaff", e); }
             }
             dbg("[v3][Credit] staff 标签诊断 color[" + colorInfo.join(" | ") + "] pos[" + posInfo.join(" | ") + "]");
         }
@@ -2209,7 +2209,7 @@ var startCompletionPoll = function () {
             if (creditState.armed && creditState.original) {
                 warn("[v3][Credit] 原版演出 360s 超时兜底 — g_creditDone=1 (演出可能异常未播完)");
 //[run-25-废弃]                 flushStaffJson();   // run-24-4: 超时兜底也落盘 (收集到的即全部滚动期文本)
-                try { if (creditState.extract) thanksProbeFlush(); } catch (e5) {}
+                try { if (creditState.extract) thanksProbeFlush(); } catch (e5) { swallowed("credit.js:startCompletionPoll", e5); }
                 writeVar("g_creditDone", 1);
             }
         }, (creditState.extract ? 2400000 : 360000));   // run-30: 探针模式原版全流程(共犯 459+420 人拼行)可超 10 分钟; 普通原版 360s (run-24 bloom 片尾)
@@ -2235,7 +2235,7 @@ var startCompletionPoll = function () {
                     clearTimeout(timeoutGuard);
                     var elapsed = (Date.now() - t0) / 1000;
 //[run-25-废弃]                     flushStaffJson();   // run-24-4: 演出自然完, staff 收集完整
-                    try { if (creditState.extract) thanksProbeFlush(); } catch (e5) {}
+                    try { if (creditState.extract) thanksProbeFlush(); } catch (e5) { swallowed("credit.js:pollFn", e5); }
                     writeVar("g_creditDone", 1);
                     writeVar("g_thanksDuration", elapsed + 3);
                     info("[v3][Credit] 原版演出完成 (canvas disabled) +" + elapsed.toFixed(0) + "s — g_creditDone=1, g_thanksDuration=" + (elapsed + 3).toFixed(0));
@@ -2496,7 +2496,7 @@ function thanksEnterPage(p) {
         } catch (e) { warn("[v3][Credit] thanks set_Text err: " + e); }
         p.label = nx.label; p.tmp = nx.tmp; p.cg = nx.cg;
         if (p.cg && !p.cg.isNull()) {
-            try { invoke(cgmChain(A.ogc(p.cg), "set_alpha", 1), p.cg, [fPtr(0)]); } catch (e) {}
+            try { invoke(cgmChain(A.ogc(p.cg), "set_alpha", 1), p.cg, [fPtr(0)]); } catch (e) { swallowed("credit.js:thanksEnterPage", e); }
         }
     } catch (e) { warn("[v3][Credit] thanksEnterPage err: " + e); }
 }
@@ -2543,7 +2543,7 @@ function doProduction() {
         info("[v3][Credit] Production 组件=" + prod + " 类=" + clsName(ks) + " (主线程泵执行)");
         invoke(cgmChain(ks, "SetGameObjectActive", 1), prod, [boolPtr(true)]);
         invoke(cgmChain(ks, "SetCanvasEnabled", 1), prod, [boolPtr(true)]);
-        try { ensureHierarchy(); ensureCanvasRenderable(); } catch (e2) {}
+        try { ensureHierarchy(); ensureCanvasRenderable(); } catch (e2) { swallowed("credit.js:doProduction", e2); }
         var h = dcFloat(cgmChain(ks, "get_ContentHeight", 0), prod);
         var timing = readDirectorTiming();
         var speed = (timing && timing.speed > 0) ? timing.speed
@@ -2577,7 +2577,7 @@ function stopThanks() {
     try {
         if (comp.thanksPaging && comp.thanksPaging.timer) { clearInterval(comp.thanksPaging.timer); }
         comp.thanksPaging = null;
-    } catch (e) {}
+    } catch (e) { swallowed("credit.js:stopThanks", e); }
 }
 function doThanks() {
     try {
@@ -2700,7 +2700,7 @@ function dumpThanksTMPs(kt) {
             parts.push("#" + i + "='" + (s || "") + "'/" + getFontName(e));
         }
         dbg("[v3][Credit] thanks TMP 子树 (" + len + "): " + parts.join(" | "));
-    } catch (e) {}
+    } catch (e) { swallowed("credit.js:dumpThanksTMPs", e); }
 }
 
 // ============ phase=3: end 清理 ============
@@ -2735,7 +2735,7 @@ function doEnd() {
         }
         // run-11: 还原单标签模式停用的非当前语种标签
         for (var i = 0; i < deactivatedLabels.length; i++) {
-            try { invoke(cgmChain(A.ogc(deactivatedLabels[i]), "SetActive", 1), deactivatedLabels[i], [boolPtr(true)]); } catch (e) {}
+            try { invoke(cgmChain(A.ogc(deactivatedLabels[i]), "SetActive", 1), deactivatedLabels[i], [boolPtr(true)]); } catch (e) { swallowed("credit.js:doEnd", e); }
         }
         deactivatedLabels = [];
         stopStills();   // run-26: still 定时器/alpha 收尾 + run-31: 恢复原版 sprite
@@ -2752,16 +2752,16 @@ function abortCredit(reason) {
     warn("[v3][Credit] 演出中止: " + reason);
     if (creditState.original) {
         // run-15: 原版模式 — 原版演出还在跑, 用原版 CreditsUI.Stop() 中止
-        try { if (comp.creditsUI && !comp.creditsUI.isNull()) { var stMi = A.cgm(cls.creditsUI, Memory.allocUtf8String("Stop"), 0); if (stMi && !stMi.isNull()) invoke(stMi, comp.creditsUI, []); } } catch (e) {}
+        try { if (comp.creditsUI && !comp.creditsUI.isNull()) { var stMi = A.cgm(cls.creditsUI, Memory.allocUtf8String("Stop"), 0); if (stMi && !stMi.isNull()) invoke(stMi, comp.creditsUI, []); } } catch (e) { swallowed("credit.js:abortCredit", e); }
         creditState.armed = false;
         creditState.phase = 0;
         return;
     }
-    try { if (isThanksRoll(comp.rollThanks)) { var lbl2 = comp.rollThanks.add(0x70).readPointer(); if (lbl2 && !lbl2.isNull()) invoke(cgmChain(A.ogc(comp.rollThanks), "Clear", 0), comp.rollThanks, []); } } catch (e) {}
+    try { if (isThanksRoll(comp.rollThanks)) { var lbl2 = comp.rollThanks.add(0x70).readPointer(); if (lbl2 && !lbl2.isNull()) invoke(cgmChain(A.ogc(comp.rollThanks), "Clear", 0), comp.rollThanks, []); } } catch (e) { swallowed("credit.js:abortCredit#2", e); }
     try {
         var roll = (!comp.rollScroll || comp.rollScroll.isNull()) ? comp.rollThanks : comp.rollScroll;
         if (roll && !roll.isNull()) invoke(cgmChain(A.ogc(roll), "DisableCanvas", 0), roll, []);
-    } catch (e) {}
+    } catch (e) { swallowed("credit.js:abortCredit#3", e); }
     stopStills();   // run-26: still 定时器/alpha 收尾 + run-31: 恢复原版 sprite
     clearStillCaches();   // run-31: 清自定义 sprite/纹理缓存
     stopThanks();   // run-28: 共犯翻页定时器收尾
@@ -2816,24 +2816,24 @@ function onSVV(a) {
 }
 
 // ============ 捕获钩子 ============
-function onDirectorPlay(a) { try { captureFromDirector(a[0], "director.PlayAsync"); } catch (e) {} }
-function onDirectorAwake(a) { try { captureFromDirector(a[0], "director.Awake"); } catch (e) {} }
+function onDirectorPlay(a) { try { captureFromDirector(a[0], "director.PlayAsync"); } catch (e) { swallowed("credit.js:onDirectorPlay", e); } }
+function onDirectorAwake(a) { try { captureFromDirector(a[0], "director.Awake"); } catch (e) { swallowed("credit.js:onDirectorAwake", e); } }
 function onCreditsUIPlayEnter(a) {
     try {
         if (!comp.creditsUI || comp.creditsUI.isNull()) {
             comp.creditsUI = a[0];
             info("[v3][Credit] CreditsUI 实例已捕获 (PlayAsync): " + a[0]);
         }
-    } catch (e) {}
+    } catch (e) { swallowed("credit.js:onCreditsUIPlayEnter", e); }
 }
 function onCreditsUIPlayLeave() {
-    try { scanUiRolls(comp.creditsUI, "PlayAsync后"); } catch (e) {}
+    try { scanUiRolls(comp.creditsUI, "PlayAsync后"); } catch (e) { swallowed("credit.js:onCreditsUIPlayLeave", e); }
 }
 function onScrollAsync(a) {
     try {
         if (creditState.phase === 1) return;   // 我方 phase=1 的调用
         captureRolls(a[0], "原版 ScrollAsync");
-    } catch (e) {}
+    } catch (e) { swallowed("credit.js:onScrollAsync", e); }
 }
 function onShowAsync(a) {
     try {
@@ -2859,7 +2859,7 @@ function onShowAsync(a) {
 function onScriptLoad(a) {
     try {
         if (creditState.armed) abortCredit("剧本切换 '" + (readStr(a[1]) || "?") + "'");
-    } catch (e) {}
+    } catch (e) { swallowed("credit.js:onScriptLoad", e); }
 }
 
 // ============ 入口 ============
@@ -2901,7 +2901,7 @@ export function clearCreditCaches() {
         creditState.armed = false;
         creditState.phase = 0;
         for (var i = 0; i < deactivatedLabels.length; i++) {
-            try { invoke(cgmChain(A.ogc(deactivatedLabels[i]), "SetActive", 1), deactivatedLabels[i], [boolPtr(true)]); } catch (e) {}
+            try { invoke(cgmChain(A.ogc(deactivatedLabels[i]), "SetActive", 1), deactivatedLabels[i], [boolPtr(true)]); } catch (e) { swallowed("credit.js:clearCreditCaches", e); }
         }
         deactivatedLabels = [];
         restoreAncestors();

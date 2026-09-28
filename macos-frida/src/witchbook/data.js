@@ -1,5 +1,5 @@
 // ============ WitchBook 数据域: 分类表 / 数据加载 / 版本项构建 / 本地化工具 ============
-import { A, dbg, fieldOffset, findClassAcrossImages, getGenericArgClass, invokeOk, makeS, wblog, error, warn } from "../utils.js";
+import { A, dbg, error, fieldOffset, findClassAcrossImages, getGenericArgClass, invokeOk, makeS, swallowed, warn, wblog } from "../utils.js";
 import { fileExists, readJSONFile } from "../io.js";
 import { setWbReady, wbData, wbCurrentMod, wbReady, wbCls } from "./state.js";
 import { registerLocalizedDict } from "./pages.js";
@@ -92,8 +92,8 @@ export function loadWitchBookData() {
                 }
                 if (texDir) {
                     var tp = texDir + "/" + grp.Id + ".png";
-                    try { if (fileExists(tp)) rec.path = tp; } catch (e) {}
-                    if (!rec.path) { try { var tp2 = texDir + "/" + grp.Id + ".jpg"; if (fileExists(tp2)) rec.path = tp2; } catch (e) {} }
+                    try { if (fileExists(tp)) rec.path = tp; } catch (e) { swallowed("witchbook/data.js:loadWitchBookData", e); }
+                    if (!rec.path) { try { var tp2 = texDir + "/" + grp.Id + ".jpg"; if (fileExists(tp2)) rec.path = tp2; } catch (e) { swallowed("witchbook/data.js:loadWitchBookData#2", e); } }
                     if (rec.path) wbData.texPaths[grp.Id] = rec.path;
                 }
                 wbData[cat.name][grp.Id] = rec;

@@ -1,6 +1,6 @@
 // ============ provider 管线注册 (镜像 Windows AddModLoader, inflated 泛型版) ============
 // 含: 剧本/本地化/voice/audio/背景 provider 注入; 立绘注册在 witchbook/characters.js
-import { A, dbg, findClassAcrossImages, findSvc, getGenericArgClass, invoke, invokeOk, makeLocalResourceProvider, makeS, populateConvertersDict, readStr, wblog, error, warn } from "./utils.js";
+import { A, dbg, error, findClassAcrossImages, findSvc, getGenericArgClass, invoke, invokeOk, makeLocalResourceProvider, makeS, populateConvertersDict, readStr, swallowed, warn, wblog } from "./utils.js";
 import { addCharacterProviders } from "./witchbook/characters.js";
 
 // 扫描 ResourceLoader.ProvisionSources (List<ProvisionSource>) 现有条目, 返回 {cnt, has, items}
@@ -30,9 +30,9 @@ function _scanProvisionSources(rl, prefix) {
                     var ex = readStr(pfxPtr);
                     if (ex === prefix) { out.has = true; break; }
                 }
-            } catch (e) {}
+            } catch (e) { swallowed("providers.js:_scanProvisionSources", e); }
         }
-    } catch (e) {}
+    } catch (e) { swallowed("providers.js:_scanProvisionSources#2", e); }
     return out;
 }
 
@@ -215,7 +215,7 @@ function _reinjectAll() {
             var sl = sm.add(0x28).readPointer();
             if (!sl.isNull()) { scriptLoader = sl; beforeCnt = _scanProvisionSources(sl, "").cnt; }
         }
-    } catch (e) {}
+    } catch (e) { swallowed("providers.js:_reinjectAll", e); }
     for (var mi = 0; mi < modList.length; mi++) {
         try { addModLoader(root, modList[mi].key); }
         catch (e) {
@@ -224,7 +224,7 @@ function _reinjectAll() {
         }
     }
     if (scriptLoader) {
-        try { afterCnt = _scanProvisionSources(scriptLoader, "").cnt; } catch (e) {}
+        try { afterCnt = _scanProvisionSources(scriptLoader, "").cnt; } catch (e) { swallowed("providers.js:_reinjectAll#2", e); }
         dbg("[v3] 重注入后 scriptLoader ProvisionSources: " + beforeCnt + " → " + afterCnt + " (addModLoader 错误 " + errors + ")");
     }
 }

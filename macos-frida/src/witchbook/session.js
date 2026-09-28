@@ -1,6 +1,6 @@
 // ============ WitchBook 会话隔离域: mod 切换检测 / 整页重建 / 状态清理 / 面板默认值 ============
 // 镜像 Windows ModClueLoader + ModWitchBookPatch: mod 切换/回标题时从原版基座重建, 防残留继承
-import { A, ensureItemIdsString, fieldIsStringArray, fieldOffset, findAllObjectOfType, findFirstObjectOfType, findSvc, getGenericArgClass, getSystemClass, invoke, invokeOk, listContainsId, makeS, readStr, wblog, error, warn } from "../utils.js";
+import { A, ensureItemIdsString, error, fieldIsStringArray, fieldOffset, findAllObjectOfType, findFirstObjectOfType, findSvc, getGenericArgClass, getSystemClass, invoke, invokeOk, listContainsId, makeS, readStr, swallowed, swallowedWarn, warn, wblog } from "../utils.js";
 import { wbCats, currentModSet, localeValue, makeIdVersionPair, unionLocaleKeys } from "./data.js";
 import { initCatStateMaps, resetWbOverrides, setWbCurrentMod, setWbDefaultsCaptured, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbDefaultsCaptured, wbPageDefaults, wbVanillaMap } from "./state.js";
 import { getFirstDictValue } from "./pages.js";
@@ -20,7 +20,7 @@ export function detectCurrentMod(path) {
     if (next === null || next === wbCurrentMod) return;
     setWbCurrentMod(next);
     wblog("当前 mod: '" + wbCurrentMod + "' (Enter=" + path + ")");
-    try { if (wbCls && wbCls.pages) tryInjectWitchBook(); } catch (e) {}
+    try { if (wbCls && wbCls.pages) tryInjectWitchBook(); } catch (e) { swallowed("witchbook/session.js:detectCurrentMod", e); }
 }
 export function resetWitchBookSession() {
     setWbCurrentMod(null); setWbPrevMod(null);
@@ -34,7 +34,7 @@ export function resetWitchBookSession() {
             clearBookViaVanilla();
             clearAllWitchBookPages();
         }
-    } catch (e) {}
+    } catch (e) { swallowed("witchbook/session.js:resetWitchBookSession", e); }
     wblog("会话重置 (回标题)");
 }
 // ===== Override 处理: mod 定义的原版同 id 条目应覆盖原版显示 (镜像 Windows modXxxOverrideIds) =====
@@ -107,7 +107,7 @@ export function rebuildItemIdsFromMap(page, pageCls, mapList, vItemCls, idOff) {
         var narr = A.an(strCls, ids.length);
         for (var i = 0; i < ids.length; i++) narr.add(0x20 + i * 8).writePointer(makeS(ids[i]));
         page.add(fieldOffset(pageCls, "_itemIds", 0x98)).writePointer(narr);
-    } catch (e) {}
+    } catch (e) { swallowed("witchbook/session.js:rebuildItemIdsFromMap", e); }
 }
 // 在字典的 entries 里找 (id, ver) 对应的**键实例** (IdVersionPair 指针)。
 // 含"已删除的残留": .NET Dictionary 的 Remove 只把 hashCode 置 -1, 键的指针仍留在数组里, 且那正是
@@ -124,9 +124,9 @@ export function dictFindKeyInstance(dict, id, ver) {
                 var k = ents.add(0x20 + i * 24 + 8).readPointer();
                 if (k.isNull()) continue;
                 if (readStr(k.add(0x10).readPointer()) === id && k.add(0x18).readS32() === ver) return k;
-            } catch (e2) {}
+            } catch (e2) { swallowedWarn("witchbook/session.js:dictFindKeyInstance", e2); }
         }
-    } catch (e) {}
+    } catch (e) { swallowedWarn("witchbook/session.js:dictFindKeyInstance#2", e); }
     return null;
 }
 // 字典是否已有 (id, version) 条目 (IdVersionPair: Id@0x10, Version@0x18)
@@ -146,9 +146,9 @@ export function dictHasIdVer(dict, id, ver) {
                 var k = en.add(8).readPointer();
                 if (k.isNull()) continue;
                 if (readStr(k.add(0x10).readPointer()) === id && k.add(0x18).readS32() === ver) return true;
-            } catch (e2) {}
+            } catch (e2) { swallowedWarn("witchbook/session.js:dictHasIdVer", e2); }
         }
-    } catch (e) {}
+    } catch (e) { swallowedWarn("witchbook/session.js:dictHasIdVer#2", e); }
     return false;
 }
 // 用快照值新建 VersionedItem<TItem> 包装对象。
@@ -193,7 +193,7 @@ export function restorePageFromData(page, pageCls, cat) {
             // item 由 Data 资产持有 (长命), 但仍校验类: 指针悬空时它读出来的 klass 会对不上
             if (rc.item && !rc.item.isNull() && expectItemCls && !expectItemCls.isNull()) {
                 var okCls = false;
-                try { okCls = (A.ogc(rc.item).toString() === expectItemCls.toString()); } catch (e4) {}
+                try { okCls = (A.ogc(rc.item).toString() === expectItemCls.toString()); } catch (e4) { swallowedWarn("witchbook/session.js:restorePageFromData", e4); }
                 if (!okCls) {
                     // A3: 悬空不要丢 —— 按 id 从 Data._items 把原版 item 取回来复用 (Data 才是权威来源,
                     // 且与页面同寿命)。版本号仍用快照里的值 (它是捕获时读出的整数, 不会悬空),
@@ -201,7 +201,7 @@ export function restorePageFromData(page, pageCls, cat) {
                     if (!dataIdx) dataIdx = readDataItemsIndex(cat);
                     var dItem = dataIdx ? (dataIdx.byVer[rc.id + "@" + rc.ver] || dataIdx.first[rc.id]) : null;
                     var dOk = false;
-                    try { dOk = !!dItem && !dItem.isNull() && A.ogc(dItem).toString() === expectItemCls.toString(); } catch (e6) {}
+                    try { dOk = !!dItem && !dItem.isNull() && A.ogc(dItem).toString() === expectItemCls.toString(); } catch (e6) { swallowedWarn("witchbook/session.js:restorePageFromData#2", e6); }
                     if (!dOk) { bad++; continue; }        // Data 里也没有这个 id → 它本来就不是原版条目
                     use = { id: rc.id, ver: rc.ver, item: dItem };
                     refetched++;
@@ -214,7 +214,7 @@ export function restorePageFromData(page, pageCls, cat) {
                 try {
                     var ki = dictFindKeyInstance(pageDict, use.id, use.ver);
                     if (ki && !ki.isNull()) vi.add(fieldOffset(vItemCls, "_idVersionPair", 0x28)).writePointer(ki);
-                } catch (e7) {}
+                } catch (e7) { swallowedWarn("witchbook/session.js:restorePageFromData#3", e7); }
             }
             if (vi && !vi.isNull() && addMi && !addMi.isNull() && invokeOk(addMi, mapList, [vi]).ok) added++;
         }
@@ -236,7 +236,7 @@ export function restorePageFromData(page, pageCls, cat) {
                     if (!dictHasIdVer(outer, mid, mvi.add(verOff).readS32())) restoreVanillaDict(page, pageCls, cat, mvi, vItemCls);
                 }
             }
-        } catch (e2) {}
+        } catch (e2) { swallowedWarn("witchbook/session.js:restorePageFromData#4", e2); }
         wblog(cat.name + " 整页重建: " + added + " 条 (原版基座)");
     } catch (e) { error("restorePageFromData err: " + e); }
 }
@@ -253,7 +253,7 @@ export function rebuildAllPages() {
                     var pc = A.ogc(pages[pi]);
                     if (A.cgn(pc).readCString() !== cat.page) continue;
                     restorePageFromData(pages[pi], pc, cat);
-                } catch (e) {}
+                } catch (e) { swallowedWarn("witchbook/session.js:rebuildAllPages", e); }
             }
         }
     } catch (e) { error("rebuildAllPages err: " + e); }
@@ -333,7 +333,7 @@ export function readLocalizedArray(arrPtr, off) {
             switch (loc) { case 0: tag = "ja"; break; case 1: tag = "en-US"; break; case 2: tag = "zh-Hans"; break; case 3: tag = "zh-Hant"; break; case 4: tag = "ko"; break; case 5: tag = "fr"; break; case 6: tag = "es"; break; }
             out[tag] = text;
         }
-    } catch (e) {}
+    } catch (e) { swallowed("witchbook/session.js:readLocalizedArray", e); }
     return out;
 }
 // 从页面结构中移除指定 id 的条目 (mod 切换时清理旧 mod 数据; pageCls 区分各分类页面)
@@ -355,7 +355,7 @@ export function clearModItemsFromPage(page, pageCls, idSet) {
                     var e = items.add(0x20 + i * 8).readPointer();
                     if (e.isNull()) continue;
                     if (idSet[readStr(e.add(idOff).readPointer())]) idxs.push(i);
-                } catch (e2) {}
+                } catch (e2) { swallowedWarn("witchbook/session.js:clearModItemsFromPage", e2); }
             }
             if (rmMi && !rmMi.isNull()) {
                 for (var r = idxs.length - 1; r >= 0; r--) {
@@ -387,12 +387,12 @@ export function clearModItemsFromPage(page, pageCls, idSet) {
                         // 顺带按类过滤: 若键不是 IdVersionPair (容器被污染过), 跳过而不是去解引用它。
                         if (idPairCls && !idPairCls.isNull()) {
                             var kcls = null;
-                            try { kcls = A.ogc(k); } catch (e3) {}
+                            try { kcls = A.ogc(k); } catch (e3) { swallowedWarn("witchbook/session.js:clearModItemsFromPage#2", e3); }
                             if (!kcls || kcls.toString() !== idPairCls.toString()) { alien++; continue; }
                         }
                         var kid = readStr(k.add(0x10).readPointer());
                         if (kid && idSet[kid]) toDel.push(k);
-                    } catch (e2) {}
+                    } catch (e2) { swallowedWarn("witchbook/session.js:clearModItemsFromPage#3", e2); }
                 }
                 if (alien) warn("clearModItemsFromPage: " + alien + " 个非 IdVersionPair 字典键已跳过 (容器曾被污染?)");
                 for (var di = 0; di < toDel.length; di++) invokeOk(rmD, outer, [toDel[di]]);
@@ -421,7 +421,7 @@ export function clearModItemsFromPage(page, pageCls, idSet) {
         try {
             var curOff = fieldOffset(pageCls, "_currentItemId", 0xA0);
             page.add(curOff).writePointer(makeS(""));
-        } catch (e) {}
+        } catch (e) { swallowedWarn("witchbook/session.js:clearModItemsFromPage#4", e); }
         if (removed > 0) wblog("清除旧 mod 条目 " + removed + " 条");
     } catch (e) { error("clearModItemsFromPage err: " + e); }
 }
@@ -444,7 +444,7 @@ export function removeStateEntries(page, pageCls, idSet) {
                 if (se.isNull()) continue;
                 var sid = readStr(se.add(0x10).readPointer());
                 if (sid && idSet[sid]) sidxs.push(si);
-            } catch (e2) {}
+            } catch (e2) { swallowedWarn("witchbook/session.js:removeStateEntries", e2); }
         }
         for (var sr = sidxs.length - 1; sr >= 0; sr--) {
             var sb = Memory.alloc(4); sb.writeS32(sidxs[sr]);
@@ -470,7 +470,7 @@ export function clearPageState(page, keepSet) {
                 if (e.isNull()) continue;
                 var id = readStr(e.add(0x10).readPointer());
                 if (!id || (keepSet && !keepSet[id])) idxs.push(i);
-            } catch (e2) {}
+            } catch (e2) { swallowedWarn("witchbook/session.js:clearPageState", e2); }
         }
         for (var r = idxs.length - 1; r >= 0; r--) {
             var ib = Memory.alloc(4); ib.writeS32(idxs[r]);
@@ -511,7 +511,7 @@ export function capturePageDefaults(page) {
                     var t = invoke(gt, tmp, []);
                     d.labels[fn] = readStr(t) || "";
                 }
-            } catch (e) {}
+            } catch (e) { swallowed("witchbook/session.js:capturePageDefaults", e); }
         });
         // 默认纹理不在这里缓存: _defaultTexture 由 WitchBookItemThumbnail.Awake/Reset 设定后不再改动,
         // 恢复时从活着的缩略图对象上现读即可 (缓存裸指针在页面重建后会悬空 → C1)
@@ -541,7 +541,7 @@ export function restorePageDefaults(page) {
                 var labCls = A.ogc(tmp);
                 var mi = A.cgm(labCls, Memory.allocUtf8String("set_text"), 1);
                 if (mi && !mi.isNull()) invokeOk(mi, tmp, [makeS(d.labels[fn])]);
-            } catch (e) {}
+            } catch (e) { swallowedWarn("witchbook/session.js:restorePageDefaults", e); }
         });
         try {
             var thf = A.gf(pageCls, Memory.allocUtf8String("_thumbnail"));
@@ -561,8 +561,8 @@ export function restorePageDefaults(page) {
                     }
                 }
             }
-        } catch (e) {}
-        try { page.add(0xA0).writePointer(makeS("")); } catch (e) {}   // _currentItemId 不恢复, 始终清空
+        } catch (e) { swallowedWarn("witchbook/session.js:restorePageDefaults#2", e); }
+        try { page.add(0xA0).writePointer(makeS("")); } catch (e) { swallowedWarn("witchbook/session.js:restorePageDefaults#3", e); }   // _currentItemId 不恢复, 始终清空
         wblog("已恢复 " + clsName + " 面板默认值");
     } catch (e) { error("restorePageDefaults err: " + e); }
 }
@@ -579,7 +579,7 @@ export function findAllPages() {
     }
     // 首次见到页面即捕获默认值 + 原版 map 基座 (此时未被 mod 触碰, 处于原版默认态)
     if (!wbDefaultsCaptured && out.length) {
-        for (var k = 0; k < out.length; k++) { try { capturePageDefaults(out[k]); } catch (e) {} }
+        for (var k = 0; k < out.length; k++) { try { capturePageDefaults(out[k]); } catch (e) { swallowed("witchbook/session.js:findAllPages", e); } }
         setWbDefaultsCaptured(true);
     }
     // 捕获原版 _loadedDataItemMap 快照 (整页重建的基座; 不依赖 Data 加载时机)
@@ -598,7 +598,7 @@ export function findAllPages() {
                 // 只快照"值"(id/version/item), 不存 VersionedItem 裸指针 —— 那些包装对象在游戏重建页面/GC
                 // 后悬空, 重建时 Add 回去会制造"伪条目"→ 渲染期崩溃 (2026-09-25 根因)。
                 var cvi = null;
-                try { cvi = getGenericArgClass(A.ogc(mlist), 0); } catch (e5) {}
+                try { cvi = getGenericArgClass(A.ogc(mlist), 0); } catch (e5) { swallowed("witchbook/session.js:findAllPages#2", e5); }
                 var cIdOff = (cvi && !cvi.isNull()) ? fieldOffset(cvi, "_id", 0x10) : 0x10;
                 var cVerOff = (cvi && !cvi.isNull()) ? fieldOffset(cvi, "_version", 0x18) : 0x18;
                 var cItemOff = (cvi && !cvi.isNull()) ? fieldOffset(cvi, "_item", 0x20) : 0x20;
@@ -613,7 +613,7 @@ export function findAllPages() {
                 wbVanillaMap[ccat.name] = { page: out[c].toString(), items: recs };
                 wblog(ccat.name + " 捕获原版基座 " + recs.length + " 条");
             }
-        } catch (e) {}
+        } catch (e) { swallowed("witchbook/session.js:findAllPages#3", e); }
     }
     return out;
 }
@@ -632,18 +632,18 @@ export function clearAllWitchBookPages() {
                 var keep = cat ? currentModSet(cat) : null;
                 clearPageState(pages[i], keep);
                 restorePageDefaults(pages[i]);
-            } catch (e) {}
+            } catch (e) { swallowedWarn("witchbook/session.js:clearAllWitchBookPages", e); }
         }
     } catch (e) { error("clearAllWitchBookPages err: " + e); }
 }
 export function findWitchBookUi() {
-    try { var s = findSvc("WitchBookUi"); if (s) return s; } catch (e) {}
+    try { var s = findSvc("WitchBookUi"); if (s) return s; } catch (e) { swallowed("witchbook/session.js:findWitchBookUi", e); }
     try {
         if (wbCls && wbCls.witchBookUi && !wbCls.witchBookUi.isNull()) {
             var arr = findAllObjectOfType(wbCls.witchBookUi);
             if (arr.length) return arr[0];
         }
-    } catch (e) {}
+    } catch (e) { swallowed("witchbook/session.js:findWitchBookUi#2", e); }
     return null;
 }
 // 镜像 @clearBook (ClearWitchBook 命令): 调 WitchBookUi.ClearState(category) 全 5 分类
@@ -688,7 +688,7 @@ export function hookClearState() {
                         var pc = A.ogc(pages[i]);
                         if (A.cgn(pc).readCString() !== cat.page) continue;
                         restorePageDefaults(pages[i]);
-                    } catch (e2) {}
+                    } catch (e2) { swallowed("witchbook/session.js:handle", e2); }
                 }
                 wblog("ClearState 挂钩: '" + catName + "' 状态已清 + 面板复位");
             } catch (e) { error("clearStateHook err: " + e); }
@@ -701,10 +701,10 @@ export function hookClearState() {
                 if (!mi || mi.isNull()) return;
                 Interceptor.attach(mi.readPointer(), {
                     onEnter: function (args) { this._cat = args[1].toInt32(); },
-                    onLeave: function () { try { handle(this._cat); } catch (e) {} }
+                    onLeave: function () { try { handle(this._cat); } catch (e) { swallowed("witchbook/session.js:handle.onLeave", e); } }
                 });
                 wblog("hook " + A.cgn(cls).readCString() + ".ClearState(category)");
-            } catch (e) {}
+            } catch (e) { swallowed("witchbook/session.js:handle.onLeave#2", e); }
         });
     } catch (e) { error("hookClearState err: " + e); }
 }

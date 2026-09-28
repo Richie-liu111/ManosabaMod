@@ -4,7 +4,11 @@
   "private": true,
   "description": "manosaba macOS MOD loader (Frida) — 多文件 ES modules 工程, frida-compile 打包单 bundle",
   "scripts": {
-    "build": "frida-compile src/entry.js -o dist/manosabamod.js"
+    "check": "node tools/check-imports.mjs && node test-tools/swallow-test.mjs",
+    "build": "npm run check && frida-compile src/entry.js -o dist/manosabamod.js -S",
+    "deploy:check": "node tools/deploy-check.mjs",
+    "bundle:check": "node tools/bundle-check.mjs",
+    "audit:catch": "node tools/catch-audit.mjs"
   },
   "devDependencies": {
     "frida-compile": "^16.4.2"

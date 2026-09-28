@@ -5,7 +5,7 @@
 //   → 我们按 sprite 名替换 Image/SpriteRenderer 的 sprite (原版激活逻辑不动)。
 // 移植自 v3.js 16h (仅 sprite 替换, 无 shader 覆盖 — Windows Shaders 配置未支持);
 // 日志分级 (ARCHIVE 教训 2/3): hooks 就绪/注册数 = info, 机制证据 = dbg, 失败 = warn/error。
-import { A, dbg, directCall, error, findClassAcrossImages, getSystemClass, invoke, invokeOk, makeS, pngDims, readStr, warn } from "./utils.js";
+import { A, dbg, directCall, error, findClassAcrossImages, getSystemClass, invoke, invokeOk, makeS, pngDims, readStr, swallowed, warn } from "./utils.js";
 import { fileReadBytes, readJSONFile } from "./io.js";
 import { info } from "./log.js";
 
@@ -153,7 +153,7 @@ function ensureCutInCache(inst) {
         try {
             var ggMi = A.cgm(cutInCls.component, Memory.allocUtf8String("get_gameObject"), 0);
             if (ggMi && !ggMi.isNull()) go = invoke(ggMi, inst, []);
-        } catch (e) {}
+        } catch (e) { swallowed("cutin.js:ensureCutInCache", e); }
         if (go && !go.isNull()) {
             var gicMi = A.cgm(cutInCls.gameObject, Memory.allocUtf8String("GetComponentsInChildren"), 2);
             var getImgSprMi = A.cgm(cutInCls.image, Memory.allocUtf8String("get_sprite"), 0);
@@ -211,7 +211,7 @@ function getOrCreateCutInSprite(reg, vanillaName, vanillaSpr) {
                     try {
                         var rp = invoke(rectMi, vanillaSpr, []);
                         if (rp && !rp.isNull()) { rw = rp.add(8).readFloat(); rh = rp.add(12).readFloat(); }
-                    } catch (e2) {}
+                    } catch (e2) { swallowed("cutin.js:getOrCreateCutInSprite", e2); }
                 }
                 if (pivMi && !pivMi.isNull() && rw > 0.001 && rh > 0.001) {
                     try {
@@ -220,12 +220,12 @@ function getOrCreateCutInSprite(reg, vanillaName, vanillaSpr) {
                             var pvx = pp.readFloat(), pvy = pp.add(4).readFloat();
                             if (isFinite(pvx) && isFinite(pvy)) { px = pvx / rw; py = pvy / rh; }
                         }
-                    } catch (e4) {}
+                    } catch (e4) { swallowed("cutin.js:getOrCreateCutInSprite#2", e4); }
                 }
                 // 归一化守卫: 缓冲垃圾或 rect 无效 → 回落 0.5 (蓝本 rect 无效时的同款回落)
                 if (!(px >= 0 && px <= 1)) px = 0.5;
                 if (!(py >= 0 && py <= 1)) py = 0.5;
-            } catch (e) {}
+            } catch (e) { swallowed("cutin.js:getOrCreateCutInSprite#3", e); }
         }
         dbg("[v3] CutIn Sprite.Create '" + vanillaName + "' pivot=(" + px.toFixed(3) + "," + py.toFixed(3) + ") ppu=" + ppu + " rect=" + rw.toFixed(1) + "x" + rh.toFixed(1) + " tex=" + ent.w + "x" + ent.h);
         cutInData.spriteCache[cacheKey] = makeModSprite(ent.tex, ent.w, ent.h, px, py, ppu);
@@ -247,7 +247,7 @@ function dumpCutInShaders(cache) {
                     var sh = sdrMi && !sdrMi.isNull() ? invoke(sdrMi, mat, []) : null;
                     if (sh && !sh.isNull()) sdr = getObjName(sh) || "?";
                 }
-            } catch (e) {}
+            } catch (e) { swallowed("cutin.js:dumpCutInShaders", e); }
             out.push(i + "='" + (cache.rendererNames[i] || "(无名)") + "' shader=" + sdr);
         }
         dbg("[v3] CutIn 渲染器 shader: " + out.join(" | "));
@@ -264,7 +264,7 @@ function scheduleSpriteReDump(cache, reg, tag) {
                     try {
                         var getSprMi = A.cgm(cutInCls.spriteRenderer, Memory.allocUtf8String("get_sprite"), 0);
                         if (getSprMi && !getSprMi.isNull()) sp = invoke(getSprMi, cache.renderers[i], []);
-                    } catch (e) {}
+                    } catch (e) { swallowed("cutin.js:scheduleSpriteReDump", e); }
                     names.push(i + "=" + (sp && !sp.isNull() ? (getObjName(sp) || "?") : "null"));
                 }
                 dbg("[v3] CutIn " + tag + " 后 sprite: " + names.join(" | "));

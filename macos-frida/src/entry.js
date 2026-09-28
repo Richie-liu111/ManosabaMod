@@ -11,7 +11,7 @@
 // 日志分层: 机制日志走 dbg (MOD_DEBUG, 默认关); 游戏侧 Unity.LogError 全量 dump (dumpObj 原样 console.log)
 'use strict';
 
-import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, wblog } from "./utils.js";
+import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, swallowed, wblog } from "./utils.js";
 import { clearCutInCaches, preloadCutInTextures, setupCutInHooks } from "./cutin.js";
 import { clearCreditCaches, setupCreditHooks } from "./credit.js";
 import { initChoiceHandlers, setupChoiceHandlerHooks } from "./choice.js";
@@ -37,7 +37,7 @@ installCrashHandler();
 printStartupBanner();
 
 // ============ Steam 绕过 (Phase 1) ============
-try { var dl = Module.findGlobalExportByName("dlopen"); if (dl) { var h = false; Interceptor.attach(dl, { onEnter: function (a) { this.p = a[0].readCString(); }, onLeave: function (r) { if (h || r.isNull() || !this.p || this.p.indexOf("libsteam_api") === -1) return; var r2 = Module.findGlobalExportByName("SteamAPI_RestartAppIfNecessary"); if (r2) Interceptor.replace(r2, new NativeCallback(function () { return 0; }, 'bool', ['uint32'])); var i2 = Module.findGlobalExportByName("SteamInternal_SteamAPI_Init"); if (i2) Interceptor.replace(i2, new NativeCallback(function () { return 2; }, 'int', [])); h = true; } }); } } catch (e) { }
+try { var dl = Module.findGlobalExportByName("dlopen"); if (dl) { var h = false; Interceptor.attach(dl, { onEnter: function (a) { this.p = a[0].readCString(); }, onLeave: function (r) { if (h || r.isNull() || !this.p || this.p.indexOf("libsteam_api") === -1) return; var r2 = Module.findGlobalExportByName("SteamAPI_RestartAppIfNecessary"); if (r2) Interceptor.replace(r2, new NativeCallback(function () { return 0; }, 'bool', ['uint32'])); var i2 = Module.findGlobalExportByName("SteamInternal_SteamAPI_Init"); if (i2) Interceptor.replace(i2, new NativeCallback(function () { return 2; }, 'int', [])); h = true; } }); } } catch (e) { swallowed("entry.js:onLeave", e); }
 
 var E = {}, dom = null;
 var shouldLogLoadAndPlay = true;
@@ -398,13 +398,13 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                             if (!spc || spc.isNull() || spc.readCString() !== "String") continue;
                             var stxt = readStr(sp);
                             if (stxt) logLevel(level, "[v3] " + tag + " [+0x" + eo.toString(16) + "] " + stxt);
-                        } catch (e5) {}
+                        } catch (e5) { swallowed("entry.js:collectUtf16", e5); }
                     }
                 } else {
                     try {
                         var full = collectUtf16(0x14, 2000);
                         if (full) logLevel(level, "[v3] " + tag + " FULL: " + full);
-                    } catch (e) {}
+                    } catch (e) { swallowed("entry.js:collectUtf16#2", e); }
                 }
                 // 移除多偏移 UTF-16 尝试 (0x08/0x10/0x18/0x0C): C# 字符串是引用类型,
                 // 直接从对象实例内存读 UTF-16 是错的 — 读到的全是垃圾 (如 KeyNotFoundException
@@ -452,6 +452,9 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         // 异常对象的字段布局在 macOS IL2CPP 上与 Windows dump 不完全一致 (读实例内存拿不稳 message),
         // 所以在**构造那一刻**抓参数 —— 消息 + 原生调用栈 (模块+偏移, 可离线 objdump 对回去)。
         // 只在真抛异常时触发, 无常态开销。
+        // 2026-09-28 降噪: 取证已完成, 这行降到 dbg (MOD_DEBUG=1 才出)。**常态化守卫已移交**
+        // src/witchbook/selftest.js —— 它在 MOD_SELFTEST=1 时装 ThrowHelper 钩子计数 + 断言字典不变式,
+        // 那条是"回归里能判成败"的, 比人手看日志可靠。
         try {
             var knfCls = null;
             var knfNames = [["System.Collections.Generic", "KeyNotFoundException"], ["System", "KeyNotFoundException"]];
@@ -460,7 +463,7 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                     try {
                         var kc = A.cfn(allImgs[ki], Memory.allocUtf8String(knfNames[kj][0]), Memory.allocUtf8String(knfNames[kj][1]));
                         if (kc && !kc.isNull()) { knfCls = kc; break; }
-                    } catch (eK) {}
+                    } catch (eK) { swallowed("entry.js:doInit", eK); }
                 }
             }
             if (!knfCls) dbg("[v3] KeyNotFoundException 类未找到");
@@ -479,8 +482,8 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                                             return md ? (md.name + "+0x" + a.sub(md.base).toString(16)) : a.toString();
                                         } catch (eB) { return "?"; }
                                     }).join(" ← ");
-                                    wblog("KeyNotFoundException 抛出 (argc=" + narg + "): " + msg + " | 栈: " + bt);
-                                } catch (eM) {}
+                                    dbg("[v3] KeyNotFoundException 抛出 (argc=" + narg + "): " + msg + " | 栈: " + bt);
+                                } catch (eM) { swallowed("entry.js:knfCtorHook.onEnter", eM); }
                             }
                         });
                     })(ka);
@@ -529,13 +532,13 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                     onLeave: function () {
                         dbg("[v3] TitleUi.Activate 触发");
                         // 回到标题 → 重置 WitchBook 会话 (防止上一 mod 的线索/状态被继承)
-                        try { resetWitchBookSession(); } catch (e) {}
+                        try { resetWitchBookSession(); } catch (e) { swallowed("entry.js:onTitleActivate.onLeave", e); }
                         // 回标题 → 清 CutIn 实例缓存 (旧实例指针可能失效)
-                        try { clearCutInCaches(); } catch (e) {}
+                        try { clearCutInCaches(); } catch (e) { swallowed("entry.js:onTitleActivate.onLeave#2", e); }
                         // 首次进标题 → 预加载全部 CutIn 纹理 (把审判触发的解码卡顿挪到菜单空闲期)
-                        try { preloadCutInTextures(); } catch (e) {}
+                        try { preloadCutInTextures(); } catch (e) { swallowed("entry.js:onTitleActivate.onLeave#3", e); }
                         // 回标题 → 清 Credit 演出状态 (disarm + 还原残留祖先; comp 指针保留, 字段探针复核)
-                        try { clearCreditCaches(); } catch (e) {}
+                        try { clearCreditCaches(); } catch (e) { swallowed("entry.js:onTitleActivate.onLeave#4", e); }
                         if (typeof modList !== "undefined" && modList && modList.length) registerMenu(modList);
                         else registerMenu([]);
                         registerMenuText();
@@ -552,7 +555,7 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                         // ChoiceHandler: 预加载立绘 + 触发源面板 (镜像 Windows LoadModData + TryTriggerSourcePanelLoad)
                         try { initChoiceHandlers(); } catch (e4) { dbg("[v3] choice handler init err: " + e4); }
                         // WitchBook 纹理尽早注册 (Title 后场景加载即有)
-                        try { if (wbCls) registerTexturesInto(null); } catch (e3) {}
+                        try { if (wbCls) registerTexturesInto(null); } catch (e3) { swallowed("entry.js:onTitleActivate.onLeave#5", e3); }
                         // 重定向放到队列, 避免在 hook 回调里做托管调用
                         setTimeout(function () { hookStartGame(); }, 100);
                     }
