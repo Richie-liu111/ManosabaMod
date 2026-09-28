@@ -164,6 +164,8 @@ def run_and_check(args) -> int:
     env["MOD_SELFTEST"] = "1"
     if args.self_proof:
         env["MOD_SELFTEST_BREAK"] = "1"
+    if args.debug:
+        env["MOD_DEBUG"] = "1"        # 机制日志全开 (排查用; 注意上面刚清掉继承来的同名变量)
     if args.game_dir:
         env["GAME_DIR"] = args.game_dir
     log_path = Path(args.log) if args.log else (game / "modlog.txt")
@@ -224,6 +226,7 @@ def main():
     ap.add_argument("--game-dir", default="", help="游戏目录, 透传给 run_mod.sh 的 GAME_DIR")
     ap.add_argument("--no-build", action="store_true", help="跳过构建 (用现有 repo 产物)")
     ap.add_argument("--no-deploy", action="store_true", help="跳过 cp 到游戏目录")
+    ap.add_argument("--debug", action="store_true", help="MOD_DEBUG=1 (开机制日志, 排查用)")
     ap.add_argument("--self-proof", action="store_true",
                     help="负对照: 让哨兵改用等价但不同实例的键 → 必须报 FAIL (证明它抓得住 2026-09-25 那类坑)")
     ap.add_argument("--save", default="", help="把 run_mod.sh 的终端输出另存一份 (modlog.txt 之外的记录)")

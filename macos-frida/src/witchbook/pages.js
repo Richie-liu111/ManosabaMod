@@ -109,7 +109,7 @@ export function injectPage(cat) {
                 }
                 // 聚合日志 (替代每条 override 一行): 仅 1 条 INFO 覆盖整页 override 情况
                 if (overrideIds.length) wblog(cat.name + " override " + overrideIds.length + " 条: " + overrideIds.join(","));
-                if (added > 0) wblog(cat.name + "Page._loadedDataItemMap 注入 " + added + " 条 (total=" + mapList.add(0x18).readS32() + ")");
+                if (added > 0) wblog(cat.name + "Page._loadedDataItemMap 注入 " + added + " 条 (total=" + mapList.add(0x18).readS32() + ")");   // _size@0x18 (它是 List, 不是 Dictionary)
             }
         }
         ensureItemIdsString(page, pageCls);   // macOS: Graphic[]/Canvas[] → String[] (游戏 Contains 才不炸)

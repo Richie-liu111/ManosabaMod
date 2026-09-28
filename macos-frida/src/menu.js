@@ -1,6 +1,6 @@
 // ============ 菜单域: 菜单文本 (含翻页, 回迁自 16h 版) + 剧本注册 + StartGame @goto 重定向 ============
 // 镜像 Windows AddModStartMenu (ModResourceLoader.cs) + HookStartGame
-import { A, dbg, findClassAcrossImages, findSvc, findUnityImg, gotoModifiedCls, invoke, invokeOk, makeLocalResourceProvider, makeNamedStringCtor, makeS, makeUnityObject, readStr, swallowed } from "./utils.js";
+import { A, dbg, findClassAcrossImages, findSvc, findUnityImg, gotoModifiedCls, invoke, invokeOk, makeLocalResourceProvider, makeNamedStringCtor, makeS, makeUnityObject, readStr, swallowed, warn, wblog } from "./utils.js";
 
 var modScriptPrefix = "ModLoader";
 var modMenuScript = "ModStart";
@@ -148,10 +148,10 @@ export function registerMenu(modList) {
         var scriptCls = findClassAcrossImages("Naninovel", "Script");
         if (scriptCls.isNull()) { dbg("[v3] Script class NOT FOUND"); return; }
         var ftMi = A.cgm(scriptCls, Memory.allocUtf8String("FromText"), 3);
-        if (!ftMi || ftMi.isNull()) { dbg("[v3] Script.FromText NOT FOUND"); return; }
+        if (!ftMi || ftMi.isNull()) { warn("[菜单] Script.FromText NOT FOUND —— 菜单剧本注册不了"); return; }
         var script = invoke(ftMi, ptr(0), [makeS(modMenuScript), makeS(text), ptr(0)]);
-        if (script.isNull()) { dbg("[v3] FromText returned null"); return; }
-        dbg("[v3] FromText 成功, script=" + script);
+        if (script.isNull()) { warn("[菜单] FromText 返回 null —— 菜单剧本注册失败"); return; }
+        wblog("[菜单] 菜单剧本已注册 (FromText): " + modMenuScript + " script=" + script);
 
         var sm = findSvc("ScriptManager");
         if (!sm) { dbg("[v3] ScriptManager NOT FOUND"); return; }
@@ -221,15 +221,18 @@ export function registerMenu(modList) {
 }
 
 // ============ 重定向 StartGame 的 @goto (镜像 Windows HookStartGame) ============
-export function hookStartGame() {
+// 返回 true = 已把标题的 StartGame 重定向到我们的菜单剧本; false = 这次没做成 (调用方会重试)。
+// quiet=true 时失败只记 dbg —— 重试期间别刷屏, 最后一次才 warn (见 entry.js 的重试包装)。
+export function hookStartGame(quiet) {
+    var say = function (m) { if (quiet) dbg(m); else warn(m); };
     try {
         var sp = findSvc("WitchTrialsScriptPlayer", true);
         if (!sp) sp = findSvc("ScriptPlayer");
-        if (!sp) { dbg("[v3] ScriptPlayer NOT FOUND"); return; }
+        if (!sp) { say("[菜单] ScriptPlayer NOT FOUND —— 无法重定向到 ModStart (菜单不会出现)"); return false; }
         var played = sp.add(0x58).readPointer();   // PlayedScript
-        if (played.isNull()) { dbg("[v3] PlayedScript NULL"); return; }
+        if (played.isNull()) { say("[菜单] PlayedScript 为 NULL —— 时刻太早/太晚, 无法重定向 (菜单不会出现)"); return false; }
         var linesArr = played.add(0x30).readPointer(); // Script.lines
-        if (linesArr.isNull()) { dbg("[v3] lines NULL"); return; }
+        if (linesArr.isNull()) { say("[菜单] 标题剧本 lines 为 NULL —— 无法重定向 (菜单不会出现)"); return false; }
         var n = linesArr.add(0x18).readS32();
         var foundLabel = false;
         for (var i = 0; i < n; i++) {
@@ -250,16 +253,18 @@ export function hookStartGame() {
                     var pathObj = cmd.add(0x30).readPointer();
                     var nspCls = A.ogc(pathObj);
                     var svMi = A.cgm(nspCls, Memory.allocUtf8String("SetValue"), 1);
-                    if (!svMi || svMi.isNull()) { dbg("[v3] Path.SetValue NOT FOUND"); return; }
+                    if (!svMi || svMi.isNull()) { say("[菜单] Path.SetValue NOT FOUND —— 无法重定向 (菜单不会出现)"); return false; }
                     // 重定向到完整路径 (缓存键测试)
                     var fullPath = modScriptPrefix + "/Scripts/" + modMenuScript;
                     var nsObj = makeNamedStringCtor(fullPath, "");
                     invoke(svMi, pathObj, [nsObj]);
-                    dbg("[v3] >>> Path.SetValue(\"" + fullPath + "\") 完成 (完整路径)");
+                    wblog("[菜单] 已把标题 StartGame 重定向 → " + fullPath);   // INFO: 菜单流程的关键一步, 默认可见 (失败时无从判断)
+                    return true;
                     return;
                 }
             }
         }
-        dbg("[v3] 未在 StartGame 下找到 GotoModified (lines=" + n + ")");
-    } catch (e) { dbg("[v3] hookStartGame err: " + e); }
+        say("[菜单] 未在 StartGame 下找到 GotoModified (lines=" + n + ") —— 重定向没做, 菜单不会出现");
+        return false;
+    } catch (e) { say("[菜单] hookStartGame err: " + e); return false; }
 }

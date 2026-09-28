@@ -455,6 +455,8 @@ string 指针的值是 `{len=8,"Mo"}` —— 即**一个 `System.String` 被当�
 `KeyNotFoundException: The given key 'WitchTrials.Models.IdVersionPair' was not present in the dictionary.`,
 游戏随之中断打开流程; 同一加载器下 Twilight 剧本正常 (差别只是剧本 `@update` 激活了哪些键)。
 
+**（2026-09-28 复查: 本条结论经真机探针再次确认 = 实例语义; 中途一度被怀疑, 见 7.13①。另注: 页面 `_loadedDataItemMap` 是 List 而非 Dictionary —— 7.13②）**
+
 **定位手段 (备查, 以后 IL2CPP 无符号问题的标准打法)**:
 1. **运行时方法表**: 枚举全部 assembly 的 `il2cpp_class_get_methods`, 取每个 MethodInfo 的
    代码指针 (第 1 个字段) 建"地址 → 类::方法"索引 (本作 12.5 万个方法), 再把异常栈的
@@ -565,6 +567,44 @@ MOD_SELFTEST=1 跑一局 (Gapless 点图鉴 → 回标题 → Twilight 点图鉴
 **教训**: ① 自愈/断言的**真相源必须是游戏对象本身**, 我们的 `wbData`/`wbData.states` 只是账本;
 ② 哨兵要按**游戏实际怎么查**来设计 (查哪个实例、走哪条路), 否则写了也是自我安慰;
 ③ "首个 mod 优先" 的去重只约束**我们注入什么**, 约束不了游戏自己的 `@update` —— 两边的账要能对上。
+
+### 7.13 三条实测判决 + 一处布局读错 (2026-09-28 晚, 收尾 7.10~7.12)
+
+**① 字典是"实例语义"—— 7.10 的结论成立, 中途的怀疑撤回。**
+7.11 的哨兵第一次真跑后, 我一度因为"`IdVersionPair` 实现了 `IEquatable`/`GetHashCode`"
+怀疑 7.10 的"按实例匹配"写错了。真机探针(一次性, 现留在 selftest 里)给出的判决是:
+
+```
+[SELFTEST] 键语义 clue ('1-1' v1):
+    Equals(等价新实例)          = true     ← 类自身确实实现了值相等
+    字典 ContainsKey(等价新实例) = false    ← 但那个字典不用它
+    ⇒ 实例语义 (identity)
+```
+
+即: **类型有值相等 ≠ 那个字典按值匹配** (它用的是 identity 比较器)。教训: 判断容器语义要问
+**容器实例**本身; 读元数据只能提出假设, 不能当结论 —— 我差点据此改掉一个正确的结论。
+
+**② `_loadedDataItemMap` 是 `List<VersionedItem>`, 不是 `Dictionary`。**
+`session.js` 一直按 List 用它 (`RemoveAt` / `_items@0x10` / `_size@0x18` / 元素在 `+0x20+i*8`),
+而且**有效** (mod 切换清理、整页重建都靠它)。我却让哨兵的 A1 按 Dictionary 布局读
+(`+0x18` → entries 数组 → 24 字节步长) ⇒ 把 `_size`(155) 当指针用 → 被自己的守卫拦成 0 条 →
+"A1 一条都没探到", 连续两轮把负对照演成"哨兵没反应"。
+**两处更正**: ① 我说"旧日志里的 `map=155` 是垃圾数"是错的, 那正是 List 的 `_size` (已改回);
+② 现在 A1 不再猜布局 —— 用游戏自己的 `get_Count` / `get_Item` 访问器, 并把类名与两个候选偏移的
+原始值打进 `stats` 行, 谁再改都不用猜。**"猜内存布局"本身就是一种静默失败。**
+
+**③ 菜单间歇性不出现 = 重定向"单次 100ms 赌时机"且失败全静默。**
+`hookStartGame` 原来在 `TitleUi.Activate` 后只试一次 (100ms), 各失败分支全是 `dbg`。
+若那一刻标题剧本尚未就绪 → 重定向没做 → 游戏按原路径加载 → 日志里刷 ~87 条
+`Failed to load '' ...Naninovel.Script` 且菜单不出现 (实测 2026-09-28 19:44 那次);
+成功的那次一条都没有 (18:57 / 19:53 / 20:09) —— **现象与"重定向有没有落地"完全对应**。
+修法: ① 重试 (100ms 起, 每 150ms, 最多 20 次; 期间安静, 最后一次才 warn);
+② 关键步骤改为默认可见 (成功 → INFO `[菜单] 已把标题 StartGame 重定向 → ModLoader/Scripts/ModStart`;
+各失败分支 → warn)。这行 INFO 从此就是"菜单流程健康"的指纹。
+
+**④ 工具自证**: 新增的 `check-imports` 反向检查 ("用了 utils.js 的导出却没 import") 在这轮里
+**两次抓到我自己漏的 import** (`invokeOk`、`warn`) —— 这类错 frida-compile 不报、只在游戏里
+炸成 ReferenceError, 还会被 catch 吞掉。工具的价值当场验证。
 
 ## 八、日志系统 (2026-08-10 引入)
 

@@ -1,5 +1,5 @@
 📦
-41695 /src/entry.js
+42662 /src/entry.js
 1938 /src/banner.js
 5796 /src/chapterdisplay.js
 87992 /src/choice.js
@@ -8,7 +8,7 @@
 4600 /src/io.js
 6152 /src/locale.js
 11089 /src/log.js
-15128 /src/menu.js
+16059 /src/menu.js
 5832 /src/movie.js
 15506 /src/providers.js
 13586 /src/scripttext.js
@@ -17,13 +17,13 @@
 14873 /src/witchbook/data.js
 9031 /src/witchbook/dictheal.js
 20196 /src/witchbook/index.js
-27710 /src/witchbook/pages.js
-14648 /src/witchbook/selftest.js
+27757 /src/witchbook/pages.js
+20134 /src/witchbook/selftest.js
 46141 /src/witchbook/session.js
 2673 /src/witchbook/state.js
 7233 /src/witchbook/textures.js
 ✄
-import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, swallowed, wblog } from "./utils.js";
+import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, swallowed, warn, wblog } from "./utils.js";
 import { clearCutInCaches, preloadCutInTextures, setupCutInHooks } from "./cutin.js";
 import { clearCreditCaches, setupCreditHooks } from "./credit.js";
 import { initChoiceHandlers, setupChoiceHandlerHooks } from "./choice.js";
@@ -704,7 +704,22 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                             swallowed("entry.js:onTitleActivate.onLeave#5", e3);
                         }
                         // 重定向放到队列, 避免在 hook 回调里做托管调用
-                        setTimeout(function () { hookStartGame(); }, 100);
+                        // 重定向到菜单剧本: **重试**而不是只试一次 —— 2026-09-28 实测菜单会间歇性不出现,
+                        // 头号嫌疑就是"标题剧本此刻还没就绪 → hookStartGame 静默失败 → 游戏用原路径(空)加载"
+                        // (失败时游戏侧会刷 "Failed to load '' ...")。重试期间安静, 最后一次才 warn。
+                        (function retryRedirect(n) {
+                            var last = (n >= 19);
+                            var done = false;
+                            try {
+                                done = hookStartGame(!last);
+                            }
+                            catch (e9) {
+                                if (last)
+                                    warn("[菜单] 重定向异常: " + e9);
+                            }
+                            if (!done && !last)
+                                setTimeout(function () { retryRedirect(n + 1); }, 150);
+                        })(0);
                     }
                 });
                 dbg("[v3] TitleUi.Activate hooked");
@@ -7873,7 +7888,7 @@ function installCrashHandlerFallback() {
 ✄
 // ============ 菜单域: 菜单文本 (含翻页, 回迁自 16h 版) + 剧本注册 + StartGame @goto 重定向 ============
 // 镜像 Windows AddModStartMenu (ModResourceLoader.cs) + HookStartGame
-import { A, dbg, findClassAcrossImages, findSvc, findUnityImg, gotoModifiedCls, invoke, invokeOk, makeLocalResourceProvider, makeNamedStringCtor, makeS, makeUnityObject, readStr, swallowed } from "./utils.js";
+import { A, dbg, findClassAcrossImages, findSvc, findUnityImg, gotoModifiedCls, invoke, invokeOk, makeLocalResourceProvider, makeNamedStringCtor, makeS, makeUnityObject, readStr, swallowed, warn, wblog } from "./utils.js";
 var modScriptPrefix = "ModLoader";
 var modMenuScript = "ModStart";
 // ============ 菜单文本 (镜像 Windows AddModStartMenu, 简化) ============
@@ -8054,15 +8069,15 @@ export function registerMenu(modList) {
         }
         var ftMi = A.cgm(scriptCls, Memory.allocUtf8String("FromText"), 3);
         if (!ftMi || ftMi.isNull()) {
-            dbg("[v3] Script.FromText NOT FOUND");
+            warn("[菜单] Script.FromText NOT FOUND —— 菜单剧本注册不了");
             return;
         }
         var script = invoke(ftMi, ptr(0), [makeS(modMenuScript), makeS(text), ptr(0)]);
         if (script.isNull()) {
-            dbg("[v3] FromText returned null");
+            warn("[菜单] FromText 返回 null —— 菜单剧本注册失败");
             return;
         }
-        dbg("[v3] FromText 成功, script=" + script);
+        wblog("[菜单] 菜单剧本已注册 (FromText): " + modMenuScript + " script=" + script);
         var sm = findSvc("ScriptManager");
         if (!sm) {
             dbg("[v3] ScriptManager NOT FOUND");
@@ -8155,24 +8170,30 @@ export function registerMenu(modList) {
     }
 }
 // ============ 重定向 StartGame 的 @goto (镜像 Windows HookStartGame) ============
-export function hookStartGame() {
+// 返回 true = 已把标题的 StartGame 重定向到我们的菜单剧本; false = 这次没做成 (调用方会重试)。
+// quiet=true 时失败只记 dbg —— 重试期间别刷屏, 最后一次才 warn (见 entry.js 的重试包装)。
+export function hookStartGame(quiet) {
+    var say = function (m) { if (quiet)
+        dbg(m);
+    else
+        warn(m); };
     try {
         var sp = findSvc("WitchTrialsScriptPlayer", true);
         if (!sp)
             sp = findSvc("ScriptPlayer");
         if (!sp) {
-            dbg("[v3] ScriptPlayer NOT FOUND");
-            return;
+            say("[菜单] ScriptPlayer NOT FOUND —— 无法重定向到 ModStart (菜单不会出现)");
+            return false;
         }
         var played = sp.add(0x58).readPointer(); // PlayedScript
         if (played.isNull()) {
-            dbg("[v3] PlayedScript NULL");
-            return;
+            say("[菜单] PlayedScript 为 NULL —— 时刻太早/太晚, 无法重定向 (菜单不会出现)");
+            return false;
         }
         var linesArr = played.add(0x30).readPointer(); // Script.lines
         if (linesArr.isNull()) {
-            dbg("[v3] lines NULL");
-            return;
+            say("[菜单] 标题剧本 lines 为 NULL —— 无法重定向 (菜单不会出现)");
+            return false;
         }
         var n = linesArr.add(0x18).readS32();
         var foundLabel = false;
@@ -8199,22 +8220,25 @@ export function hookStartGame() {
                     var nspCls = A.ogc(pathObj);
                     var svMi = A.cgm(nspCls, Memory.allocUtf8String("SetValue"), 1);
                     if (!svMi || svMi.isNull()) {
-                        dbg("[v3] Path.SetValue NOT FOUND");
-                        return;
+                        say("[菜单] Path.SetValue NOT FOUND —— 无法重定向 (菜单不会出现)");
+                        return false;
                     }
                     // 重定向到完整路径 (缓存键测试)
                     var fullPath = modScriptPrefix + "/Scripts/" + modMenuScript;
                     var nsObj = makeNamedStringCtor(fullPath, "");
                     invoke(svMi, pathObj, [nsObj]);
-                    dbg("[v3] >>> Path.SetValue(\"" + fullPath + "\") 完成 (完整路径)");
+                    wblog("[菜单] 已把标题 StartGame 重定向 → " + fullPath); // INFO: 菜单流程的关键一步, 默认可见 (失败时无从判断)
+                    return true;
                     return;
                 }
             }
         }
-        dbg("[v3] 未在 StartGame 下找到 GotoModified (lines=" + n + ")");
+        say("[菜单] 未在 StartGame 下找到 GotoModified (lines=" + n + ") —— 重定向没做, 菜单不会出现");
+        return false;
     }
     catch (e) {
-        dbg("[v3] hookStartGame err: " + e);
+        say("[菜单] hookStartGame err: " + e);
+        return false;
     }
 }
 
@@ -11187,7 +11211,7 @@ export function injectPage(cat) {
                 if (overrideIds.length)
                     wblog(cat.name + " override " + overrideIds.length + " 条: " + overrideIds.join(","));
                 if (added > 0)
-                    wblog(cat.name + "Page._loadedDataItemMap 注入 " + added + " 条 (total=" + mapList.add(0x18).readS32() + ")");
+                    wblog(cat.name + "Page._loadedDataItemMap 注入 " + added + " 条 (total=" + mapList.add(0x18).readS32() + ")"); // _size@0x18 (它是 List, 不是 Dictionary)
             }
         }
         ensureItemIdsString(page, pageCls); // macOS: Graphic[]/Canvas[] → String[] (游戏 Contains 才不炸)
@@ -11608,7 +11632,7 @@ export function hookRefreshLocalized() {
 //   C. 页面统计 (map 条数 / _itemIds 唯一数 / _state 条数) —— 给人核对, 机器不判。
 // 输出: 每轮 `[SELFTEST] PASS/FAIL <名称>` + 收尾 `[SELFTEST] SUMMARY pass=N fail=M knf=K`
 // 宿主 `test-tools/regression.py` 就是 grep 这些行来判断成败。
-import { A, error, fieldOffset, findAllObjectOfTypeAll, findClassAcrossImages, invokeBool, readStr, swallowed, swallowedStats, warn, wblog } from "../utils.js";
+import { A, error, fieldOffset, findAllObjectOfType, findAllObjectOfTypeAll, findClassAcrossImages, invokeBool, invokeOk, readStr, swallowed, swallowedStats, warn, wblog } from "../utils.js";
 import { wbCls } from "./state.js";
 import { makeIdVersionPair, wbCats } from "./data.js";
 import { dictFindKeyInstance, dictHasIdVer } from "./session.js";
@@ -11616,42 +11640,59 @@ var _stats = { pass: 0, fail: 0, note: 0, knf: 0, rounds: 0, hooked: false };
 // 扫描 `_loadedDataItemMap` 的每个活条目 → { id, ver, 游戏查字典时用的那个 IdVersionPair 实例 }
 // 为什么是它: 2026-09-25 的 KNF 根因是"字典里有键, 但游戏手里的实例不是它" —— 只有拿**这个实例**
 // 去问 ContainsKey 才能发现; 拿 id/ver 去问 (或拿字典自己的键实例) 永远为真, 查不出问题。
-function scanMapLookups(page, pageCls) {
-    var out = [];
+// 容器探测 (不再猜布局): `_loadedDataItemMap` 在 session.js 里是按 **List** 用的
+// (RemoveAt / _items@0x10 / _size@0x18), 而我先前的 A1 按 Dictionary 布局走 (+0x18→entries→24 字节),
+// 把 _size 当指针用 → 被我自己的守卫拦成 0 条, 还误判"旧日志里的 map=155 是垃圾数" (其实是 _size)。
+// 教训 (第 N 次): **猜内存布局不如问游戏自己要** —— 这里用 get_Count/get_Item 访问器, 顺带把类名与
+// 两个候选偏移的原始值打进日志, 下次谁再改都不用猜。
+function probeMap(page, pageCls) {
+    var out = { cls: "?", count: -1, raw18: null, raw20: null, items: [] };
     try {
-        var ml = page.add(fieldOffset(pageCls, "_loadedDataItemMap", 0x88)).readPointer();
-        if (ml.isNull())
+        var m = page.add(fieldOffset(pageCls, "_loadedDataItemMap", 0x88)).readPointer();
+        if (m.isNull())
             return out;
-        var ents = ml.add(0x18).readPointer();
-        if (ents.isNull())
+        var mc = A.ogc(m);
+        try {
+            out.cls = A.cgn(mc).readCString() || "?";
+        }
+        catch (e0) { }
+        try {
+            out.raw18 = m.add(0x18).readS32();
+        }
+        catch (e1) { }
+        try {
+            out.raw20 = m.add(0x20).readS32();
+        }
+        catch (e2) { }
+        var cMi = A.cgm(mc, Memory.allocUtf8String("get_Count"), 0);
+        if (cMi && !cMi.isNull()) {
+            var r = invokeOk(cMi, m, []);
+            if (r.ok && !r.ret.isNull())
+                out.count = r.ret.add(0x10).readS32(); // 装箱 int32
+        }
+        if (out.count < 1 || out.count > 20000)
             return out;
-        var cap = ents.add(0x18).readS32();
-        if (cap < 0 || cap > 20000)
-            return out;
-        for (var i = 0; i < cap; i++) {
-            try {
-                var e = ents.add(0x20 + i * 24);
-                if (e.readS32() < 0)
-                    continue; // 死槽 (已 Remove)
-                var k = e.add(8).readPointer(), v = e.add(16).readPointer();
-                if (k.isNull() || v.isNull())
-                    continue;
-                // 只有值是 VersionedItem 时, +0x28 才是 `_idVersionPair`。别的页 (如 Map 的
-                // MapDataItem) 值类型不同 → 退回用条目自己的键 (那是游戏自己插进去的, 必然在字典里),
-                // 避免把"读错字段拿到的垃圾指针"报成 FAIL。
-                var lookup = k, vcn = "";
+        var itMi = A.cgm(mc, Memory.allocUtf8String("get_Item"), 1);
+        if (itMi && !itMi.isNull()) {
+            for (var i = 0; i < out.count && i < 4000; i++) {
                 try {
-                    vcn = A.cgn(A.ogc(v)).readCString() || "";
+                    var ib = Memory.alloc(4);
+                    ib.writeS32(i);
+                    var r2 = invokeOk(itMi, m, [ib]);
+                    if (!r2.ok || r2.ret.isNull())
+                        continue;
+                    var ivp = r2.ret.add(0x28).readPointer(); // VersionedItem._idVersionPair (游戏查字典用的实例)
+                    if (ivp.isNull())
+                        continue;
+                    out.items.push({ id: readStr(ivp.add(0x10).readPointer()), ver: ivp.add(0x18).readS32(), lookup: ivp });
                 }
-                catch (e4) { }
-                if (vcn.indexOf("VersionedItem") >= 0)
-                    lookup = v.add(0x28).readPointer();
-                out.push({ id: readStr(k.add(0x10).readPointer()), ver: k.add(0x18).readS32(), lookup: lookup });
+                catch (e3) { }
             }
-            catch (e2) { }
         }
     }
-    catch (e3) { }
+    catch (e) {
+        swallowed("witchbook/selftest.js:probeMap", e);
+    }
     return out;
 }
 export function selftestEnabled() {
@@ -11725,6 +11766,77 @@ export function setupSelftest() {
         return 0;
     }
 }
+// ===== 键语义探针 (一次性) =====
+// `IdVersionPair` 同时实现 IEquatable 与 IEqualityComparer (dump 实证), 所以字典**可能**是值语义 ——
+// 这与 7.10 写的"按实例匹配"矛盾。到底哪种, 问游戏最直接: 拿"值相等的新实例"和"版本+1"分别去问
+// 真实字典 + 直接调它的 Equals。一次性打印, 用来给文档定案。
+var _semProbed = false, _breakAnnounced = false, _instLogged = {};
+function probeKeySemantics(page, pageCls, locOff, dict, ck, specKey) {
+    if (_semProbed)
+        return;
+    try {
+        var ivpCls = findClassAcrossImages("WitchTrials.Models", "IdVersionPair");
+        if (!ivpCls || ivpCls.isNull())
+            return;
+        var look = probeMap(page, pageCls).items;
+        var id, ver, real;
+        if (look.length) {
+            id = look[0].id;
+            ver = look[0].ver;
+            real = look[0].lookup;
+        }
+        else {
+            // map 扫不到 (实例选错/为空) 也要给答案: 直接取字典里第一个**活**条目当基准
+            var ents = dict.add(0x18).readPointer();
+            if (ents.isNull())
+                return;
+            var cap = ents.add(0x18).readS32();
+            if (cap < 0 || cap > 20000)
+                return;
+            for (var i = 0; i < cap && !real; i++) {
+                var en = ents.add(0x20 + i * 24);
+                if (en.readS32() < 0)
+                    continue;
+                var kk = en.add(8).readPointer();
+                if (kk.isNull())
+                    continue;
+                real = kk;
+                id = readStr(kk.add(0x10).readPointer());
+                ver = kk.add(0x18).readS32();
+            }
+            if (!real || !id)
+                return;
+        }
+        var L = { id: id, ver: ver, lookup: real };
+        _semProbed = true;
+        var a = makeIdVersionPair(L.id, L.ver), b = makeIdVersionPair(L.id, L.ver), c = makeIdVersionPair(L.id, L.ver + 1);
+        var eqMi = A.cgm(ivpCls, Memory.allocUtf8String("Equals"), 1); // Equals(IdVersionPair other)
+        var eqSelf = false, eqEquiv = false;
+        try {
+            if (eqMi && !eqMi.isNull()) {
+                eqSelf = invokeBool(eqMi, a, [a]);
+                eqEquiv = invokeBool(eqMi, a, [b]);
+            }
+        }
+        catch (e1) { }
+        var ckEq = false, ckV1 = false, ckReal = false;
+        try {
+            if (ck && !ck.isNull()) {
+                ckReal = invokeBool(ck, dict, [L.lookup]); // 游戏自己那个实例 (基准)
+                ckEq = invokeBool(ck, dict, [a]); // 值相等的新实例
+                ckV1 = invokeBool(ck, dict, [c]); // 版本+1
+            }
+        }
+        catch (e2) { }
+        wblog("[SELFTEST] 键语义 " + specKey + " ('" + L.id + "' v" + L.ver + "): Equals(自己)=" + eqSelf +
+            " Equals(等价新实例)=" + eqEquiv + " | 字典 ContainsKey(游戏实例)=" + ckReal +
+            " (等价新实例)=" + ckEq + " (版本+1)=" + ckV1 +
+            "  ⇒ " + (ckEq ? "**值语义** (按 Id+Version 匹配)" : "**实例语义** (identity)"));
+    }
+    catch (e) {
+        swallowed("witchbook/selftest.js:probeKeySemantics", e);
+    }
+}
 // ===== A + C. 每轮断言与统计 =====
 export function runSelftest(round) {
     if (!selftestEnabled())
@@ -11752,14 +11864,19 @@ export function runSelftest(round) {
             var sp = specs[s];
             if (!sp.pageCls || sp.pageCls.isNull())
                 continue;
-            var pages = findAllObjectOfTypeAll(sp.pageCls);
-            if (!pages.length) {
+            var pk = pickPage(sp.pageCls);
+            if (!pk.page) {
                 wblog("[SELFTEST] FAIL " + sp.key + ": 页面实例不存在");
                 _stats.fail++;
                 continue;
             }
             try {
-                var page = pages[0];
+                var page = pk.page;
+                if (!_instLogged[sp.key]) {
+                    _instLogged[sp.key] = 1;
+                    wblog("[SELFTEST] 页面实例 " + sp.key + ": 共 " + pk.n + " 个 (active " + pk.activeN + "), 各实例 map 条数=[" +
+                        pk.counts.join(" ") + "] → 采用 " + pk.mapN + " 条那个");
+                }
                 var dict = page.add(fieldOffset(sp.pageCls, "_localizedTextData", sp.locOff)).readPointer();
                 if (dict.isNull()) {
                     wblog("[SELFTEST] FAIL " + sp.key + ": _localizedTextData 为 null");
@@ -11771,17 +11888,28 @@ export function runSelftest(round) {
                 // 游戏查字典用的是 map 条目自己的 IdVersionPair 实例 (`VersionedItem._idVersionPair`@0x28),
                 // 不是"值相等的另一个实例"。所以这里必须拿**那个实例**去问 ContainsKey —— 只查
                 // "字典自己有没有这个 (id,ver)" 是查不出那次 bug 的 (字典里有, 但游戏手里的实例不在里面)。
-                var look = scanMapLookups(page, sp.pageCls);
-                var inMap = {}, mapN = look.length, badMap = 0;
-                var selfproof = selfProofEnabled(); // 负对照: 换等价实例去问
+                var mp = probeMap(page, sp.pageCls);
+                var look = mp.items, mapN = mp.count, badMap = 0, inMap = {};
+                // 不再静默: 有条数却取不到条目 = 我的读取有问题, 必须说出来 (并带类名/原始偏移值)
+                if (!look.length && mapN > 0) {
+                    _stats.note++;
+                    wblog("[SELFTEST] NOTE " + sp.key + ": map 有 " + mapN + " 条但 get_Item 取到 0 条 (" + mp.cls + " raw18=" + mp.raw18 + " raw20=" + mp.raw20 + ")");
+                }
+                var selfproof = selfProofEnabled(); // 负对照: 换成不匹配的键去问 (见下)
+                if (selfproof && !_breakAnnounced) {
+                    _breakAnnounced = true;
+                    wblog("[SELFTEST] 负对照模式 (MOD_SELFTEST_BREAK=1): 每分类第一条改用版本+1 的键 → 必须报 FAIL (其余条目照常真查)");
+                }
                 for (var li = 0; li < look.length; li++) {
                     var L = look[li];
                     if (L.id)
                         inMap[L.id] = 1;
                     var probe = L.lookup;
-                    if (selfproof) {
+                    // 负对照用"版本+1"而不是"等价新实例": 后者在**值语义**字典里会命中 (2026-09-28 实测),
+                    // 那样负对照就永远绿了。版本+1 在两种语义下都必然不匹配 → 断言才有确定性。
+                    if (selfproof && li === 0) {
                         try {
-                            probe = makeIdVersionPair(L.id, L.ver);
+                            probe = makeIdVersionPair(L.id, L.ver + 1);
                         }
                         catch (e5) {
                             probe = L.lookup;
@@ -11805,6 +11933,7 @@ export function runSelftest(round) {
                             (L.lookup && !L.lookup.isNull() ? " (map 条目的 ivp 实例不在字典里)" : " (map 条目 ivp=null)"));
                     }
                 }
+                probeKeySemantics(page, sp.pageCls, sp.locOff, dict, ck, sp.key);
                 // —— A2. `_state` 里的键: 字典里得有活条目 ——
                 // 分级: 同时在 map 里 (会被渲染) → FAIL; 只在 state 里 (渲染不走它) → NOTE (记录, 不判)。
                 // 为什么分级: 游戏自己的 `@update` 会写入**非本 mod** 的键 (2026-09-28 实测: Twilight 的
@@ -11866,7 +11995,7 @@ export function runSelftest(round) {
                 catch (e3) {
                     swallowed("witchbook/selftest.js:runSelftest#3", e3);
                 }
-                wblog("[SELFTEST] stats " + sp.key + ": map=" + mapN + " _itemIds=" + idsN + "(唯一 " + idsUniq + ") _state=" + stateN +
+                wblog("[SELFTEST] stats " + sp.key + ": map=" + mapN + "(" + mp.cls + ")/取到" + look.length + " 实例=" + pk.n + " _itemIds=" + idsN + "(唯一 " + idsUniq + ") _state=" + stateN +
                     (badMap ? " 渲染缺=" + badMap : "") + (badKeys ? " 缺键=" + badKeys : "") + (notes ? " 仅状态=" + notes : ""));
             }
             catch (e4) {

@@ -11,7 +11,7 @@
 // 日志分层: 机制日志走 dbg (MOD_DEBUG, 默认关); 游戏侧 Unity.LogError 全量 dump (dumpObj 原样 console.log)
 'use strict';
 
-import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, swallowed, wblog } from "./utils.js";
+import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, swallowed, warn, wblog } from "./utils.js";
 import { clearCutInCaches, preloadCutInTextures, setupCutInHooks } from "./cutin.js";
 import { clearCreditCaches, setupCreditHooks } from "./credit.js";
 import { initChoiceHandlers, setupChoiceHandlerHooks } from "./choice.js";
@@ -557,7 +557,15 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                         // WitchBook 纹理尽早注册 (Title 后场景加载即有)
                         try { if (wbCls) registerTexturesInto(null); } catch (e3) { swallowed("entry.js:onTitleActivate.onLeave#5", e3); }
                         // 重定向放到队列, 避免在 hook 回调里做托管调用
-                        setTimeout(function () { hookStartGame(); }, 100);
+                        // 重定向到菜单剧本: **重试**而不是只试一次 —— 2026-09-28 实测菜单会间歇性不出现,
+                    // 头号嫌疑就是"标题剧本此刻还没就绪 → hookStartGame 静默失败 → 游戏用原路径(空)加载"
+                    // (失败时游戏侧会刷 "Failed to load '' ...")。重试期间安静, 最后一次才 warn。
+                    (function retryRedirect(n) {
+                        var last = (n >= 19);
+                        var done = false;
+                        try { done = hookStartGame(!last); } catch (e9) { if (last) warn("[菜单] 重定向异常: " + e9); }
+                        if (!done && !last) setTimeout(function () { retryRedirect(n + 1); }, 150);
+                    })(0);
                     }
                 });
                 dbg("[v3] TitleUi.Activate hooked");
