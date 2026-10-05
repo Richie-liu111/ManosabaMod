@@ -11,7 +11,7 @@ export var allImgs = [];
 // GotoModified 类 (entry.js 解析, menu.js 的 hookStartGame 使用)
 export var gotoModifiedCls = null;
 
-// 日志输出统一走 log.js: console 彩色 (ERROR红/WARN黄/INFO青/DEBUG灰) + 文件明文 modlog.txt
+// 日志输出统一走 log.js: console 彩色 (ERROR红/WARN黄/INFO青/DEBUG灰) + 文件明文 modlog.log
 // wblog=INFO 默认显示; dbg=DEBUG 归 MOD_DEBUG (默认关)。导出名/签名不变 → 调用点零改动。
 import { debug as logDebug, info as logInfo, warn as logWarn, error as logError,
          swallowed as logSwallowed, swallowedWarn as logSwallowedWarn, swallowedStats as logSwallowedStats } from "./log.js";
@@ -42,6 +42,51 @@ export function readStr(p) {
     } catch (e) { return null; }
 }
 export function makeS(v) { return A.sn(Memory.allocUtf8String(v || "")); }
+
+// ============ 诊断工具: 托管对象寿命 (2026-10-05) ============
+// 背景: 注入侧用 makeS 造的托管字符串, 在传给 il2cpp_runtime_invoke 之前**没有任何托管引用**
+// (只在 JS 变量里, 而 Boehm 只扫栈/寄存器/静态数据段, 不扫 V8 堆) —— 这中间只要发生一次
+// 托管分配触发 GC, 该字符串就可能被回收, 之后传进去的就是失效/空的指针。
+// 已实证过的同类根因: 2026-09-25 图鉴"基座快照存托管对象裸指针悬垂"。
+// 下面两个工具只服务诊断探针 (MOD_GC_PROBE / MOD_FAULT 控制), 默认不参与任何流程。
+export function gcCollect() {          // 直调 il2cpp_gc_collect (dylib 有导出, entry.js 从 E 里绑定)
+    try { if (A.gcCollect) { A.gcCollect(); return true; } } catch (e) { swallowed("utils.js:gcCollect", e); }
+    return false;
+}
+export function gcIsDisabled() {
+    try { return A.gcIsDisabled ? !!A.gcIsDisabled() : null; } catch (e) { return null; }
+}
+export function gcDisable() {
+    try { if (A.gcDisable) { A.gcDisable(); return true; } } catch (e) { swallowed("utils.js:gcDisable", e); }
+    return false;
+}
+export function gcEnable() {
+    try { if (A.gcEnable) A.gcEnable(); } catch (e) { swallowed("utils.js:gcEnable", e); }
+}
+// 把 GC 关掉跑一段代码 (il2cpp_gc_disable/enable 是计数器式 API, 可嵌套, 会自动配对)。
+// 用途: "造托管对象 → 立刻交给托管侧"这类临界区 —— 这段时间里对象只被 JS 变量引用,
+// 任何一次自动 GC (本线程触发或别的线程触发) 都可能把它们回收, 之后就是悬垂指针。
+// 必须在 finally 里 enable, 否则异常一跑就把 GC 永久关掉。
+export function withGcDisabled(fn) {
+    var disabled = gcDisable();
+    try {
+        return fn();
+    } finally {
+        if (disabled) gcEnable();
+    }
+}
+// 制造无根托管垃圾: 强制 GC 之后抢着复用刚释放的内存块 —— 只有"已回收 + 内存被复用"才会让
+// 悬垂指针读出空串/垃圾 (单纯回收但块未被复用, 读回往往还是旧值)。
+export function churnManagedStrings(count, size) {
+    var s = ""; for (var k = 0; k < size; k++) s += "x";
+    try { for (var i = 0; i < count; i++) makeS(s); } catch (e) { swallowed("utils.js:churnManagedStrings", e); }
+}
+// 日志里表示一个"可能是垃圾"的字符串: 截断 + 带长度, 避免刷屏/误读
+export function shortStr(s, max) {
+    if (s === null || s === undefined) return "<null>";
+    max = max || 48;
+    return s.length > max ? (JSON.stringify(s.slice(0, max)) + "…(len=" + s.length + ")") : JSON.stringify(s);
+}
 // 从 PNG 文件字节读宽高 (IHDR 16-23 字节大端) — 绕开 Texture2D get_width/get_height 的 runtime_invoke 问题
 // 供 cutin.js / choice.js 共用 (原 v3 单文件内各有一份)
 export function pngDims(fb) {

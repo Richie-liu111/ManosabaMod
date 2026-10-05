@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""回归: 构建 → 部署 → 跑一次加载器 → 到点杀掉 → 读 modlog.txt 断言 → 给退出码。
+"""回归: 构建 → 部署 → 跑一次加载器 → 到点杀掉 → 读 modlog.log 断言 → 给退出码。
 
 为什么要它 (2026-09-25 教训): 那次"图鉴打不开"排查了十几轮, 每轮都是"人重启游戏 → 点图鉴 →
 贴日志"。而真正的判据(字典键能不能查到 / 有没有 KeyNotFoundException)其实可以机器判 ——
@@ -17,10 +17,10 @@
     python3 test-tools/regression.py --no-build           # 不重建, 用现有 repo 产物
     python3 test-tools/regression.py --no-deploy          # 不 cp (测游戏目录里已有的包)
     python3 test-tools/regression.py --case gapless       # 仅提示文字 (自动驱动剧本尚未落地)
-    python3 test-tools/regression.py --check-only --log <modlog.txt>   # 只对现成日志断言
+    python3 test-tools/regression.py --check-only --log <modlog.log>   # 只对现成日志断言
     python3 test-tools/regression.py --save /tmp/run.txt                # 额外存一份终端记录
 
-日志去哪了: **游戏目录的 modlog.txt** 是真正的日志 (每运行截断重开, 崩溃前 flush), 断言读的就是它;
+日志去哪了: **游戏目录的 modlog.log** 是真正的日志 (每运行截断重开, 崩溃前 flush), 断言读的就是它;
 本脚本往终端打的 `  | ...` 只是 run_mod.sh stdout 的镜像, 想留档就用 --save。
 
 硬断言 (失败即退出码 1):
@@ -168,7 +168,7 @@ def run_and_check(args) -> int:
         env["MOD_DEBUG"] = "1"        # 机制日志全开 (排查用; 注意上面刚清掉继承来的同名变量)
     if args.game_dir:
         env["GAME_DIR"] = args.game_dir
-    log_path = Path(args.log) if args.log else (game / "modlog.txt")
+    log_path = Path(args.log) if args.log else (game / "modlog.log")
     env["MOD_LOG"] = str(log_path)          # 钉死日志路径 → 下面断言的一定是本次这次运行
     if args.save:
         save_path = Path(args.save)
@@ -222,14 +222,14 @@ def main():
     ap = argparse.ArgumentParser(description="WitchBook 回归: MOD_SELFTEST 断言 + 退出码")
     ap.add_argument("--seconds", type=int, default=90, help="跑多久 (默认 90s)")
     ap.add_argument("--case", default="", help="用例提示 (gapless / twilight), 仅打印")
-    ap.add_argument("--log", default="", help="日志路径 (默认 <游戏目录>/modlog.txt)")
+    ap.add_argument("--log", default="", help="日志路径 (默认 <游戏目录>/modlog.log)")
     ap.add_argument("--game-dir", default="", help="游戏目录, 透传给 run_mod.sh 的 GAME_DIR")
     ap.add_argument("--no-build", action="store_true", help="跳过构建 (用现有 repo 产物)")
     ap.add_argument("--no-deploy", action="store_true", help="跳过 cp 到游戏目录")
     ap.add_argument("--debug", action="store_true", help="MOD_DEBUG=1 (开机制日志, 排查用)")
     ap.add_argument("--self-proof", action="store_true",
                     help="负对照: 让哨兵改用等价但不同实例的键 → 必须报 FAIL (证明它抓得住 2026-09-25 那类坑)")
-    ap.add_argument("--save", default="", help="把 run_mod.sh 的终端输出另存一份 (modlog.txt 之外的记录)")
+    ap.add_argument("--save", default="", help="把 run_mod.sh 的终端输出另存一份 (modlog.log 之外的记录)")
     ap.add_argument("--require-summary", action="store_true", help="必须出现断言轮次 (要你手动进剧本+开图鉴)")
     ap.add_argument("--check-only", action="store_true", help="不启动游戏, 只对 --log 现成日志做断言")
     args = ap.parse_args()

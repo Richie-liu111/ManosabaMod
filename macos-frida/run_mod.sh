@@ -34,11 +34,31 @@ GAME="${GAME:-$GAME_DIR/manosaba.app/Contents/MacOS/manosaba}"
 SCRIPT="$PWD/dist/manosabamod.js"
 MOD_ROOT="${1:-$GAME_DIR/ManosabaMod}"
 
-# 日志系统: modlog.txt 默认在游戏根 (每运行截断重开), MOD_LOG 可覆盖;
+# 日志系统: modlog.log 默认在游戏根 (每运行截断重开), MOD_LOG 可覆盖;
 # MOD_NO_COLOR=1 关闭终端颜色 (重定向/全量捕获时用: MOD_NO_COLOR=1 ./run_mod.sh > all.log)
-MOD_LOG="${MOD_LOG:-$GAME_DIR/modlog.txt}"
+MOD_LOG="${MOD_LOG:-$GAME_DIR/modlog.log}"
 MOD_NO_COLOR="${MOD_NO_COLOR:-0}"
 PLAYER_LOG="$HOME/Library/Logs/Re,AER/manosaba/Player.log"
+# 诊断开关 (默认全关, 不影响正常启动; 排查时才开):
+#   MOD_MENU_PROBE=1      菜单剧本 path 采样 + 本地化文档/loader 查找探针 (噪音大, 仅排查用)
+#   MOD_GC_PROBE=1        菜单剧本构造时在"path 字符串 → FromText"之间强制一次 GC, 放大托管字符串无根窗口
+#   MOD_FAULT=menu-nopath 故意用空 path 构造菜单剧本, 确定性复现 New Game 黑屏 (给防御性修法做 A/B)
+MOD_FAULT="${MOD_FAULT:-}"
+MOD_GC_PROBE="${MOD_GC_PROBE:-0}"
+MOD_MENU_PROBE="${MOD_MENU_PROBE:-0}"
+
+# 现场保留 (默认关): MOD_LOG_ARCHIVE=1 时, 启动前把上一轮 modlog 复制归档到同目录 logs/。
+# 默认关的理由: 对玩家来说就是一堆没用的文件, 只有排查间歇性故障时才需要留现场 (2026-10-05 丢过一份)。
+MOD_LOG_ARCHIVE="${MOD_LOG_ARCHIVE:-0}"
+if [ "$MOD_LOG_ARCHIVE" = "1" ] && [ -s "$MOD_LOG" ]; then
+    ARCHIVE_DIR="$(dirname "$MOD_LOG")/logs"
+    mkdir -p "$ARCHIVE_DIR"
+    # 归档名沿用源文件后缀 (log/txt 都行); 没有后缀时按 log
+    _log_name="$(basename "$MOD_LOG")"; _log_base="${_log_name%.*}"; _log_ext="${_log_name##*.}"
+    [ "$_log_ext" = "$_log_name" ] && _log_ext="log"
+    ARCHIVE="$ARCHIVE_DIR/${_log_base}-prev-$(date +%m%d-%H%M%S).${_log_ext}"
+    if cp "$MOD_LOG" "$ARCHIVE"; then echo ">>> 上一轮日志已归档: $ARCHIVE"; fi
+fi
 
 if [ ! -f "$GAME" ]; then echo "错误: 找不到游戏 $GAME"; exit 1; fi
 
@@ -121,7 +141,7 @@ echo ">>> Mod 日志: $MOD_LOG (MOD_DEBUG=${MOD_DEBUG:-0})"
 PROBE="${PROBE:-}"
 
 # 导出环境变量给 Python (heredoc 用带引号形式, 避免转义被 shell 处理)
-export GAME SCRIPT MOD_ROOT MOD_DEBUG MOD_LOG MOD_NO_COLOR PLAYER_LOG PROBE
+export GAME SCRIPT MOD_ROOT MOD_DEBUG MOD_LOG MOD_NO_COLOR PLAYER_LOG PROBE MOD_FAULT MOD_GC_PROBE MOD_MENU_PROBE
 $PY << 'ENDPY'
 import frida, time, json, os, re, sys
 
@@ -131,6 +151,9 @@ MOD_ROOT = os.environ['MOD_ROOT']
 MOD_DEBUG = os.environ.get('MOD_DEBUG') == '1'
 MOD_SELFTEST = os.environ.get('MOD_SELFTEST') == '1'
 MOD_SELFTEST_BREAK = os.environ.get('MOD_SELFTEST_BREAK') == '1'
+MOD_FAULT = os.environ.get('MOD_FAULT') or ''
+MOD_GC_PROBE = os.environ.get('MOD_GC_PROBE') == '1'
+MOD_MENU_PROBE = os.environ.get('MOD_MENU_PROBE') == '1'
 MOD_LOG = os.environ.get('MOD_LOG') or ''
 MOD_NO_COLOR = os.environ.get('MOD_NO_COLOR') == '1'
 PLAYER_LOG = os.environ.get('PLAYER_LOG') or ''
@@ -255,10 +278,16 @@ MOD_DEBUG_JS = 'var MOD_DEBUG=true;' if MOD_DEBUG else ''
 MOD_SELFTEST_JS = 'var MOD_SELFTEST=true;' if MOD_SELFTEST else ''
 MOD_SELFTEST_BREAK_JS = 'var MOD_SELFTEST_BREAK=true;' if MOD_SELFTEST_BREAK else ''
 NO_UPDATE_JS = 'var NO_UPDATE_HOOK=true;' if os.environ.get('NO_UPDATE_HOOK') == '1' else ''
+# 诊断探针开关 (默认空 → JS 侧不认识这两个名字, 全部探针不开):
+#   MOD_FAULT=menu-nopath  症状注入 (确定性复现 New Game 黑屏)
+#   MOD_GC_PROBE=true      菜单剧本构造窗口内强制 GC (放大托管字符串无根假设)
+MOD_FAULT_JS = ('var MOD_FAULT=%s;' % json.dumps(MOD_FAULT)) if MOD_FAULT else ''
+MOD_GC_PROBE_JS = 'var MOD_GC_PROBE=true;' if MOD_GC_PROBE else ''
+MOD_MENU_PROBE_JS = 'var MOD_MENU_PROBE=true;' if MOD_MENU_PROBE else ''
 # MOD_LOG/MOD_NO_COLOR 用 json.dumps (路径含空格/中文安全); 空 MOD_LOG → JS 端走默认兜底路径
 inject_code = ('var modList=%s;var MOD_ROOT=%s;var movieMap=%s;var chapterNames=%s;var MOD_LOG=%s;var MOD_NO_COLOR=%s;'
                % (mods_str, json.dumps(MOD_ROOT), movie_map_json, chapter_names_json, json.dumps(MOD_LOG), json.dumps(JS_NO_COLOR))) \
-              + MOD_DEBUG_JS + MOD_SELFTEST_JS + MOD_SELFTEST_BREAK_JS + NO_UPDATE_JS
+              + MOD_DEBUG_JS + MOD_SELFTEST_JS + MOD_SELFTEST_BREAK_JS + NO_UPDATE_JS + MOD_FAULT_JS + MOD_GC_PROBE_JS + MOD_MENU_PROBE_JS
 inj = 'Script.evaluate("mod-vars", %s);' % json.dumps(inject_code)
 inj_frag = f"{len(inj.encode('utf-8'))} /frida/mod-vars.js\n✄\n{inj}"
 bundle_body = JS_BASE[2:] if JS_BASE.startswith("📦\n") else JS_BASE
@@ -355,7 +384,12 @@ except KeyboardInterrupt:
     except OSError:
         pass  # 游戏已退出
 cleanup()
-print('>>> Mod 日志: %s (MOD_DEBUG=%s MOD_SELFTEST=%s%s)' % (MOD_LOG or '<游戏根>/modlog.txt', MOD_DEBUG, MOD_SELFTEST, ' BREAK=1 负对照' if MOD_SELFTEST_BREAK else ''))
+probe_flags = ((' BREAK=1 负对照' if MOD_SELFTEST_BREAK else '')
+               + (' MOD_FAULT=' + MOD_FAULT if MOD_FAULT else '')
+               + (' MOD_GC_PROBE=1' if MOD_GC_PROBE else '')
+               + (' MOD_MENU_PROBE=1' if MOD_MENU_PROBE else ''))
+print('>>> Mod 日志: %s (MOD_DEBUG=%s MOD_SELFTEST=%s%s)' % (
+    MOD_LOG or '<游戏根>/modlog.log', MOD_DEBUG, MOD_SELFTEST, probe_flags))
 if PLAYER_LOG and os.path.isfile(PLAYER_LOG):
     print('>>> Unity 日志: %s' % PLAYER_LOG)
 ENDPY

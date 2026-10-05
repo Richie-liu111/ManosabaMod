@@ -195,7 +195,7 @@ function chSwapPortrait(clone, sprite) {
 //  有效路径 = 触发按钮加载后从 LoadedByFullPath 缓存条目偷取)
 function chFindResourceLoader() {
     var mgr = findSvc("ChoiceHandlerManager", true);
-    if (!mgr) mgr = findSvc("WitchTrialsChoiceHandlerManager");
+    if (!mgr) mgr = findSvc("WitchTrialsChoiceHandlerManager", true);
     if (!mgr) { dbg("[Choice] steal: mgr NOT FOUND"); return null; }
     var cands = [0x38, 0x40, 0x48, 0x50, 0x58, 0x60, 0x68, 0x70, 0x78, 0x80, 0x88, 0x90];
     for (var i = 0; i < cands.length; i++) {
@@ -246,7 +246,7 @@ function chTriggerGOClass() {
         if (chGOTriggered) return;
         chGOTriggered = true;
         var mgr = findSvc("ChoiceHandlerManager", true);
-        if (!mgr) mgr = findSvc("WitchTrialsChoiceHandlerManager");
+        if (!mgr) mgr = findSvc("WitchTrialsChoiceHandlerManager", true);
         if (!mgr || mgr.isNull()) { chGOTriggered = false; return; }
         var cfg = null;
         for (var o = 0x10; o <= 0x80 && !cfg; o += 8) {
@@ -460,7 +460,7 @@ function tryFinalizeChoiceHandlers() {
         try {
             // 1. mgr + metaMap
             var mgr = findSvc("ChoiceHandlerManager", true);
-            if (!mgr) mgr = findSvc("WitchTrialsChoiceHandlerManager");
+            if (!mgr) mgr = findSvc("WitchTrialsChoiceHandlerManager", true);
             if (!mgr) { dbg("[Choice] mgr 未就绪, 稍后重试"); return; }
             var cfg = null, metaMap = null;
             for (var ci = 0x10; ci <= 0x80 && !cfg; ci += 8) {
@@ -1104,7 +1104,7 @@ function installDiagHooks() {
         (function hookGOA() {
             try {
                 var mgr = findSvc("ChoiceHandlerManager", true);
-                if (!mgr) mgr = findSvc("WitchTrialsChoiceHandlerManager");
+                if (!mgr) mgr = findSvc("WitchTrialsChoiceHandlerManager", true);
                 if (!mgr) { setTimeout(hookGOA, 1000); return; }
                 var goaMi = A.cgm(A.ogc(mgr), Memory.allocUtf8String("GetOrAddActor"), 1);
                 if (goaMi && !goaMi.isNull()) {

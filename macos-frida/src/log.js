@@ -27,7 +27,7 @@ function isoDate() {
 function defaultLogPath() {
     try {
         var p = Process.mainModule ? Process.mainModule.path : "";
-        if (p) { var ps = p.split("/"); if (ps.length > 4) return ps.slice(0, ps.length - 4).join("/") + "/modlog.txt"; }
+        if (p) { var ps = p.split("/"); if (ps.length > 4) return ps.slice(0, ps.length - 4).join("/") + "/modlog.log"; }
     } catch (e) { swallowedWarn("log.js:defaultLogPath", e); }   // 推导日志路径失败 = 日志系统降级, 必须可见
     return null;
 }

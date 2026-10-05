@@ -224,7 +224,7 @@ ManosabaMod/<ModName>/
 
 **动机**: 游戏进程崩溃时 Frida 脚本跟着死, console 缓冲丢失, macOS 系统日志经常
 什么都没有。
-终端彩色 + 游戏根 `modlog.txt` 文件 + 崩溃前 flush。
+终端彩色 + 游戏根 `modlog.log` 文件 + 崩溃前 flush。
 
 **级别与颜色** (src/log.js): ERROR=红 / WARN=黄 / INFO=青 / DEBUG=灰, 行前缀
 `[v3][HH:MM:SS.mmm][LEVEL] `。`error/warn/info` 无条件输出; `debug` 内部再门控
@@ -239,7 +239,7 @@ ensureItemIdsString 重建失败、catch 分支); 34 处软失败 → `warn()` (
 `[v3]` (统一前缀) 与 `[WitchBook]` (wblog 前缀) 仍命中。
 
 **文件写入**: libc `open(O_WRONLY|O_CREAT|O_TRUNC)` + 逐行同步 `write` (src/io.js),
-崩溃不丢已写行; 每运行截断重开 = 一份干净 modlog.txt。路径: 默认 `<游戏根>/modlog.txt` ,
+崩溃不丢已写行; 每运行截断重开 = 一份干净 modlog.log。路径: 默认 `<游戏根>/modlog.log` ,
 `MOD_LOG=<path> ./run_mod.sh` 覆盖; 文件不可用 (如 REPL 直跑) 则 console-only 不崩。
 
 **终端彩色与剥色**: 关键事实 (2026-08-10 实证) — 本 setup 中 bundle 的 `console.log`
@@ -248,7 +248,7 @@ ensureItemIdsString 重建失败、catch 分支); 34 处软失败 → `warn()` (
 的 Python 检测 `sys.stdout.isatty()`, 非 TTY (重定向/管道) 或 `MOD_NO_COLOR=1` 时注入
 `var MOD_NO_COLOR=true` fragment → log.js 输出明文; TTY 时注入 false → 终端彩色。
 on_msg 只兜底 frida 错误消息等 (不含 bundle 日志)。探针 (probe_*.js) 独立脚本、输出
-只在终端不进 modlog.txt; 全量捕获 (含探针) 用 `MOD_NO_COLOR=1 ./run_mod.sh > all.log`。
+只在终端不进 modlog.log; 全量捕获 (含探针) 用 `MOD_NO_COLOR=1 ./run_mod.sh > all.log`。
 
 **崩溃前 flush**: `Process.setExceptionHandler` 回调只做同步文件 `write` + `fsync`
 追加 `[FATAL] !!! CRASH signal=... address=...`, 然后 `return false` 放行 (崩溃行为
@@ -260,7 +260,7 @@ on_msg 只兜底 frida 错误消息等 (不含 bundle 日志)。探针 (probe_*.
 (永远开, 不受 MOD_DEBUG 影响), 按级别路由: LogError/LogException→ERROR(红)、
 LogWarning→WARN(黄)、Log→INFO(青) —— 功能等价于 Windows BepInEx 的 Naninovel Log,
 给剧本作者的提醒 (缺翻译 `Missing translation for 'zh-Hans/...'`、剧本解析错) 进终端
-也进 modlog.txt。
+也进 modlog.log。
 
 **约束**: 所有日志调用必须在 `initLog` 之后 (entry.js 顶层先 initLog 再装 crash
 handler, 早于首个 wblog)。文件体积第一版不做轮转, `MOD_DEBUG=1` 时 dumpObj FULL 栈

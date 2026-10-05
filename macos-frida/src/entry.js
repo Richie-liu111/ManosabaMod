@@ -20,7 +20,7 @@ import { setupScriptTextHooks } from "./scripttext.js";
 import { setupMovieHooks } from "./movie.js";
 import { addModLoader, setupLocaleReinjectHooks } from "./providers.js";
 import { hookLocaleAccessors } from "./locale.js";
-import { hookStartGame, registerMenu, registerMenuText } from "./menu.js";
+import { hookStartGame, registerMenu, registerMenuText, sampleMenuScriptPath, setupMenuDocProbes } from "./menu.js";
 import { resetWitchBookSession } from "./witchbook/session.js";
 import { setupWitchBookHooks } from "./witchbook/index.js";
 import { registerTexturesInto } from "./witchbook/textures.js";
@@ -33,7 +33,7 @@ import { printStartupBanner } from "./banner.js";
 initLog((typeof MOD_LOG !== "undefined" && MOD_LOG) ? MOD_LOG : null,
         typeof MOD_NO_COLOR !== "undefined" && MOD_NO_COLOR);
 installCrashHandler();
-// MOD 初始化横幅: 角色 ASCII 艺术 + 项目声明 (打印时文件已开, 终端彩色 / modlog.txt 明文)
+// MOD 初始化横幅: 角色 ASCII 艺术 + 项目声明 (打印时文件已开, 终端彩色 / modlog.log 明文)
 printStartupBanner();
 
 // ============ Steam 绕过 (Phase 1) ============
@@ -74,6 +74,12 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         A.mii = E.il2cpp_method_is_inflated ? new NativeFunction(E.il2cpp_method_is_inflated, 'bool', ['pointer']) : null;
         A.cgp = E.il2cpp_class_get_parent ? new NativeFunction(E.il2cpp_class_get_parent, 'pointer', ['pointer']) : null;
         A.sn  = new NativeFunction(E.il2cpp_string_new, 'pointer', ['pointer']);
+        // GC 三件套 (见 utils.js withGcDisabled / gcCollect): 都是 dylib 导出
+        A.gcCollect = E.il2cpp_gc_collect ? new NativeFunction(E.il2cpp_gc_collect, 'void', []) : null;
+        A.gcDisable = E.il2cpp_gc_disable ? new NativeFunction(E.il2cpp_gc_disable, 'void', []) : null;
+        A.gcEnable  = E.il2cpp_gc_enable ? new NativeFunction(E.il2cpp_gc_enable, 'void', []) : null;
+        A.gcIsDisabled = E.il2cpp_gc_is_disabled ? new NativeFunction(E.il2cpp_gc_is_disabled, 'bool', []) : null;
+        if (!A.gcDisable || !A.gcEnable) warn("[v3] !! il2cpp_gc_disable/enable 缺失, 临界区将失去 GC 保护 (7.14)");
         A.ri  = new NativeFunction(E.il2cpp_runtime_invoke, 'pointer', ['pointer', 'pointer', 'pointer', 'pointer']);
         A.ogc = new NativeFunction(E.il2cpp_object_get_class, 'pointer', ['pointer']);
         A.cgn = new NativeFunction(E.il2cpp_class_get_name, 'pointer', ['pointer']);
@@ -522,6 +528,9 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         // WitchBook 线索支持
         setupWitchBookHooks();
 
+        // 菜单本地化文档查找探针 (P0-3): 空 scriptPath 时到底查的是哪个路径 —— 只读, 只报未命中
+        setupMenuDocProbes();
+
         // Hook TitleUi.Activate → 重定向 + 注册菜单
         var tc = A.cfn(cs, Memory.allocUtf8String("WitchTrials.Views"), Memory.allocUtf8String("TitleUi"));
         if (tc && !tc.isNull()) {
@@ -568,6 +577,23 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
                     })(0);
                     }
                 });
+                // P0-2 采样点②: 点击瞬间。StartGame() 是"开始游戏"按钮的处理器 (private 方法, il2cpp API 不看可见性),
+                // 在它 onEnter 读一次菜单剧本的 path —— 与构造时刻 (menu.js registerMenu 里) 的采样对比,
+                // 就能判断 path 是"一开始就是空的"还是"事后被回收/改写掉的"。
+                try {
+                    var sgMi = A.cgm(tc, Memory.allocUtf8String("StartGame"), 0);
+                    if (sgMi && !sgMi.isNull()) {
+                        Interceptor.attach(sgMi.readPointer(), {
+                            onEnter: function () {
+                                try { sampleMenuScriptPath("TitleUi.StartGame (点击 New Game 瞬间)"); }
+                                catch (e) { swallowed("entry.js:StartGame.onEnter", e); }
+                            }
+                        });
+                        dbg("[v3] TitleUi.StartGame hooked (菜单 path 采样点②)");
+                    } else {
+                        warn("[菜单][P0] TitleUi.StartGame NOT FOUND —— 点击瞬间的采样不可用 (退化为只在构造时采样)");
+                    }
+                } catch (e) { swallowed("entry.js:StartGameHook", e); }
                 dbg("[v3] TitleUi.Activate hooked");
             }
         }

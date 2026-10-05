@@ -316,7 +316,7 @@ string 指针的值是 `{len=8,"Mo"}` —— 即**一个 `System.String` 被当�
   每个 (id,ver), 取**游戏自己的键实例**问一次真实 `ContainsKey`, 必须 true; 外加 KNF 计数与页面统计。
   这正是 7.10 那个坑的永久防线。
 - `test-tools/regression.py`: 复刻用户手动流程 (构建 → cp 到游戏目录 → **跑游戏目录的
-  `run_mod.sh`**) → 到点杀进程 → 读 `modlog.txt` 断言 → 退出码。
+  `run_mod.sh`**) → 到点杀进程 → 读 `modlog.log` 断言 → 退出码。
 - `test-tools/swallow-test.mjs`: `swallowed` 节流逻辑的纯 node 单测 (不需要游戏)。
 
 **两条流程不能分叉**: 仓库和游戏目录各有一份 `run_mod.sh`, 各自注入**自己旁边**的
@@ -392,3 +392,120 @@ MOD_SELFTEST=1 跑一局 (mod A 点图鉴 → 回标题 → mod B 点图鉴), 11
 **④ 工具自证**: 新增的 `check-imports` 反向检查 ("用了 utils.js 的导出却没 import") 在这轮里
 **两次抓到我自己漏的 import** (`invokeOk`、`warn`) —— 这类错 frida-compile 不报、只在游戏里
 炸成 ReferenceError, 还会被 catch 吞掉。工具的价值当场验证。
+
+### 7.14 菜单剧本"丢了剧本路径" → New Game 黑屏 (2026-10-05, 与 7.13③ 是**两条不同支路**)
+
+**现象**: New Game 之后黑屏, 菜单不出现。日志指纹 (与 7.13③ 明确不同):
+
+```
+Failed to load 'zh-Hans' localization document for '' scenario script. ...   ×N   ← 每条选项一次
+Naninovel.Error: Failed to load '' resource of type 'Naninovel.Script'
+  at ResourceLoaderExtensions.LoadOrErr[TResource](loader, path, holder)
+  at Naninovel.TextLocalizer.Load(text, holder) → LocalizableText.Load(holder)
+  at Naninovel.Command.<PreloadStaticTextResources>b__31_0(LocalizableTextParameter t)
+```
+
+`N` = 菜单剧本里 `@choice` 的条数 (脚本 play 时 Naninovel 会预载**全部** command 的静态文本;
+N 现在由 `[菜单] 菜单剧本已注册 … 选项数=` 那行直接给出, 不用再数)。7.13③ 是"重定向没落地" →
+指纹是 ~87 条 `Failed to load '' ...Naninovel.Script`(脚本加载), 且 INFO 重定向行不会出现。
+
+**链路** (逐段有日志/源码实证):
+① `System/System_Title` 的 `# StartGame` 末尾 `@goto {nextScenario}`, 由 loader 把该 `GotoModified.Path` 改写成
+   `ModLoader/Scripts/ModStart` (菜单剧本, `Script.FromText` 合成, 以两个 key 进 ScriptLoader 缓存)。
+② 剧本 play 时逐条预载静态文本: 每个选项按 `ToL10nPath(剧本路径)` = `Text/Scripts/<剧本路径>` 找本地化文档;
+   找不到就记友好错误, 再走兜底"从剧本本身取原文" → `ScriptLoader.LoadOrErr<Script>(<剧本路径>)`。
+③ 正常: 剧本路径 = `ModStart` → 文档命中 (`registerMenuText` 注册的空 TextAsset) → 只有
+   `Missing translation for '…Text/Scripts/ModStart#~hash'. Will use source locale instead.` (WARN) →
+   兜底加载脚本 `ModStart` (第二个 key) → 菜单正常出。
+④ 故障: 剧本路径 = **空串** → 文档路径 `Text/Scripts/` 未注册 → N 条友好错误 → 兜底按空路径加载脚本 →
+   `LoadOrErr` 抛 `Naninovel.Error` → 预载中断 → 菜单演不起来; 而标题为进 StartGame 已经
+   `@back Overlay SolidColor #000000` + `@Wait 1.8` 淡黑完了 ⇒ **黑屏**。
+
+**为什么"加了某个 mod 才中招"是错觉**: 同一份 mod 列表在同一晚另一次启动完全正常
+(菜单选项文本按 `Text/Scripts/ModStart#~hash` 正常解析, 该 mod 自己的文档
+`Text/Scripts/<mod>/Main#~hash` 也正常)。**故障是间歇性的, 与 mod 内容无关**; 改 mod 列表只是
+改变了菜单文本长度/分配时序, 从而改变了下一条的命中概率。
+
+**根因 (已实证) —— 注入侧托管字符串"无根", 被自动 GC 回收后内存复用** (与 7.8 同一族):
+`makeS("ModStart")` 造出的托管字符串在 `il2cpp_runtime_invoke` 之前**没有任何托管引用**
+(只在 JS 变量里; Boehm 只扫栈/寄存器/静态数据段, **不扫 V8 堆**), 而这段窗口里还夹着菜单文本
+(约 4.5 KB) 的分配。这里一触发自动 GC, path 字符串就被回收, 其内存被后续分配复用 →
+`Script.path` 与**全部**文本的 PlaybackSpot (它们引用的是同一个字符串对象) 一起变成垃圾。
+
+**实锤证据 (2026-10-05 17:13 那次 `MOD_GC_PROBE=1`)**:
+
+```
+[菜单][GC-PROBE] 强制 GC 前 path 字符串读回="ModStart"
+[菜单][GC-PROBE] il2cpp_gc_collect=已调用 + churn(256×512B) 后读回="ModStart" (本次未变)
+[菜单][P0] 构造后 (build): Script.path="@Stop"   ← 不是空, 是菜单文本里那段子串!
+→ 28 条 Failed to load 'zh-Hans' localization document for '@Stop'
+→ 1 条 Naninovel.Error: Failed to load '@Stop' resource of type 'Naninovel.Script' → 菜单没出现
+```
+
+即: path 字符串被回收后, 它的内存块被**解析器造的 `"@Stop"` 子串**占了 (同类小字符串, 同一堆桶)。
+15:57 那次故障读到的是空串 (同一机制的另一种落点), 二者现象同源。**这解释了"为什么是间歇的、
+为什么和 mod 列表有关"**: 区别只在自动 GC 有没有落在那个窗口、以及内存被谁复用。
+`il2cpp_gc_collect()` 显式调用反而没回收它 (保守扫描可能从栈上捡到了残留指针), 真正致命的是
+`makeS(text)` 大分配触发的那次自动 GC —— 这也正是修法要掐掉的东西。
+
+**探针 (全部默认关, 见 run_mod.sh 顶部; 排查时才开 —— 玩家视角这些是纯噪音)**:
+| 开关 | 做什么 | 看什么 |
+|---|---|---|
+| `MOD_MENU_PROBE=1` | ① 构造菜单剧本后读回 `Script.path`(@0x18, lines@0x30 已实证), 点 New Game 瞬间 (`TitleUi.StartGame` onEnter) 再读一次; ② 挂 `TextManager.GetDocument`/`IsScriptL10nDocument` 与 textLoader/scriptLoader 的 `Load` | 两行 `[菜单][探针] Script.path=…`: 构造时就空 = 传参/解析丢了; 之后才空 = 悬垂字符串被回收复用。文档键是 `Scripts/<p>`、资源路径是 `Text/Scripts/<p>` (见上表) |
+| `MOD_GC_PROBE=1` | 在构造窗口里 `il2cpp_gc_collect()` + 垃圾冲刷 | 修复前被这个压力打成 `"@Stop"`; 修复后 path 稳定 (会把手感弄坏, 只用于诊断跑) |
+| `MOD_FAULT=menu-nopath` | 故意用空 path 构造菜单剧本 | 兜底层的回归测试: 注入仍在, 菜单也应照常显示 |
+
+常态只留两条健康指纹 (各一次进标题一行): `[菜单] 已把标题 StartGame 重定向 → …` 与
+`[菜单] 菜单剧本已注册 (FromText): ModStart 选项数=N` (选项数 = 故障时游戏侧报错条数的对账依据)。
+
+**排查流程落点**: `MOD_LOG_ARCHIVE=1 ./run_mod.sh` 时, 启动前会把上一轮 `modlog.log` 复制归档到
+同目录 `logs/` (每次启动被截断重开, 间歇性故障最容易丢的就是现场 —— 2026-10-05 已丢过一份)。
+**默认关**: 对玩家来说只是一堆没用的文件, 只有排查时才需要留现场。
+
+**修法 (2026-10-05, 三层)**:
+1. **临界区关 GC** (`utils.js` 的 `withGcDisabled` / `gcDisable`+`gcEnable`): "造托管对象 → 立刻交给
+   托管侧"的整段用 `il2cpp_gc_disable/enable` 罩住 (计数器式 API, 可嵌套, `finally` 里配平) ——
+   期间**任何线程**都触发不了自动 GC, 对象不可能被回收。已用在 `registerMenu` / `registerMenuText`
+   全段、`hookStartGame` 的 NamedString 段。
+2. **分配顺序**: 大字符串先造、path 字符串最后造且紧接 `invoke` —— invoke 之前不再夹任何托管分配,
+   本线程也就没有触发 GC 的机会 (`invoke` 内部只做 native `Memory.alloc` + `il2cpp_runtime_invoke`,
+   路径指针在原生寄存器/栈上, 保守扫描可见)。
+3. **空路径兜底 key**: 菜单剧本额外注册 `""`、菜单文档额外注册 `"Text/Scripts"` / `"Text/Scripts/"`
+   / `""` —— 即使路径又被毁成空串, 兜底"按空路径读剧本原文"仍能命中菜单自己, 菜单照常显示
+   (只剩一条 `Missing translation` 警告)。注意这层只兜"空串"形态; 像 `"@Stop"` 那种垃圾值兜不住 ——
+   所以第 1/2 层才是根治。
+
+   **踩点 (2026-10-05 17:26 实测)**: 文档 key 一开始只注册了 `"Text/Scripts/"` → 没命中, 因为
+   `ToL10nPath` 用的是 .NET `Path.Combine("Text/Scripts", scriptPath)` —— 第二参为空串时**返回不带
+   尾斜杠的 `Text/Scripts`**。漏了这一个字符的后果很有意思, 值得记一笔: 兜底脚本 key 已生效 →
+   预载不再抛错 → **黑屏消失了, 但失败只是往后挪了一步**: 文档查不到 → 文本没加载 → `@choice`
+   执行时 `Naninovel.Commands.AddChoice.Execute → GetOrAddHandler → GetOrAddActor` 抛
+   **`Failed to hold`** → 选项面板不建 → 现象变成"**有背景、没有选项、能退回标题**"。
+   所以判断"菜单坏没坏"不能只看有没有黑屏, 还要看 `AdvChoiceInit` 有没有打出来 (选项面板建了没)。
+
+**回归验证 (用现成探针做 A/B, 2026-10-05 已全部实测通过)**:
+
+| 场景 | 修复前 | 修复后实测 |
+|---|---|---|
+| 默认跑 (多次) | 偶发: 构造后/点击时采样 ✗ + N 条空路径报错 + 黑屏 | 两次采样都 ✓ `Script.path="ModStart"`, 0 报错, 菜单正常 |
+| `MOD_GC_PROBE=1` | 17:13 实测 `Script.path="@Stop"` + 黑屏 | 压力照打 (`GC disabled=true`), 采样仍 ✓、菜单照常出 (两次激活都是) |
+| `MOD_FAULT=menu-nopath` | 确定性黑屏 (17:13:03: `<null>` + 28 条报错) | 采样仍 ✗ (注入是故意的), 但 `GetDocument('Scripts/')` 全命中、0 条 `Failed to load/hold`、**选项正常显示** |
+
+**路径约定 —— 两层名字容易混 (2026-10-05 用 P0-3 探针在正常跑里实测确认)**:
+
+| 层 | 形式 | 实测证据 |
+|---|---|---|
+| **文档键** (`TextManager.GetDocument` / `docByPath`) | `Scripts/<scriptPath>` | 正常跑 `GetDocument('Scripts/ModStart') = 命中`; 空 scriptPath → `Scripts/` |
+| **资源路径** (ResourceLoader 缓存 / `Hold`) | `Text/Scripts/<scriptPath>` | `Failed to hold 'Text/Scripts/' …: resource is not loaded` |
+
+原始 4 键 `["Text/Scripts/ModStart", "Scripts/ModStart", "ModLoader/Text/Scripts/ModStart", "ModStart"]`
+恰好两层都覆盖了 (所以正常跑一直没事), 空路径兜底就必须**两层都给**: `Scripts` / `Scripts/` (文档) +
+`Text/Scripts` / `Text/Scripts/` (资源) + `""`。前两轮只给了资源那侧 → 文档查不到 → 文本没加载 →
+`AddChoice.Execute → GetOrAddHandler → GetOrAddActor` 抛 `Failed to hold` → **选项面板不建**,
+现象是"有背景、没选项、能退回标题"(不是黑屏) —— 所以判"菜单坏没坏"要看 `AdvChoiceInit` 有没有出现。
+
+**同类审计 (待办)**: 其它 `makeS(...)` 跨越后续托管分配的写法同理脆弱 —— 典型如
+`menu.js` 里 `A.on(lrClass)` 造出的 LoadedResource 跨越 `makeS(键)` 与 ctor invoke、各类
+`makeLocalResourceProvider` + ProvisionSource 组装。本次只收了已实证的菜单链路; 后续新增
+"造托管对象再交出去"的代码, 请照 §1 用 `withGcDisabled` 包住, 或把 `makeS` 的结果**同语句**
+写进托管字段 (窗口为 0)。

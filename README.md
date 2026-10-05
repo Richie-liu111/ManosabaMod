@@ -56,7 +56,7 @@ ManosabaMod/
     │   ├── choice.js          # 审判 @choice handler
     │   ├── cutin.js           # 论破动画 @gosubCutIn
     │   ├── chapterdisplay.js  # 存档章节名 (ChapterNames)
-    │   ├── log.js             # 分级彩色日志 + modlog.txt
+    │   ├── log.js             # 分级彩色日志 + modlog.log
     │   └── witchbook/         # 魔女图鉴 (state/data/textures/pages/session/characters/index)
     ├── dist/manosabamod.js    # 打包产物 (frida-compile 构建, 随版本提交)
     ├── run_mod.sh             # 启动脚本 (自动构建 + 启动游戏 + 注入)
@@ -124,7 +124,7 @@ cd "$GAME"
 
 **退出游戏**：程序坞退出时游戏，或者游戏内退出表现为: "未响应"不退出，需强制退出，或在启动游戏的终端 ctrl+c 终止。
 
-**日志**:机制日志默认关闭(运行噪音小),`MOD_DEBUG=1 ./run_mod.sh` 开启;游戏侧 `Unity.LogError` 始终全量输出。日志同时写入游戏目录 `modlog.txt`。更多用法(指定 mod 根目录、非默认游戏位置)见 [macos-frida/docs/USAGE.md](macos-frida/docs/USAGE.md)。
+**日志**:机制日志默认关闭(运行噪音小),`MOD_DEBUG=1 ./run_mod.sh` 开启;游戏侧 `Unity.LogError` 始终全量输出。日志同时写入游戏目录 `modlog.log`。更多用法(指定 mod 根目录、非默认游戏位置)见 [macos-frida/docs/USAGE.md](macos-frida/docs/USAGE.md)。
 
 **开发 (源码版)**:改 `src/` 后在仓库里直接运行 `./run_mod.sh` 即自动重新构建;或手动 `cd macos-frida && npx frida-compile src/entry.js -o dist/manosabamod.js`(首次需 `npm install`)。
 

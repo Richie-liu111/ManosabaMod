@@ -637,7 +637,9 @@ export function clearAllWitchBookPages() {
     } catch (e) { error("clearAllWitchBookPages err: " + e); }
 }
 export function findWitchBookUi() {
-    try { var s = findSvc("WitchBookUi"); if (s) return s; } catch (e) { swallowed("witchbook/session.js:findWitchBookUi", e); }
+    // 引擎服务表里没有 WitchBookUi 是**正常**的 (游戏没把它注册成 IEngineService) → findSvc 走静默,
+    // 真正的兜底是下面按类型 findAllObjectOfType
+    try { var s = findSvc("WitchBookUi", true); if (s) return s; } catch (e) { swallowed("witchbook/session.js:findWitchBookUi", e); }
     try {
         if (wbCls && wbCls.witchBookUi && !wbCls.witchBookUi.isNull()) {
             var arr = findAllObjectOfType(wbCls.witchBookUi);
