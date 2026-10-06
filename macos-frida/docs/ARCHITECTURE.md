@@ -35,7 +35,7 @@ manosaba.exe
 ```
 manosaba.app (GameAssembly.dylib, IL2CPP)
   └─ Frida 注入
-        ├─ dlopen hook            → 绕过 Steam 校验 (SteamAPI 函数替换)
+        ├─ dlopen hook            → Steam 初始化抑制 (以"无 Steam 客户端"状态运行)
         ├─ il2cpp_thread_attach   → 解锁 il2cpp_runtime_invoke
         ├─ 菜单 (缓存方案)         → Script.FromText + AddLoadedResource
         ├─ provider 管线          → LocalResourceProvider(MOD_ROOT)

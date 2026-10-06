@@ -1,5 +1,5 @@
 📦
-45808 /src/entry.js
+45880 /src/entry.js
 1938 /src/banner.js
 5796 /src/chapterdisplay.js
 88419 /src/choice.js
@@ -45,14 +45,15 @@ initLog((typeof MOD_LOG !== "undefined" && MOD_LOG) ? MOD_LOG : null, typeof MOD
 installCrashHandler();
 // MOD 初始化横幅: 角色 ASCII 艺术 + 项目声明 (打印时文件已开, 终端彩色 / modlog.log 明文)
 printStartupBanner();
-// ============ Steam 绕过 (Phase 1) ============
+// ============ Steam 初始化抑制 (Phase 1) ============
+// 让游戏以"无 Steam 客户端"状态运行 (init → 2 = NoSteamClient): 不连 Steam, 云存档/overlay 都不介入。
+// 启动来源检查不在这里处理 — run_mod.sh 在 spawn 时提供 SteamAppId 环境变量 (Valve 自己的机制)。
 try {
     var dl = Module.findGlobalExportByName("dlopen");
     if (dl) {
         var h = false;
         Interceptor.attach(dl, { onEnter: function (a) { this.p = a[0].readCString(); }, onLeave: function (r) { if (h || r.isNull() || !this.p || this.p.indexOf("libsteam_api") === -1)
-                return; var r2 = Module.findGlobalExportByName("SteamAPI_RestartAppIfNecessary"); if (r2)
-                Interceptor.replace(r2, new NativeCallback(function () { return 0; }, 'bool', ['uint32'])); var i2 = Module.findGlobalExportByName("SteamInternal_SteamAPI_Init"); if (i2)
+                return; var i2 = Module.findGlobalExportByName("SteamInternal_SteamAPI_Init"); if (i2)
                 Interceptor.replace(i2, new NativeCallback(function () { return 2; }, 'int', [])); h = true; } });
     }
 }

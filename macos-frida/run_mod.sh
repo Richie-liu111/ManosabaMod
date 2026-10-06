@@ -33,6 +33,8 @@ fi
 GAME="${GAME:-$GAME_DIR/manosaba.app/Contents/MacOS/manosaba}"
 SCRIPT="$PWD/dist/manosabamod.js"
 MOD_ROOT="${1:-$GAME_DIR/ManosabaMod}"
+# Steam AppID (Valve 侧应用标识; 游戏据此判断"由 Steam 启动")
+STEAM_APP_ID="${STEAM_APP_ID:-3101040}"
 
 # 日志系统: modlog.log 默认在游戏根 (每运行截断重开), MOD_LOG 可覆盖;
 # MOD_NO_COLOR=1 关闭终端颜色 (重定向/全量捕获时用: MOD_NO_COLOR=1 ./run_mod.sh > all.log)
@@ -145,12 +147,13 @@ echo ">>> Mod 日志: $MOD_LOG (MOD_DEBUG=${MOD_DEBUG:-0})"
 PROBE="${PROBE:-}"
 
 # 导出环境变量给 Python (heredoc 用带引号形式, 避免转义被 shell 处理)
-export GAME SCRIPT MOD_ROOT MOD_DEBUG MOD_LOG MOD_NO_COLOR PLAYER_LOG PROBE MOD_FAULT MOD_GC_PROBE MOD_MENU_PROBE MOD_EXIT_GRACE
+export GAME SCRIPT MOD_ROOT STEAM_APP_ID MOD_DEBUG MOD_LOG MOD_NO_COLOR PLAYER_LOG PROBE MOD_FAULT MOD_GC_PROBE MOD_MENU_PROBE MOD_EXIT_GRACE
 $PY << 'ENDPY'
 import frida, time, json, os, re, sys
 
 GAME = os.environ['GAME']
 SCRIPT = os.environ['SCRIPT']
+STEAM_APP_ID = os.environ['STEAM_APP_ID']
 MOD_ROOT = os.environ['MOD_ROOT']
 MOD_DEBUG = os.environ.get('MOD_DEBUG') == '1'
 MOD_SELFTEST = os.environ.get('MOD_SELFTEST') == '1'
@@ -356,7 +359,13 @@ def _kill_game():
 # 启动阶段整体放进 try: ctrl+c 落在 spawn/attach/load 中途时, 原来的写法直接跳过收尾,
 # 留下 "T 状态游戏 + 孤儿 helper + 46MB 缓存目录" 三件套。
 try:
-    pid = device.spawn([GAME])
+    # SteamAppId/SteamGameId: Steam 启动游戏时自己设置的环境变量, steam_api 在启动来源检查里
+    # 先读它, 命中即认为"已由 Steam 启动"。启动器侧提供同样的变量, 游戏就不会把自身重启进
+    # Steam 客户端。显式传完整环境 (而非只传增量), 使行为不依赖 frida 对 env 是合并还是替换。
+    _spawn_env = dict(os.environ)
+    _spawn_env['SteamAppId'] = STEAM_APP_ID
+    _spawn_env['SteamGameId'] = STEAM_APP_ID
+    pid = device.spawn([GAME], env=_spawn_env)
     session = device.attach(pid)
     # runtime="v8": frida-compile 17 的 📦 asset bundle 需要 V8 runtime 编译 (QuickJS 默认不支持)
     def on_msg(m, d):
