@@ -26,7 +26,7 @@
 //   之后 actor 由游戏自己构造 (GetOrAddActor → Activator → LoadUIPrefabAsync →
 //       provider 链 → 我们的 vrp.Resources); 只读诊断钩子确认游戏走到哪一步。
 
-import { A, dbg, fieldOffset, findAllObjectOfType, findClassAcrossImages, findSvc, getSystemClass, invoke, invokeOk, makeS, pngDims, readStr, swallowed, warn } from "./utils.js";
+import { A, dbg, fieldOffset, findAllObjectOfType, findClassAcrossImages, findSvc, getSystemClass, invoke, invokeOk, makeS, pngDims, pollGuard, readStr, shutdownReason, swallowed, warn } from "./utils.js";
 import { fileReadBytes, readJSONFile } from "./io.js";
 import { info } from "./log.js";
 import { startReinjectWindow } from "./providers.js";
@@ -1221,6 +1221,12 @@ export function initChoiceHandlers() {
         chPollTimer = setInterval(function () {
             tries++;
             try {
+                // 引擎开始拆解 (游戏退出中) → 立刻停: 这一拍之后再也别进 IL2CPP
+                if (pollGuard()) {
+                    clearInterval(chPollTimer); chPollTimer = null;
+                    dbg("[Choice] 退出中 (" + shutdownReason() + "): 停止保活轮询");
+                    return;
+                }
                 if (chData.registered) {
                     // 注册后转保活模式: 每 5 秒检查 providersMap 物理存在 (场景切换可能重建)
                     if (tries % 10 === 0) chKeepAlive();

@@ -46,6 +46,10 @@ PLAYER_LOG="$HOME/Library/Logs/Re,AER/manosaba/Player.log"
 MOD_FAULT="${MOD_FAULT:-}"
 MOD_GC_PROBE="${MOD_GC_PROBE:-0}"
 MOD_MENU_PROBE="${MOD_MENU_PROBE:-0}"
+# watchdog (默认开): 游戏内 GUI 退出后进程会卡在"未响应"永不退出 (2026-10-06 实测, sample 见 docs),
+# mod 上报"引擎开始退出"后计时, MOD_EXIT_GRACE 秒(默认 3)内不退就替玩家 SIGTERM→SIGKILL 收掉。
+# 设 MOD_EXIT_GRACE=0 关闭 (想手动强退/留现场时用)。
+MOD_EXIT_GRACE="${MOD_EXIT_GRACE:-3}"
 
 # 现场保留 (默认关): MOD_LOG_ARCHIVE=1 时, 启动前把上一轮 modlog 复制归档到同目录 logs/。
 # 默认关的理由: 对玩家来说就是一堆没用的文件, 只有排查间歇性故障时才需要留现场 (2026-10-05 丢过一份)。
@@ -141,7 +145,7 @@ echo ">>> Mod 日志: $MOD_LOG (MOD_DEBUG=${MOD_DEBUG:-0})"
 PROBE="${PROBE:-}"
 
 # 导出环境变量给 Python (heredoc 用带引号形式, 避免转义被 shell 处理)
-export GAME SCRIPT MOD_ROOT MOD_DEBUG MOD_LOG MOD_NO_COLOR PLAYER_LOG PROBE MOD_FAULT MOD_GC_PROBE MOD_MENU_PROBE
+export GAME SCRIPT MOD_ROOT MOD_DEBUG MOD_LOG MOD_NO_COLOR PLAYER_LOG PROBE MOD_FAULT MOD_GC_PROBE MOD_MENU_PROBE MOD_EXIT_GRACE
 $PY << 'ENDPY'
 import frida, time, json, os, re, sys
 
@@ -321,68 +325,125 @@ def _helper_pids():
         return set(out.stdout.split())
     except Exception:
         return set()
+# watchdog 宽限期: mod 上报"引擎退出中"后, 游戏若这么久还没退 (实测卡在未响应, 进程永不退出,
+# 只能手动强退) 就替玩家 SIGTERM→SIGKILL 收掉。设 0 即关闭。
+EXIT_GRACE = int(os.environ.get('MOD_EXIT_GRACE') or 3)
+_exit_at = [0.0]        # 0 = mod 还没上报退出
 helper_base = _helper_pids()
-pid = device.spawn([GAME])
-session = device.attach(pid)
-# runtime="v8": frida-compile 17 的 📦 asset bundle 需要 V8 runtime 编译 (QuickJS 默认不支持)
-def on_msg(m, d):
-    # 注意: bundle 的 console.log 不经此回调 (见 JS_NO_COLOR 注释); 这里只兜底 frida 错误消息等
-    s = m.get('payload', '') or m.get('description', '')
+pid = None
+session = None
+started = False
+
+
+def _kill_game():
+    """游戏是 frida spawn 的独立进程, 不会随 ctrl+c 退出。若不收掉, 留下的就是
+    "T(暂停) 状态的游戏 + 孤儿 helper": frida spawn 出来本是挂起的, 没走到 resume
+    就永远停在 T —— 实测有 10 天前的一对就这么挂着。"""
+    if pid is None:
+        return
     try:
-        print(s, flush=True)
-    except Exception:
-        print(s.encode('utf-8', 'replace').decode('utf-8', 'replace'), flush=True)
-script = session.create_script(FULL_JS, runtime="v8")
-script.on('message', on_msg)
-script.load()
-# PROBE=<文件路径>: 附加独立探针脚本 (不走 📦 包, 与 bundle 并行; 消息经消息桥 send → 此回调 print)
-# 例: PROBE="$PWD/probe_choice_real.js" ./run_mod.sh
-if PROBE and os.path.isfile(PROBE):
-    probe_code = open(PROBE, encoding='utf-8').read()
-    pscript = session.create_script(probe_code, runtime="v8")
-    pscript.on('message', on_msg)
-    pscript.load()
-    print('>>> 已附加探针: %s (%d 字节)' % (PROBE, len(probe_code.encode('utf-8'))))
-device.resume(pid)
-print(f'>>> 游戏已启动 (PID={pid}) | Ctrl+C 停止')
+        os.kill(pid, 15)      # 先 SIGTERM 优雅退出
+        time.sleep(3)
+        try:
+            os.kill(pid, 0)   # 还活着?
+            os.kill(pid, 9)   # 强制
+        except OSError:
+            pass              # 已优雅退出
+    except OSError:
+        pass                  # 游戏已退出
+
+
+# 启动阶段整体放进 try: ctrl+c 落在 spawn/attach/load 中途时, 原来的写法直接跳过收尾,
+# 留下 "T 状态游戏 + 孤儿 helper + 46MB 缓存目录" 三件套。
+try:
+    pid = device.spawn([GAME])
+    session = device.attach(pid)
+    # runtime="v8": frida-compile 17 的 📦 asset bundle 需要 V8 runtime 编译 (QuickJS 默认不支持)
+    def on_msg(m, d):
+        # 注意: bundle 的 console.log 不经此回调 (见 JS_NO_COLOR 注释); 这里只兜底 frida 错误消息等
+        payload = m.get('payload')
+        # mod 的退出上报 → 启动 watchdog (游戏内 GUI 退出后进程会卡在"未响应"永不退出, 实测)
+        if isinstance(payload, dict) and payload.get('t') == 'engine-shutdown':
+            if not _exit_at[0]:
+                _exit_at[0] = time.time()
+                print('>>> 引擎退出中 (%s), watchdog=%ds' % (payload.get('why'), EXIT_GRACE), flush=True)
+            return
+        s = payload or m.get('description', '')
+        try:
+            print(s, flush=True)
+        except Exception:
+            print(s.encode('utf-8', 'replace').decode('utf-8', 'replace'), flush=True)
+    script = session.create_script(FULL_JS, runtime="v8")
+    script.on('message', on_msg)
+    script.load()
+    # PROBE=<文件路径>: 附加独立探针脚本 (不走 📦 包, 与 bundle 并行; 消息经消息桥 send → 此回调 print)
+    # 例: PROBE="$PWD/probe_choice_real.js" ./run_mod.sh
+    if PROBE and os.path.isfile(PROBE):
+        probe_code = open(PROBE, encoding='utf-8').read()
+        pscript = session.create_script(probe_code, runtime="v8")
+        pscript.on('message', on_msg)
+        pscript.load()
+        print('>>> 已附加探针: %s (%d 字节)' % (PROBE, len(probe_code.encode('utf-8'))))
+    device.resume(pid)
+    started = True
+    print(f'>>> 游戏已启动 (PID={pid}) | Ctrl+C 停止')
+except BaseException as e:
+    print(f'>>> 启动阶段中断/失败: {e!r} (收尾中)')
 # 收尾: detach + 清理本次运行新增的 frida-helper。
 # 实测 (2026-08-12): 游戏/客户端退出后 frida 的 helper 服务进程不自动退出
 # (PPID=1 孤儿, 每次运行残留 1 个) → 收尾时按基线 diff 主动 kill。
 def cleanup():
     try:
-        session.detach()
+        if session is not None:
+            session.detach()
     except Exception:
         pass
+    # 关键: frida 每次运行都把 frida-helper (9MB) + frida-agent.dylib (38MB) 解包到
+    # ~/.cache/frida/frida-<hash>/ ; 目录名每次都不一样 → 这份"缓存"永远不会被复用,
+    # 而只有 frida.shutdown() 才会删掉它。实测 (2026-10-06): 不调 → 每跑一次净增 46MB
+    # (当天 20 次运行 = 961MB); 调了 → 目录当场消失, helper 也一并优雅收掉 (upstream #3340)。
+    try:
+        frida.shutdown()
+    except Exception as e:
+        print(f'>>> frida.shutdown 失败 (缓存目录可能残留): {e!r}')
     for pid_s in (_helper_pids() - helper_base):
         try:
             os.kill(int(pid_s), 9)
             print(f'>>> 清理残留 frida-helper: {pid_s}')
         except Exception:
             pass
-# 游戏退出感知: os.kill(pid, 0) 探测存活; 游戏没了(程序坞退出/崩溃/被 kill) → 自动收尾。
-# 否则 python 死循环 + bash 等待 → 每次运行残留一个孤儿 bash (实测累计 10 个)。
-try:
-    while True:
-        time.sleep(1)
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            print(f'>>> 游戏进程已退出 (PID={pid}), 自动停止')
-            break
-except KeyboardInterrupt:
-    print('\n>>> 已停止 (ctrl+c: 脚本与游戏一并收尾)')
-    # 游戏是 frida spawn 的独立进程, 不会随 ctrl+c 退出; 若不收掉, 之后游戏退出时
-    # 无人收尾 → frida-helper 残留。先 SIGTERM 优雅退出, 3 秒后仍活着则 SIGKILL。
+if started:
+    # 游戏退出感知: os.kill(pid, 0) 探测存活; 游戏没了(GUI 退出/崩溃/被 kill) → 自动收尾。
+    # 否则 python 死循环 + bash 等待 → 每次运行残留一个孤儿 bash (实测累计 10 个)。
     try:
-        os.kill(pid, 15)
-        time.sleep(3)
-        try:
-            os.kill(pid, 0)  # 还活着?
-            os.kill(pid, 9)  # 强制
-        except OSError:
-            pass  # 已优雅退出
-    except OSError:
-        pass  # 游戏已退出
+        while True:
+            time.sleep(1)
+            # watchdog: mod 说引擎退出中, 但进程赖着不走 (窗口黑着/未响应) → 替玩家收掉
+            if EXIT_GRACE > 0 and _exit_at[0] and time.time() - _exit_at[0] >= EXIT_GRACE:
+                try:
+                    os.kill(pid, 0)
+                except OSError:
+                    print(f'>>> 游戏进程已退出 (PID={pid}), 自动停止')
+                    break
+                print(f'>>> 引擎退出后 {EXIT_GRACE}s 进程仍在 (未响应) → watchdog 强杀')
+                os.kill(pid, 15)
+                time.sleep(3)
+                try:
+                    os.kill(pid, 0)   # 还活着?
+                    os.kill(pid, 9)   # 强制
+                except OSError:
+                    pass
+                break
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                print(f'>>> 游戏进程已退出 (PID={pid}), 自动停止')
+                break
+    except KeyboardInterrupt:
+        print('\n>>> 已停止 (ctrl+c: 脚本与游戏一并收尾)')
+# 游戏自己退出/被 GUI 关掉时它早已不在 → _kill_game 是 no-op (ESRCH);
+# 只有 "ctrl+c 打断" 和 "启动阶段失败" 两种情况下游戏还挂着, 这时才真动手。
+_kill_game()
 cleanup()
 probe_flags = ((' BREAK=1 负对照' if MOD_SELFTEST_BREAK else '')
                + (' MOD_FAULT=' + MOD_FAULT if MOD_FAULT else '')

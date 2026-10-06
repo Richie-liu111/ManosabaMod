@@ -509,3 +509,75 @@ N 现在由 `[菜单] 菜单剧本已注册 … 选项数=` 那行直接给出, 
 `makeLocalResourceProvider` + ProvisionSource 组装。本次只收了已实证的菜单链路; 后续新增
 "造托管对象再交出去"的代码, 请照 §1 用 `withGcDisabled` 包住, 或把 `makeS` 的结果**同语句**
 写进托管字段 (窗口为 0)。
+
+### 7.15 游戏内退出 → 黑屏 + 未响应 (进程永不退出) — attach 进 IL2CPP 域的 frida 线程卡死 shutdown (2026-10-06)
+
+**现象**: 游戏内点"退出"后窗口黑着不关, Dock 显示"未响应", 进程一直活着; 只能强制退出或 ctrl+c。
+modlog 尾部只留一条 `findSvc(...) NOT FOUND in 0 services` (引擎已 DestroyServices = shutdown 已开始)。
+
+**根因 (实证, 逐帧比对)**: `sample` 抓到的卡死栈, 手工复现与自动化复现**完全一致**:
+
+```
+__NSFireTimer → UnityPlayer +0x5dca78 → GameAssembly +0x3579b8 → +0x32e420 → +0x12f0
+  → _dispatch_semaphore_wait_slow (带超时)          ← 主线程永远停在这
+```
+而 frida 的 JS 线程 (`gum-js-loop`) 空闲在 kevent, 其余 26 个线程也都在等活干 —— 即
+**主线程在等一个不会来的信号**。变量剥离 (自动化 A/B, 全部同一环境同一时点):
+
+| 条件 | 结果 |
+|---|---|
+| 不 attach (只有 Steam 绕过) + 退出 | ✅ 干净退出 |
+| **attach (`il2cpp_thread_attach`) + 退出** | ❌ 卡死 (栈与手工一致) |
+| attach, **退出前 detach** | ✅ 干净退出 |
+| attach, 退出**已经卡住后**再 detach | ❌ 卡死 (那条 detach 消息 2 分钟后才被 JS 线程执行) |
+
+即: **把 frida 的 JS 线程 attach 进 IL2CPP 域, 本身就会让游戏退不掉**; 与 mod 的钩子/注入/菜单全无关
+(纯 frida + attach + `Application.Quit` 就能复现)。`il2cpp_gc_disable/enable` 无关, 我们全部轮询早已在
+退出感知里自停。
+
+**为什么必须"在退出入口那一下"detach**: shutdown 一卡住, JS 线程就再也不能跑 JS 了
+(实测消息排队 2 分钟; 那期间 sample 里它是 kevent 空闲态 —— 像被 Boehm 的 stop-the-world 或
+运行时的线程收拢按住)。所以"退出后再补一刀"的救援路线走不通, 只能在**退出请求进入的那一帧**动手。
+
+**修法 (最终版, 改了两轮才对)**: `utils.js: detachJsThread()` (`il2cpp_thread_detach` 是 C 导出, 见
+entry.js 的 `A.td`), 触发链是: 退出入口钩子**只置位** → 一个 **50ms 的纯 JS 定时器**看标志, 由
+**JS 线程自己**把自己摘出去 (`_quitEntry` 只置位; 钩子覆盖
+① `UnityEngine.Application.Internal_ApplicationWantsToQuit` (0 参静态, **覆盖所有退出请求**: 游戏内按钮 /
+Cmd+Q / 程序坞 / AppleEvent) 与 ② `UnityEngine.Application.Quit(int)` (游戏内按钮直接入口))。
+摘除后 JS 线程不再进 IL2CPP: 轮询受 `isShuttingDown()` 守卫自停, 退出期只剩纯 JS 的退出上报。
+
+**⚠️ 第一版就是这么写错的 (真踩了, 留下一份 .ips)**: `detachJsThread()` 里先调
+`il2cpp_thread_current()` 拿线程对象 —— 它返回的是**调用者**; 而钩子回调跑在**主线程**上 →
+摘掉的是主线程 → 0.0x 秒后主线程在玩家循环里调 `Environment::get_CurrentManagedThreadId`
+(读 "当前线程的 Il2CppThread") 拿到 NULL → SIGSEGV (`KERN_INVALID_ADDRESS at 0x0`), 崩在:
+`GameAssembly +0x1238268 ← +0x126614c ← +0x350fe4 ← UnityPlayer +0x5cd7e8 (玩家循环)`。
+**教训**: `il2cpp_thread_detach` 清的是**调用者**的线程注册 (GC 侧是 thread-local),
+所以它只能由"要被摘的那个线程"自己调; **永远只用 attach 时记下的那个线程对象** (`noteJsThread`),
+不要用 `il2cpp_thread_current()`。
+
+**窗口有多窄 (实测)**: 钩子置位后 JS 线程**还能跑** —— 三次验证里自摘耗时 18ms / 39ms / 39ms / 47ms,
+50ms 定时器足够; 但 shutdown 一卡住就再也不能跑 (消息能排队 2 分钟), 所以"卡了再补一刀"必然失败
+(实验: 退出前 detach ✅ / 退出后 0.25s detach ❌ / 退出后 3s detach ❌)。
+
+**实测 (真实 bundle 端到端, 两条路径)**: `PROBE=test-tools/autoquit.js ./run_mod.sh` (等价点退出按钮)
+→ `检测到退出 (Application.Quit) — JS 线程已从 IL2CPP 域摘下 (detach=true)` → **1.2s 后进程退出**;
+`osascript -e 'quit app "manosaba"'` → `(Application.wantsToQuit) detach=true` → 干净退出。
+两次日志里"引擎已开始退出"的下一条都是"游戏进程已退出", **看门狗没有出手**。
+
+**已知代价 (接受)**: 若某个 `wantsToQuit` 处理器把退出**取消**掉, 我们已经 detach 了 —— 那一轮 mod 的
+IL2CPP 侧功能会失效 (轮询已停), 重启即恢复。本作没有这种取消逻辑 (实测两条路径都真退)。
+
+**兜底 (与根因无关也保留)**: `run_mod.sh` 的看门狗 —— mod 上报 `engine-shutdown` 后 `MOD_EXIT_GRACE`
+秒 (默认 3) 进程还没退就 SIGTERM→SIGKILL 收掉, 免得玩家每次手动强退。开销 = 原来那 1s 存活轮询里
+多一个整数比较 (`os.kill(pid,0)` 微秒级), 可忽略; `MOD_EXIT_GRACE=0` 关闭。
+
+**第三个坑 (只在探针里踩到)**: 探针脚本别从 t=0 就去调 il2cpp —— GameAssembly 的 dlopen 就发生在
+`il2cpp_init` 里, 这时候调 `il2cpp_domain_get` 会和初始化抢, 实测让游戏**启动 1 秒后 SIGABRT**
+(abort 栈顶是 `il2cpp_init`)。等 6s 再探 (`autoquit.js` 已加延迟)。
+
+**排查工具 (都在 test-tools/)**: `quit_probe.py` (自动复现: `ATTACH=0/1 DETACH=before/after/hook QUIT=invoke/osascript`)、
+`autoquit.js` (给 run_mod.sh 当 PROBE 用, 自动点退出按钮)、`dump_methods.py` (运行时导出方法表,
+把 sample 的裸地址翻译成人话; Il2CppDumper 不认这个 fat Mach-O, 这条路走不通)。
+**踩过的坑**: `Module.findGlobalExportByName` 在本环境**查不到 GameAssembly 的导出** (libSystem 的能查到,
+极易误判) → 必须 `Process.enumerateModules()` 拿模块对象再 `findExportByName`; 且 GameAssembly 是
+spawn 之后才 dlopen 的, 找导出必须轮询等待。

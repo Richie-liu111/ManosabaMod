@@ -1,9 +1,9 @@
 📦
-44992 /src/entry.js
+45808 /src/entry.js
 1938 /src/banner.js
 5796 /src/chapterdisplay.js
-88023 /src/choice.js
-165928 /src/credit.js
+88419 /src/choice.js
+166879 /src/credit.js
 23208 /src/cutin.js
 4600 /src/io.js
 6146 /src/locale.js
@@ -12,7 +12,7 @@
 5832 /src/movie.js
 15506 /src/providers.js
 13594 /src/scripttext.js
-32405 /src/utils.js
+39569 /src/utils.js
 21490 /src/witchbook/characters.js
 14873 /src/witchbook/data.js
 9031 /src/witchbook/dictheal.js
@@ -23,7 +23,7 @@
 2673 /src/witchbook/state.js
 7233 /src/witchbook/textures.js
 ✄
-import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, swallowed, warn, wblog } from "./utils.js";
+import { A, allImgs, cs, dbg, findClassAcrossImages, installShutdownHooks, isShuttingDown, noteJsThread, nv, readStr, setGotoModifiedCls, setImageHandles, swallowed, warn, wblog } from "./utils.js";
 import { clearCutInCaches, preloadCutInTextures, setupCutInHooks } from "./cutin.js";
 import { clearCreditCaches, setupCreditHooks } from "./credit.js";
 import { initChoiceHandlers, setupChoiceHandlerHooks } from "./choice.js";
@@ -113,6 +113,9 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         A.csyst = E.il2cpp_class_from_system_type ? new NativeFunction(E.il2cpp_class_from_system_type, 'pointer', ['pointer']) : null;
         A.sdf = new NativeFunction(E.il2cpp_class_get_static_field_data, 'pointer', ['pointer']);
         A.ta = new NativeFunction(E.il2cpp_thread_attach, 'pointer', ['pointer']);
+        // 退出时要把这个线程摘出去 (不摘 → 游戏退出卡死, 见 utils.js 的 detachJsThread)
+        A.tc = E.il2cpp_thread_current ? new NativeFunction(E.il2cpp_thread_current, 'pointer', []) : null;
+        A.td = E.il2cpp_thread_detach ? new NativeFunction(E.il2cpp_thread_detach, 'void', ['pointer']) : null;
         A.ots = E.il2cpp_object_to_string ? new NativeFunction(E.il2cpp_object_to_string, 'pointer', ['pointer']) : null;
         A.cgnt = new NativeFunction(E.il2cpp_class_get_nested_types, 'pointer', ['pointer', 'pointer']);
         A.vb = E.il2cpp_value_box ? new NativeFunction(E.il2cpp_value_box, 'pointer', ['pointer', 'pointer']) : null;
@@ -127,6 +130,7 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
             dbg("[v3] !! il2cpp_array_new 缺失, 数组创建将失败");
         dom = A.dg();
         var t = A.ta(dom);
+        noteJsThread(t); // 记下来: 退出钩子里要从别的线程把它 detach 掉
         dbg("[v3] 线程已 attach: " + t);
         var cp = Memory.alloc(8);
         var asms = A.dga(dom, cp);
@@ -619,6 +623,8 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         catch (e) {
             dbg("[v3] KeyNotFoundException hook err: " + e);
         }
+        // 退出感知: 尽早置位 → 所有轮询停止 (退出期 JS 线程不再进正在销毁的运行时; 见 utils.js 说明)
+        installShutdownHooks();
         // Movie 支持钩子 (URL 流式)
         setupMovieHooks();
         // CutIn 支持 (异议/伪证切入 sprite 替换, 镜像 Windows ModObjectionCutInLoader 精简版)
@@ -763,6 +769,11 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
     }
     var chk = setInterval(function () {
         try {
+            if (isShuttingDown()) {
+                clearInterval(chk);
+                dbg("[v3] 退出中: 停止初始化重试");
+                return;
+            }
             var ok = doInit();
             if (ok) {
                 clearInterval(chk);
@@ -984,7 +995,7 @@ export function setupChapterDisplayHooks() {
 //       providersMap.Add + GetProvider 验证 → registered
 //   之后 actor 由游戏自己构造 (GetOrAddActor → Activator → LoadUIPrefabAsync →
 //       provider 链 → 我们的 vrp.Resources); 只读诊断钩子确认游戏走到哪一步。
-import { A, dbg, fieldOffset, findAllObjectOfType, findClassAcrossImages, findSvc, getSystemClass, invoke, invokeOk, makeS, pngDims, readStr, swallowed, warn } from "./utils.js";
+import { A, dbg, fieldOffset, findAllObjectOfType, findClassAcrossImages, findSvc, getSystemClass, invoke, invokeOk, makeS, pngDims, pollGuard, readStr, shutdownReason, swallowed, warn } from "./utils.js";
 import { fileReadBytes, readJSONFile } from "./io.js";
 import { info } from "./log.js";
 import { startReinjectWindow } from "./providers.js";
@@ -2760,6 +2771,13 @@ export function initChoiceHandlers() {
         chPollTimer = setInterval(function () {
             tries++;
             try {
+                // 引擎开始拆解 (游戏退出中) → 立刻停: 这一拍之后再也别进 IL2CPP
+                if (pollGuard()) {
+                    clearInterval(chPollTimer);
+                    chPollTimer = null;
+                    dbg("[Choice] 退出中 (" + shutdownReason() + "): 停止保活轮询");
+                    return;
+                }
                 if (chData.registered) {
                     // 注册后转保活模式: 每 5 秒检查 providersMap 物理存在 (场景切换可能重建)
                     if (tries % 10 === 0)
@@ -2814,7 +2832,7 @@ export function initChoiceHandlers() {
 //     懒加载工厂自建 + GCI 子树扫描 + 全程分阶段日志
 // 原则 (项目惯例): 只做加法+自清理, 不改任何游戏现有对象; 全程 try/catch 不崩。
 //   错误路径一律写安全默认时长 → nani @Wait 永不悬挂 (R4)。
-import { A, dbg, directCall, error, findAllObjectOfType, findClassAcrossImages, findSvc, getSystemClass, invoke, invokeOk, makeS, nv, pngDims, readStr, swallowed, warn } from "./utils.js";
+import { A, dbg, directCall, error, findAllObjectOfType, findClassAcrossImages, findSvc, getSystemClass, invoke, invokeOk, isShuttingDown, makeS, nv, pngDims, readStr, swallowed, warn } from "./utils.js";
 import { getIO } from "./io.js"; // 写文件走 io.js 绑定 (Module.findExportByName 在 bundle 内不可用, io.js 的 findGlobalExportByName 实证可用)
 import { readJSONFile, openForWrite, writeString, fileSync, fileReadBytes } from "./io.js";
 import { info } from "./log.js";
@@ -4120,8 +4138,14 @@ function installThanksProbe() {
         }
         thanksProbe.attached = true;
         info("[v3][Credit] 探针已挂 (SpecialThanksLabel.set_Text + Clear + ShowAsync — 逐行富文本 + 时序)");
+        // 永久 3s 定时器 (没人清过它) → 退出期自停, 否则就是又一个往拆解中的运行时里钻的入口
         if (!thanksProbe.flushTimer)
             thanksProbe.flushTimer = setInterval(function () { try {
+                if (isShuttingDown()) {
+                    clearInterval(thanksProbe.flushTimer);
+                    thanksProbe.flushTimer = null;
+                    return;
+                }
                 thanksProbeFlush();
             }
             catch (e4) {
@@ -4696,6 +4720,14 @@ function scheduleStillReDump() {
 }
 function stillTick() {
     try {
+        // 引擎开始拆解 (退出中) → 自停, 不再进 IL2CPP (见 utils.js 的退出感知)
+        if (isShuttingDown()) {
+            if (comp.stillTimer) {
+                clearInterval(comp.stillTimer);
+                comp.stillTimer = null;
+            }
+            return;
+        }
         // run-31: 槽位取模 (自定义列表可超 9 张循环复用); 播放长度 = 配置长度(有 conf 时)或槽位数
         var totalN = creditState.stillsConf ? creditState.stillsConf.length : comp.stills.length;
         var st = comp.stills[comp.stillIdx % comp.stills.length];
@@ -5605,6 +5637,14 @@ function activateThanksLocale(lv) {
 }
 function thanksTick() {
     try {
+        // 同上: 退出期自停 (25ms 一拍, 更要早退)
+        if (isShuttingDown()) {
+            if (comp.thanksPaging && comp.thanksPaging.timer) {
+                clearInterval(comp.thanksPaging.timer);
+                comp.thanksPaging.timer = null;
+            }
+            return;
+        }
         var p = comp.thanksPaging;
         if (!p)
             return;
@@ -9104,11 +9144,148 @@ export function populateConvertersDict(lrp, convClassName, targetClsFn, tag) {
         return false;
     }
 }
+// ============ 引擎拆解 (退出) 感知 ============
+// 现象 (2026-10-06 实证): 游戏内 GUI 退出后窗口留在黑屏、进程"未响应", modlog 尾部正好是
+// findSvc(...) NOT FOUND in 0 services —— Naninovel 已经 DestroyServices (services 归零),
+// 而我们的轮询还在往一个正在销毁的运行时里钻 (choice.js 的 chPollTimer 每 5s 保活一次,
+// 且 1h 才自停)。退出期 JS 线程进 IL2CPP 本就危险 (credit.js:1802 记过 "JS 线程调 Unity API
+// → breakpoint triggered"), 所以: 一侦测到拆解, 全部轮询立刻自己停。
+var _shuttingDown = false, _shutdownWhy = "";
+var _svcCountMax = 0;
+export function isShuttingDown() { return _shuttingDown; }
+export function shutdownReason() { return _shutdownWhy; }
+// 钩子里用这个 (只写标志位, 不做任何日志/IL2CPP 调用 —— 退出期越轻越好)
+function _setDown(why) { if (!_shuttingDown) {
+    _shuttingDown = true;
+    _shutdownWhy = why;
+} }
+// ---- 退出前必须把 JS 线程从 IL2CPP 域里摘出去 (2026-10-06 根治) ----
+// 实证 (自动化 A/B, 见 test-tools/quit_probe.py): 条件完全相同, 只差这一步 ——
+//   attach 进域 → 退出时主线程卡死在 GameAssembly 的 dispatch_semaphore_wait (窗口黑着未响应, 永不退出)
+//   不 attach    → 干净退出
+// 而且必须"在退出入口那一下"完成: shutdown 一卡住, JS 线程就再也跑不动 JS 了 (实测排队 2 分钟才轮到),
+// 事后救援无效 (DETACH=after 失败 / DETACH=before 成功)。
+var _jsThread = null, _detached = false;
+export function noteJsThread(t) { _jsThread = t; }
+// ⚠️ 坑 (2026-10-06 踩过, 造成退出时 SIGSEGV): 这里**只能**用 attach 时记下的 JS 线程对象。
+// 千万不能用 `il2cpp_thread_current()` —— 它返回的是**调用者自己**: 从退出钩子里调 (= 主线程)
+// 会把主线程摘出去, 之后主线程再跑托管代码就空指针 (`Environment::get_CurrentManagedThreadId`
+// 读 "当前线程的 Il2CppThread" = NULL) → 崩在玩家循环里, 1ms 后即死, 还留下一份 .ips。
+export function detachJsThread() {
+    if (_detached)
+        return false;
+    try {
+        if (!A.td) {
+            dbg("[v3] 缺 il2cpp_thread_detach 导出 → 无法 detach");
+            return false;
+        }
+        if (!_jsThread || _jsThread.isNull()) {
+            dbg("[v3] 没记下 JS 线程对象 → 不 detach (宁可卡着也不能摘错线程)");
+            return false;
+        }
+        _detached = true;
+        A.td(_jsThread);
+        return true;
+    }
+    catch (e) {
+        swallowed("utils.js:detachJsThread", e);
+        return false;
+    }
+}
+// 退出入口: **只置位**, 不在这里 detach。
+// 为什么不在钩子里直接摘 (2026-10-06 血的教训): `il2cpp_thread_detach` 清的是**调用者**的线程注册,
+// 钩子回调跑在主线程 → 摘掉的是主线程 → 0.2s 后主线程在玩家循环里读 `Thread::Current()` 得到 NULL,
+// 崩在 `Environment::get_CurrentManagedThreadId` (留下一份 .ips)。摘除必须由 JS 线程自己做,
+// 由下面那个 50ms 的纯 JS 定时器在置位后"马上"完成 (实测钩子置位后 100ms 内 JS 线程仍跑得动)。
+function _quitEntry(why) {
+    var first = !_shuttingDown;
+    _setDown(why);
+    if (first)
+        dbg("[v3] 退出中 (" + why + "): 等 JS 线程 detach");
+}
+function noteServiceCount(sz) {
+    if (sz > _svcCountMax)
+        _svcCountMax = sz;
+    else if (sz === 0 && _svcCountMax >= 5)
+        _setDown("services 归零");
+}
+// 轮询回调第一行调用: true = 引擎已拆, 调用方应立刻 clearInterval 并 return
+export function pollGuard() {
+    if (_shuttingDown)
+        return true;
+    try {
+        var el = A.cfn(nv, Memory.allocUtf8String("Naninovel"), Memory.allocUtf8String("Engine"));
+        if (el && !el.isNull()) {
+            var l = A.sdf(el).add(A.fo(A.gf(el, Memory.allocUtf8String("services")))).readPointer();
+            if (l && !l.isNull())
+                noteServiceCount(l.add(0x18).readS32());
+        }
+    }
+    catch (e) {
+        swallowed("utils.js:pollGuard", e);
+    }
+    return _shuttingDown;
+}
+// 退出入口钩子 (尽早置位)。拿不到也没关系: "services 归零" 那条兜底照样生效。
+export function installShutdownHooks() {
+    // 退出上报 + 自我摘除 (50ms 一次, 纯 JS, 只读一个布尔量)。
+    // 50ms 是刻意的: shutdown 一卡住 JS 线程就再也跑不动了 (实测消息能排队 2 分钟),
+    // 所以从"钩子置位"到"自摘"之间的窗口必须尽量短 —— 实测 100ms 级别仍然来得及。
+    try {
+        var notifyTimer = setInterval(function () {
+            if (!_shuttingDown)
+                return;
+            clearInterval(notifyTimer);
+            var ok = detachJsThread(); // 在 JS 线程上调用 → 摘的就是它自己 (正确)
+            dbg("[v3] 退出中: JS 线程 detach=" + ok);
+            try {
+                send({ t: "engine-shutdown", why: _shutdownWhy, detached: ok });
+            }
+            catch (e) {
+                swallowed("utils.js:shutdownNotify", e);
+            }
+        }, 50);
+    }
+    catch (e) {
+        swallowed("utils.js:installShutdownHooks#notify", e);
+    }
+    // 退出入口钩子: 只置位 (摘除交给上面那个 50ms 的 JS 定时器 —— 见 _quitEntry 的说明)。
+    // ① Internal_ApplicationWantsToQuit —— Unity 对所有退出请求 (游戏内按钮 / Cmd+Q / 程序坞 / AppleEvent)
+    //    都会先调它, 是最早的统一点; ② Application.Quit(int) —— 游戏内按钮直接入口 (实测这条已验证)。
+    try {
+        var ui = findUnityImg();
+        var ac = ui ? A.cfn(ui, Memory.allocUtf8String("UnityEngine"), Memory.allocUtf8String("Application")) : null;
+        if (ac && !ac.isNull()) {
+            var wmi = A.cgm(ac, Memory.allocUtf8String("Internal_ApplicationWantsToQuit"), 0);
+            if (wmi && !wmi.isNull()) {
+                Interceptor.attach(wmi.readPointer(), { onEnter: function () { _quitEntry("Application.wantsToQuit"); } });
+                dbg("[v3] 退出钩子①: Application.Internal_ApplicationWantsToQuit");
+            }
+            else
+                dbg("[v3] 退出钩子①: Internal_ApplicationWantsToQuit 未找到");
+            var qmi = A.cgm(ac, Memory.allocUtf8String("Quit"), 1);
+            if (qmi && !qmi.isNull()) {
+                Interceptor.attach(qmi.readPointer(), { onEnter: function () { _quitEntry("Application.Quit"); } });
+                dbg("[v3] 退出钩子②: UnityEngine.Application.Quit(int)");
+            }
+            else
+                dbg("[v3] 退出钩子②: Application.Quit(int) 未找到");
+        }
+        else
+            dbg("[v3] 退出钩子: UnityEngine.Application 类未找到 (只剩 services 归零兜底, 那层不 detach)");
+    }
+    catch (e) {
+        swallowed("utils.js:installShutdownHooks", e);
+    }
+}
 // ============ 服务查找 ============
 // quiet=true: 未找到只打 dbg (探针回退场景, 如 CharacterManager→CharacterManagerExtended,
 // 每次场景加载都探一次, WARN 太吵); 默认 false 保持原 WARN 行为。
 export function findSvc(name, quiet) {
     try {
+        // 引擎已开始拆解: 直接返回, 连 WARN 都不打 (退出期这条 WARN 曾刷满日志尾)
+        if (_shuttingDown)
+            return null;
         var el = A.cfn(nv, Memory.allocUtf8String("Naninovel"), Memory.allocUtf8String("Engine"));
         if (!el || el.isNull()) {
             warn("[v3] findSvc('" + name + "') FAIL: Engine class NOT FOUND (nv=" + nv + ", allImgs=" + allImgs.length + ")");
@@ -9118,6 +9295,7 @@ export function findSvc(name, quiet) {
         var l = A.sdf(el).add(A.fo(f)).readPointer();
         var its = l.add(0x10).readPointer();
         var sz = l.add(0x18).readS32();
+        noteServiceCount(sz);
         for (var i = 0; i < sz; i++) {
             var ep = its.add(0x20 + i * 8).readPointer();
             if (ep.isNull())

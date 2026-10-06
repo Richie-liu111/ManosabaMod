@@ -23,7 +23,7 @@
 //     懒加载工厂自建 + GCI 子树扫描 + 全程分阶段日志
 // 原则 (项目惯例): 只做加法+自清理, 不改任何游戏现有对象; 全程 try/catch 不崩。
 //   错误路径一律写安全默认时长 → nani @Wait 永不悬挂 (R4)。
-import { A, dbg, directCall, error, findAllObjectOfType, findClassAcrossImages, findSvc, getSystemClass, invoke, invokeOk, makeS, nv, pngDims, readStr, swallowed, warn } from "./utils.js";
+import { A, dbg, directCall, error, findAllObjectOfType, findClassAcrossImages, findSvc, getSystemClass, invoke, invokeOk, isShuttingDown, makeS, nv, pngDims, readStr, swallowed, warn } from "./utils.js";
 import { getIO } from "./io.js";// 写文件走 io.js 绑定 (Module.findExportByName 在 bundle 内不可用, io.js 的 findGlobalExportByName 实证可用)
 import { readJSONFile, openForWrite, writeString, fileSync, fileReadBytes } from "./io.js";
 import { info } from "./log.js";
@@ -911,7 +911,8 @@ function installThanksProbe() {
         } catch (e3) { warn("[v3][Credit] 探针 ShowAsync hook err: " + e3); }
         thanksProbe.attached = true;
         info("[v3][Credit] 探针已挂 (SpecialThanksLabel.set_Text + Clear + ShowAsync — 逐行富文本 + 时序)");
-        if (!thanksProbe.flushTimer) thanksProbe.flushTimer = setInterval(function () { try { thanksProbeFlush(); } catch (e4) { swallowed("credit.js:tmpEnter.onEnter#3", e4); } }, 3000);
+        // 永久 3s 定时器 (没人清过它) → 退出期自停, 否则就是又一个往拆解中的运行时里钻的入口
+        if (!thanksProbe.flushTimer) thanksProbe.flushTimer = setInterval(function () { try { if (isShuttingDown()) { clearInterval(thanksProbe.flushTimer); thanksProbe.flushTimer = null; return; } thanksProbeFlush(); } catch (e4) { swallowed("credit.js:tmpEnter.onEnter#3", e4); } }, 3000);
     } catch (e) { warn("[v3][Credit] installThanksProbe err: " + e); }
 }
 function thanksProbeFlush() {
@@ -1279,6 +1280,8 @@ function scheduleStillReDump() {
 }
 function stillTick() {
     try {
+        // 引擎开始拆解 (退出中) → 自停, 不再进 IL2CPP (见 utils.js 的退出感知)
+        if (isShuttingDown()) { if (comp.stillTimer) { clearInterval(comp.stillTimer); comp.stillTimer = null; } return; }
         // run-31: 槽位取模 (自定义列表可超 9 张循环复用); 播放长度 = 配置长度(有 conf 时)或槽位数
         var totalN = creditState.stillsConf ? creditState.stillsConf.length : comp.stills.length;
         var st = comp.stills[comp.stillIdx % comp.stills.length];
@@ -1922,6 +1925,8 @@ function activateThanksLocale(lv) {
 }
 function thanksTick() {
     try {
+        // 同上: 退出期自停 (25ms 一拍, 更要早退)
+        if (isShuttingDown()) { if (comp.thanksPaging && comp.thanksPaging.timer) { clearInterval(comp.thanksPaging.timer); comp.thanksPaging.timer = null; } return; }
         var p = comp.thanksPaging;
         if (!p) return;
         var now = Date.now();

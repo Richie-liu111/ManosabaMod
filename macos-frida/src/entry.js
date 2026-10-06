@@ -11,7 +11,7 @@
 // 日志分层: 机制日志走 dbg (MOD_DEBUG, 默认关); 游戏侧 Unity.LogError 全量 dump (dumpObj 原样 console.log)
 'use strict';
 
-import { A, allImgs, cs, dbg, findClassAcrossImages, nv, readStr, setGotoModifiedCls, setImageHandles, swallowed, warn, wblog } from "./utils.js";
+import { A, allImgs, cs, dbg, findClassAcrossImages, installShutdownHooks, isShuttingDown, noteJsThread, nv, readStr, setGotoModifiedCls, setImageHandles, swallowed, warn, wblog } from "./utils.js";
 import { clearCutInCaches, preloadCutInTextures, setupCutInHooks } from "./cutin.js";
 import { clearCreditCaches, setupCreditHooks } from "./credit.js";
 import { initChoiceHandlers, setupChoiceHandlerHooks } from "./choice.js";
@@ -91,6 +91,9 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         A.csyst = E.il2cpp_class_from_system_type ? new NativeFunction(E.il2cpp_class_from_system_type, 'pointer', ['pointer']) : null;
         A.sdf = new NativeFunction(E.il2cpp_class_get_static_field_data, 'pointer', ['pointer']);
         A.ta  = new NativeFunction(E.il2cpp_thread_attach, 'pointer', ['pointer']);
+        // 退出时要把这个线程摘出去 (不摘 → 游戏退出卡死, 见 utils.js 的 detachJsThread)
+        A.tc  = E.il2cpp_thread_current ? new NativeFunction(E.il2cpp_thread_current, 'pointer', []) : null;
+        A.td  = E.il2cpp_thread_detach ? new NativeFunction(E.il2cpp_thread_detach, 'void', ['pointer']) : null;
         A.ots = E.il2cpp_object_to_string ? new NativeFunction(E.il2cpp_object_to_string, 'pointer', ['pointer']) : null;
         A.cgnt = new NativeFunction(E.il2cpp_class_get_nested_types, 'pointer', ['pointer', 'pointer']);
         A.vb = E.il2cpp_value_box ? new NativeFunction(E.il2cpp_value_box, 'pointer', ['pointer', 'pointer']) : null;
@@ -104,6 +107,7 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
 
         dom = A.dg();
         var t = A.ta(dom);
+        noteJsThread(t);          // 记下来: 退出钩子里要从别的线程把它 detach 掉
         dbg("[v3] 线程已 attach: " + t);
 
         var cp = Memory.alloc(8);
@@ -498,6 +502,9 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
             }
         } catch (e) { dbg("[v3] KeyNotFoundException hook err: " + e); }
 
+        // 退出感知: 尽早置位 → 所有轮询停止 (退出期 JS 线程不再进正在销毁的运行时; 见 utils.js 说明)
+        installShutdownHooks();
+
         // Movie 支持钩子 (URL 流式)
         setupMovieHooks();
 
@@ -602,7 +609,10 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
     }
 
     var chk = setInterval(function () {
-        try { var ok = doInit(); if (ok) { clearInterval(chk); dbg("[v3] 全部就绪"); } }
+        try {
+            if (isShuttingDown()) { clearInterval(chk); dbg("[v3] 退出中: 停止初始化重试"); return; }
+            var ok = doInit(); if (ok) { clearInterval(chk); dbg("[v3] 全部就绪"); }
+        }
         catch (e) { dbg("[v3] ERR: " + e); }
     }, 200);
 })();
