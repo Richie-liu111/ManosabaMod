@@ -4,7 +4,7 @@
   "private": true,
   "description": "manosaba macOS MOD loader (Frida) — 多文件 ES modules 工程, frida-compile 打包单 bundle",
   "scripts": {
-    "check": "node tools/check-imports.mjs && node test-tools/swallow-test.mjs && node tools/check-privacy.mjs",
+    "check": "node tools/check-imports.mjs && node tools/catch-audit.mjs && node test-tools/swallow-test.mjs && node tools/check-privacy.mjs",
     "privacy": "node tools/check-privacy.mjs",
     "build": "npm run check && frida-compile src/entry.js -o dist/manosabamod.js -S",
     "deploy:check": "node tools/deploy-check.mjs",

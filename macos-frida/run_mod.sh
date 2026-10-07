@@ -82,6 +82,11 @@ if [ -d "$PWD/src" ]; then
     if command -v node >/dev/null && [ -f "$PWD/tools/check-privacy.mjs" ]; then
         node "$PWD/tools/check-privacy.mjs" || { echo "错误: 内容脱敏检查未通过, 已中止构建 (npm run privacy 看详情)"; exit 1; }
     fi
+    # 空 catch 审计: 未留痕的 `catch {}` 会让"诊断代码自己静默失败"重演 (2026-09-25 最贵的一课)。
+    # 有意的静默需在文件里写 `// catch-audit: intentional-silence <理由>` 声明 (2026-10-07 起接进构建)
+    if command -v node >/dev/null && [ -f "$PWD/tools/catch-audit.mjs" ]; then
+        node "$PWD/tools/catch-audit.mjs" >/dev/null || { echo "错误: 有未处理的空 catch (npm run audit:catch 看详情)"; exit 1; }
+    fi
     if ! (command -v npx >/dev/null && npx --no-install frida-compile src/entry.js -o dist/manosabamod.js -S); then
         if [ -f "$PWD/node_modules/.bin/frida-compile" ]; then
             "$PWD/node_modules/.bin/frida-compile" src/entry.js -o dist/manosabamod.js -S || { echo "错误: frida-compile 构建失败"; exit 1; }

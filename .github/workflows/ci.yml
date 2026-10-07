@@ -1,0 +1,53 @@
+# ============ CI: 静态闸门 + 产物可复现性 ============
+# 为什么有它 (2026-10-07): 在此之前仓库**没有任何 CI**, 所有检查都得靠人记得在本机跑 ——
+# 而本机跑不到的地方恰恰是最容易出事的: ① "改了 src 忘了重建 dist" (产物随提交, 忘了就发旧包);
+# ② 各种闸门 (check-imports / catch-audit / swallow-test / check-privacy) 哪个漏跑都没人知道。
+# 这个 workflow 把"提交前应该跑的东西"变成机器每次必跑。
+#
+# runner 用 macOS 而不是 ubuntu: dist 的**字节级可复现性**是在 macOS 上实测出来的
+# (frida-compile 输出与平台无关是推测, 没验证过)。用同平台才能让下面那条 diff 断言可信 ——
+# 换个平台万一产物字节不同, 这条检查会误报, 比没有还糟。公开仓库的 macOS runner 不额外计费。
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  macos-frida:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: macos-frida
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: macos-frida/package-lock.json
+
+      # lockfile 锁死了 frida-compile 版本 (^16.4.2 → 实际 16.4.2), 这是 dist 可复现的前提之一
+      - name: 安装依赖 (按 lockfile)
+        run: npm ci
+
+      # build = check && frida-compile。check 链: check-imports → catch-audit →
+      # swallow-test → check-privacy。注意 check-privacy 的"具体 mod 名"规则需要本机清单
+      # (~/.config/manosaba/privacy-rules.json), CI 上**没有** → 它会打印警告并只跑通用规则
+      # (本机路径 / 私有渠道 / 会话编号)。这是有意的: 清单本身不能进仓库, 见该文件头说明。
+      - name: 构建 (内含全部静态闸门)
+        run: npm run build
+
+      # 产物随版本提交, 所以"构建结果必须与提交的 dist 一致"= 忘了重建就会被这里拦下。
+      # (这条能成立的前提就是 frida-compile 输出确定 —— 本机实测同输入两次构建 md5 相同)
+      - name: dist 必须与 src 一致 (忘了重建就会红)
+        run: git diff --exit-code dist/manosabamod.js
+
+      # frida-compile 只看源码语法, 不看产物结构 —— "构建成功 ≠ 能注入", 这里按 Frida 的
+      # 读法把 bundle 拆一遍 (📦 头 + 片段表 + 每段语法)。
+      - name: 产物结构体检 (Frida 可注入性)
+        run: npm run bundle:check
+
+      # 说明: deploy-check (repo/dist vs 游戏目录/dist) **不在 CI 里** —— 它需要真游戏目录,
+      # 只在开发机上有意义。本机流程见 macos-frida/docs/USAGE.md。

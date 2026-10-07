@@ -17,6 +17,15 @@
 //   · log.js 的崩溃上下文 (crashLine / installCrashHandler / Fallback) — 那里禁 console/RPC, 会死锁
 //   · 整行被注释掉的死代码里的 `catch (e) {}` — 改了不起作用只添噪 (这类死代码本身应尽早删)
 //   · probe_textlocalizer.js (已无调用点的死文件, 删不删由用户定)
+//
+// 文件级"有意静默"声明 (2026-10-07 新增): 有些文件的空 catch 是**设计如此** (例: 日志函数自己
+//   的 catch 不能再调日志, 会递归死锁; 探针把读失败以 -1 呈现在输出里, 再打 WARN 只刷屏)。
+//   这类在文件里写一行机器可读的声明, 理由随代码走:
+//       // catch-audit: intentional-silence <一句话理由>
+//   效果: 该文件的空 catch 仍**列在报告里** (标 [已声明静默]), 但不计入"待处理", 不影响退出码。
+//   为什么不用中央白名单: 白名单会被悄悄加长而没人看理由; 声明写在文件里, 改代码的人必然看见。
+//
+// 退出码: 存在**未声明**的空 catch → 1 (可接进 CI/构建前检查); 全清或全已声明 → 0。
 import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +48,8 @@ function walk(dir, out = []) {
 // 空 catch: 体内只有空白, 或只有 // 注释
 const RE_EMPTY = /catch\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*\{\s*\}/g;
 const RE_COMMENT_ONLY = /catch\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*\{\s*(\/\/[^\n]*?)\s*\}/g;
+// 文件级"有意静默"声明 (见文件头说明)
+const RE_OPT_OUT = /\/\/\s*catch-audit:\s*intentional-silence\b[ \t]*([^\n]*)/;
 
 const FN_PATTERNS = [
     /(?:export\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/g,               // function name(
@@ -99,6 +110,10 @@ function collect(file) {
                          line: lineOf(src, m.index) });
         }
     }
+    // 文件级"有意静默"声明: 打上标记, 报告里仍然列出 (可见), 但不计入待处理
+    const optOut = RE_OPT_OUT.exec(src);
+    const declReason = optOut ? (optOut[1].trim() || "(未写理由)") : null;
+    for (const s of sites) { s.declared = !!optOut; s.declReason = declReason; }
     return sites.sort((a, b) => a.idx - b.idx);
 }
 
@@ -110,6 +125,8 @@ function plan(sites) {
         seen[base] = (seen[base] || 0) + 1;
         s.tag = seen[base] > 1 ? `${base}#${seen[base]}` : base;
         s.noLog = NO_LOG_FUNCS.has(s.fn);
+        // 不参与"待处理"的两种: 崩溃上下文(打了会死锁) / 文件已声明有意静默
+        s.skip = s.noLog || s.declared;
     }
     return sites;
 }
@@ -130,7 +147,7 @@ function ensureImport(src, name) {
 function apply(sites) {
     const byFile = new Map();
     for (const s of sites) {
-        if (s.noLog) continue;
+        if (s.skip) continue;
         if (!byFile.has(s.file)) byFile.set(s.file, []);
         byFile.get(s.file).push(s);
     }
@@ -202,21 +219,38 @@ all = plan(all);
 const applyMode = process.argv.includes("--apply");
 const jsonMode = process.argv.includes("--json");
 
+const pending = all.filter((s) => !s.skip);        // 需要处理的 (未声明且非崩溃上下文)
+
 if (jsonMode) {
-    console.log(JSON.stringify(all.map((s) => ({ file: s.rel, line: s.line, fn: s.fn, tag: s.tag, noLog: s.noLog })), null, 2));
+    console.log(JSON.stringify(all.map((s) => ({ file: s.rel, line: s.line, fn: s.fn, tag: s.tag,
+                                                 noLog: s.noLog, declared: !!s.declared, reason: s.declReason || null })), null, 2));
 } else {
     let cur = null;
-    const counts = {};
     for (const s of all) {
         if (s.rel !== cur) { cur = s.rel; console.log(`\n--- ${cur}`); }
-        counts[cur] = (counts[cur] || 0) + 1;
-        console.log(`  ${String(s.line).padStart(4)}  ${s.noLog ? "[崩溃上下文,跳过]" : s.tag}${s.comment ? "   // " + s.comment.slice(2).trim() : ""}`);
+        const mark = s.noLog ? "[崩溃上下文,跳过]"
+                   : s.declared ? `[已声明静默: ${s.declReason}]`
+                   : s.tag;
+        console.log(`  ${String(s.line).padStart(4)}  ${mark}${s.comment ? "   // " + s.comment.slice(2).trim() : ""}`);
     }
-    console.log(`\n合计 ${all.length} 处空 catch (其中崩溃上下文 ${all.filter((s) => s.noLog).length} 处跳过)`);
+    const nDecl = all.filter((s) => s.declared).length;
+    const nNoLog = all.filter((s) => s.noLog).length;
+    console.log(`\n合计 ${all.length} 处空 catch (崩溃上下文 ${nNoLog} / 已声明静默 ${nDecl} / **待处理 ${pending.length}**)`);
+    if (pending.length) {
+        console.log(`[catch-audit] FAIL ✗ 有 ${pending.length} 处未处理 —— 补 swallowed(...) 或用 ` +
+                    `\`// catch-audit: intentional-silence <理由>\` 声明 (见文件头)`);
+    } else {
+        console.log("[catch-audit] PASS ✓ 没有未处理的空 catch");
+    }
 }
 
 if (applyMode) {
     const n = apply(all);
     console.log(`[catch-audit] ✓ 已改写 ${n} 处 (注: 还需确认各文件已从 utils.js 导入 swallowed)`);
     upgradeWarn();
+    process.exitCode = 0;                 // --apply 是"修"模式: 已就地补上, 不因修复前的问题报错
+} else {
+    // 退出码 (2026-10-07 补): 以前恒 0, 所以放进 check 链也永远绿。
+    // 只有**未声明**的空 catch 才算失败; 崩溃上下文与已声明静默不阻塞。
+    process.exitCode = pending.length ? 1 : 0;
 }
