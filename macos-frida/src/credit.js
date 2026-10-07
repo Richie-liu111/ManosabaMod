@@ -5,7 +5,7 @@
 //   @set "g_modCreditRollPhase = 1"          → staff:  文本/布局/归零 → 写 g_staffDuration → ScrollAsync
 //   @set "g_modCreditRollPhase = 2"          → thanks: dict/order → 写 g_thanksDuration → ShowAsync
 //   @set "g_modCreditRollPhase = 3"          → end:    SpecialThanks.Clear + DisableCanvas + 还原祖先 + disarm
-// 探针裁决落点 (2026-08-20 run-4):
+// 探针裁决落点 (2026-08-20):
 //   * F1 根治: 只启用 roll 自身不够, 必须沿 Transform 链激活 inactive 祖先 (ensureHierarchy) —
 //     实证 canvas 0→1, 我方 ScrollAsync 完美线性动画 (0.990→0.000 @98.4s)
 //   * 多标签: staff content 里多个 TMP 标签 (ContentSizeFitter[]), 原版残留文本在非当前语种标签上
@@ -13,7 +13,7 @@
 //   * 数组类免偷: string[] = il2cpp_array_new(System.String); string[][] = array_new(string[] 类)
 //   * 时长公式: staff = height/speed (json), g_staffDuration = 滚动+endPause;
 //     thanks 墙钟实测 8 组 = 13.47s → 1.68s/组 (fade=0.4/display=2.0 硬编码) → 1.68*nG + 2.4
-//   * 指针生命周期: run-3 实证跨回标题存活 (同地址), 每次使用前字段探针复核, 失效则惰性重抓
+//   * 指针生命周期: 实证跨回标题存活 (同地址), 每次使用前字段探针复核, 失效则惰性重抓
 // 实现阶段首跑实测修正 (2026-08-20, 全黑屏无演出):
 //   * utils.invoke 返回裸指针 (探针 invoke 返回 {ok,ret,ex}) — 本文件原按探针契约查 .ok → 恒假,
 //     FindObjectsOfType 兜底从未执行 → 一律改用 invokeOk (成功语义)
@@ -34,14 +34,14 @@ import { wbCurrentMod } from "./witchbook/state.js";
 var creditHooksReady = false;
 var comp = {           // 捕获的组件 (跨回标题保留 — 探针实证指针常驻; 每次使用前字段探针复核)
     creditsUI: null,   // CreditsUI 实例 (UIManager.GetUI 自建 / 原版 PlayAsync 捕获)
-    director: null,    // run-15: CreditsDirectorAct2 实例 (_creditsDirectors[act] — 原版 @credit 复刻诊断)
+    director: null,    // CreditsDirectorAct2 实例 (_creditsDirectors[act] — 原版 @credit 复刻诊断)
     rollScroll: null, rollThanks: null,      // CreditRollVerticalScroll / CreditRollSpecialThanks 实例
     scrollRect: null, canvas: null, content: null,
     sArrCls: null, gArrCls: null,            // string[] / string[][] 类 (免偷构建)
     dictCls: null,                           // Dictionary<LocaleKind,string[][]> 类 (metadata 自解析)
     labels: [],                              // staff content 全部 TMP 标签 {tmp, go, active, font}
     stills: null, stillTimer: null,// Act2 Stills 显示 (EndingStill[] + fade 定时器)
-    // run-31: stills 条目扩展 {comp, go, name, cg, img, vanillaSpr} — img=Image 组件, vanillaSpr=原版 sprite (immutable, 恢复总从它)
+    // stills 条目扩展 {comp, go, name, cg, img, vanillaSpr} — img=Image 组件, vanillaSpr=原版 sprite (immutable, 恢复总从它)
     stillIdx: 0, stillState: "idle", stillStepStart: 0,
     stillT: { delay: 2000, fade: 2000, display: 26000 },// 动态时序 (キャスト 偏移 + 原版 units)
     timing: null,// 原版 director 时序参数缓存 (_scrollSpeed/units/bpm)
@@ -55,15 +55,15 @@ var creditState = {
     jsonPath: null,      // json 路径 (日志)
     original: false,     // 原版复刻模式 (g_modCreditRoll="original" → 直接调 CreditsUI.PlayAsync(2))
     extract: false,// 素材提取模式 (trigger "extract" → 原版全流程 + stills PNG/名单 json → mod 文件夹)
-    pendingProduction: false,  // run-30f: 共犯完成后置位 → 由 g_creditTick 主线程泵执行 doProduction
-    stillsConf: null           // run-31: 自定义 stills 播放列表 (data.json j.stills, 校验后; null=原版 9 张)
+    pendingProduction: false,  // 共犯完成后置位 → 由 g_creditTick 主线程泵执行 doProduction
+    stillsConf: null           // 自定义 stills 播放列表 (data.json j.stills, 校验后; null=原版 9 张)
 };
-// run-31: stills 自定义图缓存 — texCache/sprCache key=resolved path (同文件多槽位共享一次解码);
+// stills 自定义图缓存 — texCache/sprCache key=resolved path (同文件多槽位共享一次解码);
 //   sprCache null = 加载失败 (不重试); doEnd/abortCredit 清空置 null (Unity GC 回收纹理)
 var stillsTexCache = {}, stillsSprCache = {};
 var mgr = null;                  // CustomVariableManager 实例 (首个 SetVariableValue 缓存, 写回变量用 — F13)
 var activatedAncestors = [];     // phase=1 激活的祖先 GO (phase=3/中止 还原)
-var deactivatedLabels = [];      // run-11: 单标签模式停用的非当前语种标签 GO (结束还原)
+var deactivatedLabels = [];      // 单标签模式停用的非当前语种标签 GO (结束还原)
 var cls = {};                    // 类表
 
 // ============ 基础工具 (与探针一致) ============
@@ -90,11 +90,11 @@ function iPtr(v) { var p = Memory.alloc(4); p.writeS32(v); return p; }
 function boolPtr(v) { var p = Memory.alloc(4); p.writeS32(v ? 1 : 0); return p; }
 function zeroCT() { var p = Memory.alloc(16); p.writeU64(0); p.add(8).writeU64(0); return p; }
 // il2cpp_field_get_type / il2cpp_method_get_param — 导出在 GameAssembly.dylib (entry.js E 表同源)。
-// run-6 实证 findExportByName(null) 只搜主程序 → 绑定失败 → 一律用 A.fgt/A.mgp (entry.js 已绑) + dylib 兜底
+// 实证 findExportByName(null) 只搜主程序 → 绑定失败 → 一律用 A.fgt/A.mgp (entry.js 已绑) + dylib 兜底
 var fgt = null, mgp = null;
 try { fgt = A.fgt; } catch (e) { swallowed("credit.js:zeroCT", e); }
 try { mgp = A.mgp; } catch (e) { swallowed("credit.js:zeroCT#2", e); }
-// run-12 修复: A.gn 从未在 entry.js 绑定 (只有 A.cgp=class_get_parent) — cgmChain 继承链回退必崩
+// 修复: A.gn 从未在 entry.js 绑定 (只有 A.cgp=class_get_parent) — cgmChain 继承链回退必崩
 try { if (!A.gn && A.cgp) A.gn = A.cgp; } catch (e) { swallowed("credit.js:zeroCT#3", e); }
 if (!fgt || !mgp) {
     try {
@@ -142,7 +142,7 @@ function resolveCreditClasses() {
     return all;
 }
 
-// ============ 字段探针类型识别 (类名通道优先, 字段探针兜底 — run-7 教训) ============
+// ============ 字段探针类型识别 (类名通道优先, 字段探针兜底 — 教训) ============
 // rollThanks._labels@0x70 在 ShowAsync 前是 null → 纯字段探针会把有效实例判成"不可得" (phase=2 跳过根因)
 // rollScroll 独有 _scrollRect@0x30→ScrollRect; rollThanks 独有 _labels@0x70→Dictionary
 function isScrollRoll(inst) {
@@ -200,7 +200,7 @@ function enumerateLabels() {
             } catch (e2) { swallowed("credit.js:enumerateLabels", e2); }
             var active = eGo ? dcBool(cgmChain(A.ogc(eGo), "get_activeSelf", 0), eGo) : false;
             var nm = eGo ? getGoName(eGo) : "?";
-            // run-12: 标签自身名全叫 "Label", 语种标识可能在父包装节点 (thanks 侧就是 Label_Ja/Label_ZhHans 风格)
+            // 标签自身名全叫 "Label", 语种标识可能在父包装节点 (thanks 侧就是 Label_Ja/Label_ZhHans 风格)
             var pn = "?", gn = "?";
             if (eGo) {
                 try {
@@ -228,7 +228,7 @@ function enumerateLabels() {
         return comp.labels.length;
     } catch (e) { warn("[v3][Credit] enumerateLabels err: " + e); return 0; }
 }
-// run-11: thanks 语种→标签映射 (dump.cs:11229 LabelByLocale{_localeKind@0x10,_label@0x18}, _labelsByLocale@0x38)
+// thanks 语种→标签映射 (dump.cs:11229 LabelByLocale{_localeKind@0x10,_label@0x18}, _labelsByLocale@0x38)
 //   序列化数组开机即有 (不依赖 ShowAsync); zh 标签的 TMP 字体 = 游戏官方简中字体 (staff 换装来源)
 function enumerateThanksLabels() {
     try {
@@ -319,7 +319,7 @@ function scanUiRolls(uiComp, tag) {
         return got;
     } catch (e) { warn("[v3][Credit] scanUiRolls err: " + e); return false; }
 }
-// 服务表全量 dump (UIManager 找不到时的裁决日志 — run-7: 服务表 23 个但按名匹配无果)
+// 服务表全量 dump (UIManager 找不到时的裁决日志 — 服务表 23 个但按名匹配无果)
 function dumpServices() {
     try {
         var el = A.cfn(nv, Memory.allocUtf8String("Naninovel"), Memory.allocUtf8String("Engine"));
@@ -341,7 +341,7 @@ function dumpServices() {
 function spawnCreditsUI() {
     try {
         if (comp.creditsUI && !comp.creditsUI.isNull()) { scanUiRolls(comp.creditsUI, "已有UI"); return comp.creditsUI; }
-        // run-16 修复: 服务类被覆盖为 UiManagerExtended — findSvc("Naninovel.UIManager") 后缀匹配不上
+        // 修复: 服务类被覆盖为 UiManagerExtended — findSvc("Naninovel.UIManager") 后缀匹配不上
         //   ("UIManager" ≠ "UiManagerExtended"; 服务表 23 个实类名, 日志实证 UiManagerExtended 在表里)
         var uiMgr = findSvc("UiManagerExtended", true);
         if (!uiMgr) uiMgr = findSvc("UIManager", true);
@@ -351,7 +351,7 @@ function spawnCreditsUI() {
             if (mgrs.length) uiMgr = mgrs[0];
         }
         if (!uiMgr) {
-            // run-16: 场景直接扫 CreditsUI 本身 (rollScroll 全场景扫实证可得 — CreditsUI 是它的祖先必在场景)
+            // 场景直接扫 CreditsUI 本身 (rollScroll 全场景扫实证可得 — CreditsUI 是它的祖先必在场景)
             var uis = findAllObjectOfType(cls.creditsUI);
             if (uis.length) {
                 comp.creditsUI = uis[0];
@@ -392,9 +392,9 @@ function spawnCreditsUI() {
 }
 // 分阶段类型扫描: stage 1 = FindObjectsOfType(active) → stage 2 = FindObjectsOfType(includeInactive=true)
 // → stage 3 = FindObjectsOfTypeAll (含资产/prefab)。返回 {stage, objs}。
-// 语义 (run-7 实证): 阶段1/2 只返回 LIVE 场景对象; 阶段3 才含资产 — 资产上跑动画不可见
-// (run-7 实锤: "3 填 / 0 清" 全 active 标签 = prefab 序列化默认, 滚动无显示)。
-// 阶段日志用 info (MOD_DEBUG=false 时 dbg 不可见, run-7 的 LIVE/资产判定无从看起)。
+// 语义 (实证): 阶段1/2 只返回 LIVE 场景对象; 阶段3 才含资产 — 资产上跑动画不可见
+// (实锤: "3 填 / 0 清" 全 active 标签 = prefab 序列化默认, 滚动无显示)。
+// 阶段日志用 info (MOD_DEBUG=false 时 dbg 不可见, 的 LIVE/资产判定无从看起)。
 function findRollsStaged(targetCls, tag) {
     try {
         var objCls = findClassAcrossImages("UnityEngine", "Object");
@@ -426,7 +426,7 @@ function findRollsStaged(targetCls, tag) {
         return { stage: 0, objs: [] };
     } catch (e) { warn("[v3][Credit] findRollsStaged err: " + e); return { stage: 0, objs: [] }; }
 }
-// ---- 资产 → 场景实例化 (run-7 核心修复: 全新会话无 live CreditsUI, 资产动画不可见) ----
+// ---- 资产 → 场景实例化 (核心修复: 全新会话无 live CreditsUI, 资产动画不可见) ----
 function getGoName(go) { try { var n = invokeOk(cgmChain(A.ogc(go), "get_name", 0), go, []); return n.ok && n.ret ? (readStr(n.ret) || "?") : "?"; } catch (e) { return "?"; } }
 // 组件 → 所在 GO → Transform 链走到根 → 根 GO (prefab 根)
 function rootGoOf(comp) {
@@ -478,7 +478,7 @@ function ensureRollFromAsset(assetComp, targetCls, checkFn, tag) {
         return collectAndCapture(cp.ret, targetCls, checkFn, tag + ".副本");
     } catch (e) { warn("[v3][Credit] ensureRollFromAsset err: " + e); return false; }
 }
-// 分门控捕获 (run-6 教训: 共用一个全量门会把 staff/thanks 一起拖死 — rollScroll 已捕获却因
+// 分门控捕获 (教训: 共用一个全量门会把 staff/thanks 一起拖死 — rollScroll 已捕获却因
 // rollThanks 缺失整体跳过)。顺序: UI 子树 → GetUI 自建 → 全场景扫殿后 (明确标记 LIVE/资产)
 function ensureScroll() {
     try {
@@ -532,23 +532,23 @@ function captureFromDirector(dir, tag) {
 // ============ dict 类: metadata 自解析 (实现阶段修正 — 全新会话无原版 ShowAsync 可偷) ============
 // CreditsDirectorAct2._specialThanksCredits = Dictionary<LocaleKind, string[][]> (dump.cs:481224 实锤)
 // field_get_type → 泛型实例化 Il2CppType → class_from_type → Il2CppClass — 开机可得, 零依赖
-// run-8 修正: il2cpp_field_get_type / il2cpp_method_get_param 不在 GameAssembly.dylib 导出表
+// 修正: il2cpp_field_get_type / il2cpp_method_get_param 不在 GameAssembly.dylib 导出表
 //   (nm/strings 双证, A 表里也没有) → 路径B 改托管反射 (MakeGenericType → TypeHandle → class_from_type)
 // 托管反射: typeof(Dictionary<,>).MakeGenericType([LocaleKind, string[][]]) → RuntimeTypeHandle.value
 //   (= Il2CppType*) → A.cft — 全程只用已绑定的导出 (class_get_type/type_get_object/array_new/invoke/directCall)
 function dictClsViaReflection() {
     try {
-        // run-10: 每步日志二分 — 崩溃在哨兵前, 嫌疑 A.tgo(开放泛型)/A.an(Type)
+        // 每步日志二分 — 崩溃在哨兵前, 嫌疑 A.tgo(开放泛型)/A.an(Type)
         var typeCls = getSystemClass("Type");
         if (!typeCls || typeCls.isNull()) { warn("[v3][Credit] 反射 1/8 System.Type 未找到"); return null; }
         info("[v3][Credit] 反射 1/8 System.Type ok");
         var gtMi = A.cgm(typeCls, Memory.allocUtf8String("GetType"), 1);
         if (!gtMi || gtMi.isNull()) { warn("[v3][Credit] 反射 2/8 Type.GetType NOT FOUND"); return null; }
-        // run-14: 2a — GetType(closed 泛型全名) 一步拿 Dictionary<LocaleKind,string[][]> 具体 Type,
-        //   绕过 MakeGenericType/typeArr (run-13 崩在 3/8-4/8 构造区)。
+        // 2a — GetType(closed 泛型全名) 一步拿 Dictionary<LocaleKind,string[][]> 具体 Type,
+        //   绕过 MakeGenericType/typeArr (崩在 3/8-4/8 构造区)。
         //   LocaleKind assembly 定位: dump.cs Image 74 = GigaCreation.Essentials.Localization
         //   (TypeDefIndex 17606-17630, LocaleKind=17615)。嵌套泛型名语法: `2[[T1,Asm1],[T2,Asm2]]。
-        //   run-12 修复: 静态方法实例传 ptr(0) 而非 JS null — Frida NativeFunction 指针参数不接受 null
+        //   修复: 静态方法实例传 ptr(0) 而非 JS null — Frida NativeFunction 指针参数不接受 null
         var closedName = "System.Collections.Generic.Dictionary`2[[GigaCreation.Essentials.Localization.LocaleKind, GigaCreation.Essentials.Localization],[System.String[][], mscorlib]]";
         var cg = invokeOk(gtMi, ptr(0), [makeS(closedName)]);
         if (cg.ok && cg.ret && !cg.ret.isNull()) {
@@ -577,10 +577,10 @@ function dictClsViaReflection() {
         if (!openType || openType.isNull()) {
             var openCls = findClassAcrossImages("System.Collections.Generic", "Dictionary`2");
             if (!openCls || openCls.isNull()) { warn("[v3][Credit] 反射 3/8 Dictionary`2 类未找到 (GetType 也失败)"); return null; }
-            openType = A.tgo(A.cgt(openCls));   // typeof(Dictionary<,>) — run-10 崩溃嫌疑点, 兜底路径
+            openType = A.tgo(A.cgt(openCls));   // typeof(Dictionary<,>) — 崩溃嫌疑点, 兜底路径
             info("[v3][Credit] 反射 3/8 tgo(开放泛型) ok (GetType 失败, 兜底)");
         }
-        // run-14: 4a/4b/4c/4d 细分 — run-13 崩在 3/8-4/8 之间, 哨兵精确到每步定位
+        // 4a/4b/4c/4d 细分 — 崩在 3/8-4/8 之间, 哨兵精确到每步定位
         var sArrCls = stringArrayCls();
         if (!sArrCls || sArrCls.isNull()) { warn("[v3][Credit] 反射 4a/8 string[] 类未找到"); return null; }
         info("[v3][Credit] 反射 4a/8 string[] 类 ok");
@@ -597,7 +597,7 @@ function dictClsViaReflection() {
         typeArr.add(0x20).writePointer(A.tgo(A.cgt(cls.localeKind)));
         typeArr.add(0x28).writePointer(A.tgo(A.cgt(comp.gArrCls)));
         info("[v3][Credit] 反射 4d/8 Type[] 写入 ok");
-        // run-9 修复: MakeGenericType/get_TypeHandle 在 System.Type 上是抽象方法, methodPointer 是 thunk
+        // 修复: MakeGenericType/get_TypeHandle 在 System.Type 上是抽象方法, methodPointer 是 thunk
         //   directCall → 垃圾指针 → access violation (启动卡死根因)。必须 cgmChain 在具体类
         //   (RuntimeType) 上找实现 — invokeOk 对虚方法经 vtable 分派可接受, directCall 不行
         var mgtMi = cgmChain(A.ogc(openType), "MakeGenericType", 1);
@@ -656,7 +656,7 @@ function resolveDictCls() {
                 }
             }
         }
-        // 路径C: 托管反射 (run-8 主路径 — fgt/mgp 不在导出表)
+        // 路径C: 托管反射 (主路径 — fgt/mgp 不在导出表)
         var c3 = dictClsViaReflection();
         if (c3 && !c3.isNull()) {
             comp.dictCls = c3;
@@ -668,8 +668,8 @@ function resolveDictCls() {
     } catch (e) { warn("[v3][Credit] resolveDictCls err: " + e); return null; }
 }
 
-// ============ F1 根治: 祖先链激活 (探针 run-4 实证 canvas 0→1, 动画恢复) ============
-// run-8 升级: CanvasGroup alpha=1 — Naninovel 用 CanvasGroup 控制 UI 显隐 (隐藏态 alpha=0);
+// ============ F1 根治: 祖先链激活 (探针 实证 canvas 0→1, 动画恢复) ============
+// 升级: CanvasGroup alpha=1 — Naninovel 用 CanvasGroup 控制 UI 显隐 (隐藏态 alpha=0);
 //   只激活 GO 链不够, 原版 PlayAsync 的 fade 才置 1 — LIVE roll + canvas active 仍不可见的头号嫌疑
 function setCanvasGroupAlpha(go, alpha) {
     try {
@@ -715,7 +715,7 @@ function ensureHierarchy() {
         return n > 0 || cgN > 0;
     } catch (e) { warn("[v3][Credit] ensureHierarchy err: " + e); return false; }
 }
-// run-10 修复: 渲染栈 — alpha=1 后仍不可见 → sortingOrder/renderMode 嫌疑
+// 修复: 渲染栈 — alpha=1 后仍不可见 → sortingOrder/renderMode 嫌疑
 //   (Naninovel UIManager 显示 UI 时会注册排序; 开机自建实例未走注册, sortingOrder 可能压在别的 canvas 下面;
 //   ScreenSpaceCamera + 相机为空 = Unity 必不渲染的组合)
 function ensureCanvasRenderable() {
@@ -786,7 +786,7 @@ function writeVar(name, num) {
     } catch (e) { warn("[v3][Credit] writeVar err: " + e); return false; }
 }
 
-// ============ run-30: 原版致谢完整数据探针 (trigger "probe-thanks") ============
+// ============ 原版致谢完整数据探针 (trigger "probe-thanks") ============
 // 背景: staff-samples.json 的 42 条 = 运行时轮询采样窗口的不完整快照 (采样抓 Text 属性,
 //   轮询间隔错过大量行) → mod 名单远少于原版 (SpecialThanksData asset 实证:
 //   4544 ja + 420 zh 赞助者, 课程分档)。完全还原 = 原版实际显示的每行富文本 + 时序。
@@ -861,7 +861,7 @@ function thanksProbeDict() {
 function installThanksProbe() {
     try {
         if (thanksProbe.attached) return;
-        // run-30c: TMP 级全局 hook (set_text/SetText) — 共犯页显示路径不一定是 SpecialThanksLabel.set_Text
+        // TMP 级全局 hook (set_text/SetText) — 共犯页显示路径不一定是 SpecialThanksLabel.set_Text
         //   (16:52 实证: 共犯页播了但包装 set_Text 零触发)。全量收集 + 时间戳, 事后按内容区分
         //   (共犯行 = 富文本 <size=/<br>, staff 滚动 = 纯文本; 顺序即演出顺序)。
         var tmpCls = findClassAcrossImages("TMPro", "TextMeshProUGUI");
@@ -895,7 +895,7 @@ function installThanksProbe() {
         if (miClear && !miClear.isNull() && !miClear.readPointer().isNull()) {
             Interceptor.attach(miClear.readPointer(), { onEnter: function () { try { thanksProbe.rows.push({ k: 0, t: Date.now() - thanksProbe.t0 }); } catch (e2) { swallowed("credit.js:tmpEnter.onEnter#2", e2); } } });
         }
-        // run-30b: hook CreditRollSpecialThanks.ShowAsync — 共犯页在 PlayAsync 链路哪一环触发 (调用时机)
+        // hook CreditRollSpecialThanks.ShowAsync — 共犯页在 PlayAsync 链路哪一环触发 (调用时机)
         try {
             var clsRoll = findClassAcrossImages("WitchTrials.Views", "CreditRollSpecialThanks");
             if (clsRoll && !clsRoll.isNull()) {
@@ -925,15 +925,15 @@ function thanksProbeFlush() {
 // ============ 数据 json ============
 function loadCreditData(path) {
     creditState.json = null;
-    creditState.stillsConf = null;   // run-31: 每次 trigger 重置 (original 分支提前 return, 不清会残留上次自定义列表)
+    creditState.stillsConf = null;   // 每次 trigger 重置 (original 分支提前 return, 不清会残留上次自定义列表)
     creditState.original = false;
     // 原版复刻模式 — 值 "original" 不读 json, 直接调原版 CreditsUI.PlayAsync(2)
     //   (= nani @credit 2 命令全流程: stills + staff 滚动 + SpecialThanks, 内容/语种/时序全原版)
-    // run-30: "probe-thanks" = 原版全流程 + 共犯完整数据探针 (字典全量 + set_Text 逐行时序)
+    // "probe-thanks" = 原版全流程 + 共犯完整数据探针 (字典全量 + set_Text 逐行时序)
     if (path === "original" || path === "extract" || path === "probe-thanks") {
         creditState.original = true;
-        creditState.extract = (path === "extract" || path === "probe-thanks");   // run-30: probe-thanks 复用 extract 分支挂探针
-        writeVar("g_creditDone", 0);   // run-19: trigger 即重置 — CustomVariableManager 变量持久化, 防上次会话残留 1
+        creditState.extract = (path === "extract" || path === "probe-thanks");   // probe-thanks 复用 extract 分支挂探针
+        writeVar("g_creditDone", 0);   // trigger 即重置 — CustomVariableManager 变量持久化, 防上次会话残留 1
         if (creditState.extract) { writeVar("g_extractDone", 0); }
         info("[v3][Credit] trigger '" + path + "' → 原版复刻模式已武装 (phase=2 将调 CreditsUI.PlayAsync(2)" + (creditState.extract ? (path === "probe-thanks" ? " + 共犯完整数据探针" : " + 演出素材提取") : "") + ")");
         return true;
@@ -944,7 +944,7 @@ function loadCreditData(path) {
     var j = readJSONFile(p);
     if (!j) { warn("[v3][Credit] json 读取失败 '" + p + "'" + (modKey ? "" : " (当前 mod 未知, 回退 mod 根)")); return false; }
     creditState.json = j;
-    // run-30c: thanks 数据覆盖 — Assets/thanks-pages.json (原版运行捕获的 36 屏全量:
+    // thanks 数据覆盖 — Assets/thanks-pages.json (原版运行捕获的 36 屏全量:
     //   zh 420 + ja 4544 合并名单, 页内行富文本原样) 优先于 data.json 的旧 42 行采样
     try {
         var tp = modKey ? (MOD_ROOT + "/" + modKey + "/Assets/thanks-pages.json") : (MOD_ROOT + "/Assets/thanks-pages.json");
@@ -961,7 +961,7 @@ function loadCreditData(path) {
         } else { dbg("[v3][Credit] thanks-pages.json 无 thanks 字段或缺失 — 用 data.json 旧数据"); }
     } catch (eC) { warn("[v3][Credit] thanks 覆盖 err: " + eC); }
     creditState.jsonPath = p;
-    // run-31: 自定义 stills 播放列表 — 数组序 = 播放序; 缺 file 条目占位 null (该位显示原版 sprite, 列表不错位);
+    // 自定义 stills 播放列表 — 数组序 = 播放序; 缺 file 条目占位 null (该位显示原版 sprite, 列表不错位);
     //   非数组/空数组 → warn + 原版 9 张。时长字段全部可选, 缺省回落原版换算 (stillTick 分相取)
     creditState.stillsConf = null;
     if (j.stills !== undefined) {
@@ -1119,10 +1119,10 @@ function findStills() {
                     for (var ci = 0; ci < clen; ci++) {
                         var img = comps.ret.add(0x20 + ci * 8).readPointer();
                         if (!img || img.isNull()) continue;
-                        if (!imgRef) imgRef = img;   // run-31: 首个 Image 引用 (自定义图 set_sprite 目标)
+                        if (!imgRef) imgRef = img;   // 首个 Image 引用 (自定义图 set_sprite 目标)
                         var spR = invokeOk(cgmChain(A.ogc(img), "get_sprite", 0), img, []);
                         if (spR.ok && spR.ret && !spR.ret.isNull()) {
-                            if (!vanillaSpr) vanillaSpr = spR.ret;   // run-31: 原版 sprite (immutable, 恢复用)
+                            if (!vanillaSpr) vanillaSpr = spR.ret;   // 原版 sprite (immutable, 恢复用)
                             if (sp === "?") {
                                 var nmR = invokeOk(cgmChain(A.ogc(spR.ret), "get_name", 0), spR.ret, []);
                                 sp = (nmR.ok && nmR.ret) ? (readStr(nmR.ret) || "?") : "?";
@@ -1157,7 +1157,7 @@ function findStills() {
         return arr.length;
     } catch (e) { warn("[v3][Credit] findStills err: " + e); return 0; }
 }
-// ============ run-31: 自定义 stills 播放列表 (换图 + 每张时长) ============
+// ============ 自定义 stills 播放列表 (换图 + 每张时长) ============
 // 时机: 纹理/Sprite 在 showStills 内 (主线程, phase1 hook) 一次性预建; 播放期 stillTick
 //   (定时器线程) 只做轻量 set_sprite (与 setStillAlpha 同级 — 重量级 API 定时器线程会 int3)
 function stillCfgFor(idx) {
@@ -1282,7 +1282,7 @@ function stillTick() {
     try {
         // 引擎开始拆解 (退出中) → 自停, 不再进 IL2CPP (见 utils.js 的退出感知)
         if (isShuttingDown()) { if (comp.stillTimer) { clearInterval(comp.stillTimer); comp.stillTimer = null; } return; }
-        // run-31: 槽位取模 (自定义列表可超 9 张循环复用); 播放长度 = 配置长度(有 conf 时)或槽位数
+        // 槽位取模 (自定义列表可超 9 张循环复用); 播放长度 = 配置长度(有 conf 时)或槽位数
         var totalN = creditState.stillsConf ? creditState.stillsConf.length : comp.stills.length;
         var st = comp.stills[comp.stillIdx % comp.stills.length];
         if (!st) return;
@@ -1293,7 +1293,7 @@ function stillTick() {
             if (el >= comp.stillT.delay) { applyStillSprite(comp.stillIdx); comp.stillState = "fade"; comp.stillStepStart = now; el = 0; }
         }
         if (comp.stillState === "fade") {
-            // run-31: fade 时长分相 — 每张 fadeIn 独立 (缺省回落原版), clamp ≥ 200ms (loadCreditData 已钳)
+            // fade 时长分相 — 每张 fadeIn 独立 (缺省回落原版), clamp ≥ 200ms (loadCreditData 已钳)
             var fadeInMs = (cfg && cfg.fadeInMs != null) ? cfg.fadeInMs : comp.stillT.fade;
             var a = Math.min(1, el / fadeInMs);
             setStillAlpha(st, a);
@@ -1327,7 +1327,7 @@ function stillTick() {
 function showStills(delayMs, fadeMs, displayMs) {
     try {
         if (comp.stillTimer) { clearInterval(comp.stillTimer); comp.stillTimer = null; }
-        // run-31: 有效性检查 — 场景重载后旧指针可能失效, 失效重跑 findStills (Codex R1 #9)
+        // 有效性检查 — 场景重载后旧指针可能失效, 失效重跑 findStills (Codex R1 #9)
         var stale = false;
         if (comp.stills && comp.stills.length) {
             for (var ci2 = 0; ci2 < comp.stills.length; ci2++) {
@@ -1338,7 +1338,7 @@ function showStills(delayMs, fadeMs, displayMs) {
         if (!comp.stills || !comp.stills.length) {
             if (!findStills()) { warn("[v3][Credit] still: 无 EndingStill 组件 — 右侧画面跳过"); return; }
         }
-        // run-31: 重置 (重放防泄漏 — Codex R1 #12) + 主线程预建自定义 sprite
+        // 重置 (重放防泄漏 — Codex R1 #12) + 主线程预建自定义 sprite
         comp.stillIdx = 0; comp.stillState = "idle"; comp.stillStepStart = Date.now();
         buildCustomStills();
         if (delayMs !== undefined && delayMs >= 0) comp.stillT.delay = delayMs;
@@ -1402,7 +1402,7 @@ function castLeadOffsetPx() {
         return -y;
     } catch (e) { warn("[v3][Credit] castLeadOffsetPx err: " + e); return null; }
 }
-// run-31: 恢复每槽位原版 sprite (只做加法+自清理 — Codex R1 #5); set_sprite 轻量, 与 setStillAlpha 同级
+// 恢复每槽位原版 sprite (只做加法+自清理 — Codex R1 #5); set_sprite 轻量, 与 setStillAlpha 同级
 function restoreStillSprites() {
     for (var i = 0; i < (comp.stills || []).length; i++) {
         var st = comp.stills[i];
@@ -1413,7 +1413,7 @@ function restoreStillSprites() {
         } catch (e) { swallowed("credit.js:restoreStillSprites", e); }
     }
 }
-// run-31: 清自定义 sprite/纹理缓存 (置空 JS 引用 → Unity GC 回收纹理) — 仅 doEnd/abortCredit 调
+// 清自定义 sprite/纹理缓存 (置空 JS 引用 → Unity GC 回收纹理) — 仅 doEnd/abortCredit 调
 function clearStillCaches() {
     stillsSprCache = {}; stillsTexCache = {};
 }
@@ -1448,10 +1448,10 @@ function doStaff() {
         invoke(cgmChain(ks, "SetGameObjectActive", 1), comp.rollScroll, [boolPtr(true)]);
         invoke(cgmChain(ks, "SetCanvasEnabled", 1), comp.rollScroll, [boolPtr(true)]);
         ensureHierarchy();
-        ensureCanvasRenderable();   // run-10: sortingOrder 抬高 + 相机兜底 (alpha=1 后仍不可见的嫌疑)
+        ensureCanvasRenderable();   // sortingOrder 抬高 + 相机兜底 (alpha=1 后仍不可见的嫌疑)
         var cb = dcBool(cgmChain(A.ogc(comp.canvas), "get_isActiveAndEnabled", 0), comp.canvas);
-        // 2. 标签填充 (run-11 重写): zh-Hans 时按标签名识别当前语种标签 → 只填它, 其余停用+清空
-        //   (run-10 实证: prefab 默认 3 标签全 active → 全填 = 3 份文本叠印/错位 = "字的位置有问题"根因;
+        // 2. 标签填充 (重写): zh-Hans 时按标签名识别当前语种标签 → 只填它, 其余停用+清空
+        //   (实证: prefab 默认 3 标签全 active → 全填 = 3 份文本叠印/错位 = "字的位置有问题"根因;
         //   原版只激活当前语种标签)。识别失败回退全填 (保持原行为)。
         if (!comp.labels.length) enumerateLabels();
         if (!comp.labels.length) { warn("[v3][Credit] phase=1 跳过: content 下无 TMP 标签"); writeVar("g_staffDuration", 3); return; }
@@ -1479,18 +1479,18 @@ function doStaff() {
                 if (ln.indexOf("zh") >= 0 || ln.indexOf("han") >= 0 || ln.indexOf("chinese") >= 0 || ln.indexOf("简") >= 0 || ln.indexOf("中") >= 0) { fillIdx = i; break; }
             }
             if (fillIdx < 0) {
-                // run-14: 名字/父名均无语种标识 (run-13 实证 Label/Roll_49,Label/Name_50,Label/Name_34) —
+                // 名字/父名均无语种标识 (实证 Label/Roll_49,Label/Name_50,Label/Name_34) —
                 // 不再回退全填 (3 份叠印根因), 顺序假设 prefab 标签槽 = [Ja, ZhHans, En] → zh=index 1。
                 // 风险: 槽顺序未知 — 同时打颜色/位置诊断 (见下), 若假设错按诊断校准。
                 if (comp.labels.length === 3) {
                     fillIdx = 1;
-                    warn("[v3][Credit] zh-Hans staff 标签顺序假设 [Ja,ZhHans,En] → 只填 #1 (run-13: 名字/父名无语种标识; 诊断见下)");
+                    warn("[v3][Credit] zh-Hans staff 标签顺序假设 [Ja,ZhHans,En] → 只填 #1 (名字/父名无语种标识; 诊断见下)");
                 } else {
                     warn("[v3][Credit] zh-Hans 但 staff 标签名无法识别语种 且标签数=" + comp.labels.length + " ≠3 — 回退全填 (标签名+父: " + comp.labels.map(function (l) { return (l.name || "?") + "/" + (l.parent || "?"); }).join(",") + ")");
                 }
             }
         }
-        // run-14: 语种/位置诊断 — 每个标签 TMP get_color (HFA 16B, invoke 缓冲直读) + RectTransform anchoredPosition
+        // 语种/位置诊断 — 每个标签 TMP get_color (HFA 16B, invoke 缓冲直读) + RectTransform anchoredPosition
         //   用途: 校准顺序假设 + 复刻原版排版 (颜色差异=prefab 槽配置 [A,B,B])
         {
             var colorInfo = [], posInfo = [];
@@ -1515,7 +1515,7 @@ function doStaff() {
             }
             dbg("[v3][Credit] staff 标签诊断 color[" + colorInfo.join(" | ") + "] pos[" + posInfo.join(" | ") + "]");
         }
-        // run-14: 字体换装来源改"完整简中动态字体" — run-13 实证 SpecialThanks_ZhHans 是静态子集字体
+        // 字体换装来源改"完整简中动态字体" — 实证 SpecialThanks_ZhHans 是静态子集字体
         //   (只含原版 zh 致谢文本字符 → "自动化"→"自化"、剧本全没、魔女裁判 MOD 制作→魔女 MOD; 缺字空白不渲染);
         //   TsukushiMincho 是动态字体但无简中字形 (缺字 □)。遍历全部 TMP_FontAsset 资产,
         //   名字启发式: 排除 tsukushi/specialthanks, 命中 noto|source.?han|heiti|songti|pingfang|hiragino|思源|黑体|宋体|简 选第一个。
@@ -1630,7 +1630,7 @@ function doStaff() {
 }
 
 // ============ phase=2 (原版复刻模式): 直接调原版 CreditsUI.PlayAsync(2) ============
-// run-15: 原版 @credit 2 全链路复刻 (dump.cs 实证):
+// 原版 @credit 2 全链路复刻 (dump.cs 实证):
 //   nani "@credit 2" → ShowCreditsUi{ActNumber=2, Wait} (CommandAlias("credit"), dump.cs:477868)
 //     → Execute → CreditsUI.PlayAsync(act=2, AsyncToken) (dump.cs:481423 Slot 96)
 //     → _creditsDirectors[2] (CreditsDirectorAct2) → 遍历 _creditRolls 逐个 ScrollAsync/ShowAsync
@@ -1665,7 +1665,7 @@ function doPlayAsyncInvoke() {
             dbg("[v3][Credit] 泵: _specialThanksCredits 未填充, 下个泵再试");
             return;   // 资产未就绪且未超时 — 等下一个 tick
         }
-        // run-30: probe-thanks — PlayAsync 触发前挂探针 + 提取完整页/行字典 (此时 _specialThanksCredits 已填充)
+        // probe-thanks — PlayAsync 触发前挂探针 + 提取完整页/行字典 (此时 _specialThanksCredits 已填充)
         if (creditState.extract) {
             try { installThanksProbe(); } catch (e3) { warn("[v3][Credit] 探针安装 err: " + e3); }
             try { thanksProbeDict(); } catch (e4) { warn("[v3][Credit] 字典提取 err: " + e4); }
@@ -1692,7 +1692,7 @@ var startCompletionPoll = function () {
                 try { if (creditState.extract) thanksProbeFlush(); } catch (e5) { swallowed("credit.js:startCompletionPoll", e5); }
                 writeVar("g_creditDone", 1);
             }
-        }, (creditState.extract ? 2400000 : 360000));// run-30: 探针模式原版全流程(共犯 459+420 人拼行)可超 10 分钟; 普通原版 360s (bloom 片尾)
+        }, (creditState.extract ? 2400000 : 360000));// 探针模式原版全流程(共犯 459+420 人拼行)可超 10 分钟; 普通原版 360s (bloom 片尾)
         var pollFn = function () {
             try {
                 if (!creditState.armed || !creditState.original) { clearTimeout(timeoutGuard); return; }
@@ -1729,8 +1729,8 @@ var startCompletionPoll = function () {
 function doOriginal() {
     try {
         if (!creditState.armed) { writeVar("g_thanksDuration", 5); return; }
-        writeVar("g_creditDone", 0);   // run-19: 入口即重置完成信号 — nani @if 轮询读到的是本轮 0 (防上次会话残留 1)
-        // run-17 重构: 场景扫 CreditsUI (含 inactive) + 场景/资产扫 CreditsDirectorAct2 —
+        writeVar("g_creditDone", 0);   // 入口即重置完成信号 — nani @if 轮询读到的是本轮 0 (防上次会话残留 1)
+        // 重构: 场景扫 CreditsUI (含 inactive) + 场景/资产扫 CreditsDirectorAct2 —
         //   GetUI 壳实例的 _creditsDirectors@0xE0 可能为 null (prefab 序列化引用场景对象 → 实例化后引用失效)
         //   若 director 实例存在 → 手动组装进壳数组 (原版 @credit 2 的前提)
         var ui = null;
@@ -1940,7 +1940,7 @@ function thanksTick() {
         } else if (p.state === "title_fadeout") {               // 标题 fade out → 开始翻页
             invoke(cgmChain(A.ogc(p.cg), "set_alpha", 1), p.cg, [fPtr(Math.max(0, 1 - el / p.fadeMs))]);
             if (el >= p.fadeMs) { p.idx = 0; thanksEnterPage(p); p.state = "page_fadein"; p.stepStart = now; }
-        } else if (p.state === "page_fadein") {                 // run-30c: 整页 fade in (文本已 set)
+        } else if (p.state === "page_fadein") {                 // 整页 fade in (文本已 set)
             if (!p.cg || p.cg.isNull()) { p.state = "page_display"; p.stepStart = now; return; }
             invoke(cgmChain(A.ogc(p.cg), "set_alpha", 1), p.cg, [fPtr(Math.min(1, el / p.fadeMs))]);
             if (el >= p.fadeMs) { p.state = "page_display"; p.stepStart = now; }
@@ -1953,7 +1953,7 @@ function thanksTick() {
                 if (p.idx >= p.pages.length) {
                     info("[v3][Credit] 共犯翻页完成 " + p.nPages + " 页 (zh+ja 合并完整名单)");
                     stopThanks();
-                    // run-30f: Production 段改主线程泵 — thanksTick 是 JS 定时器线程, 直接调
+                    // Production 段改主线程泵 — thanksTick 是 JS 定时器线程, 直接调
 // get_ContentHeight/ScrollAsync = "breakpoint triggered" (同款实证:
                     //   引擎级 Unity API 必须在 onSVV 主线程同步 hook 执行); 置标志, 下一轮
                     //   nani 轮询 @set g_creditTick 时由 onSVV 泵执行 doProduction (完成后写 g_creditDone)
@@ -1966,7 +1966,7 @@ function thanksTick() {
         }
     } catch (e) { warn("[v3][Credit] thanksTick err: " + e); stopThanks(); }
 }
-// run-30c: 进入整页 — 整页文本 (页内行 join '<br>') 一次 set + 切语种换标签 + 档位行距
+// 进入整页 — 整页文本 (页内行 join '<br>') 一次 set + 切语种换标签 + 档位行距
 function thanksEnterPage(p) {
     try {
         var nx = p.pages[p.idx];
@@ -1981,7 +1981,7 @@ function thanksEnterPage(p) {
         }
     } catch (e) { warn("[v3][Credit] thanksEnterPage err: " + e); }
 }
-// run-30e: Production 段 (製作・販売/Acacia/© 2024) — 共犯 36 屏之后的最后一段滚动。
+// Production 段 (製作・販売/Acacia/© 2024) — 共犯 36 屏之后的最后一段滚动。
 //   原版 PlayAsync 遍历 _creditRolls@0x60 (CreditRoll[]): Staffs/Production 都是
 //   CreditRollVerticalScroll, 依次 ScrollAsync(ContentHeight/_scrollSpeed)。
 //   Production 的 3 条文本 = prefab 静态默认 (credits-tree 实证: Roll_49/Name_50/Name_34),
@@ -2039,7 +2039,7 @@ function doProduction() {
                 writeVar("g_creditDone", 1);
                 info("[v3][Credit] Production 段完成 — g_creditDone=1");
             } catch (e3) { warn("[v3][Credit] Production 完成信号 err: " + e3); }
-        }, (dur + 0.5) * 1000);   // run-30g: 缓冲 2→0.5s (对齐原版连续节奏)
+        }, (dur + 0.5) * 1000);   // 缓冲 2→0.5s (对齐原版连续节奏)
     } catch (e) { error("[v3][Credit] doProduction err: " + e); writeVar("g_creditDone", 1); }
 }
 // 行距按档位 — 行富文本 <size=Xem> → 档 (1.7em→2/1.3em→1/1em→0) → _lineSpacingsByLevel
@@ -2094,7 +2094,7 @@ function doThanks() {
         }
         // 语种标签 — _labelsByLocale@0x38 序列化数组开机即有 (不依赖 ShowAsync)
         if (!comp.thanksByLocale || !Object.keys(comp.thanksByLocale).length) enumerateThanksLabels();
-        // run-30c: 组装页序列 pages [{lv,label,tmp,cg,text,firstLine}] — 页级显示 (原版实证):
+        // 组装页序列 pages [{lv,label,tmp,cg,text,firstLine}] — 页级显示 (原版实证):
         //   每页 = 整屏, 页内行 1-2ms 瞬时构建 (逐条 set_text), 页间 ~3.3s (REPL→REPL 实测 3298-3332ms)。
         //   整页文本 = 页内行 join '<br>' 一次 set — 原版富文本排版原样还原。
         //   缺标签的语种跳过 (枚举日志见上)
@@ -2143,7 +2143,7 @@ function doThanks() {
                 }
             }
         } catch (eR) { warn("[v3][Credit] rect 诊断 err: " + eR); }
-        // run-30c: 翻页状态机 (标题阶段 + 页级: 整页一次 set, fade in → display → fade out, ~3.3s/页)
+        // 翻页状态机 (标题阶段 + 页级: 整页一次 set, fade in → display → fade out, ~3.3s/页)
         stopThanks();   // 幂等: 上一轮残留清理
         comp.thanksPaging = { pages: pages, nPages: nPages, idx: -1, acc: "",
                               state: "title_fadein", stepStart: Date.now(),
@@ -2154,8 +2154,8 @@ function doThanks() {
             if (startCg && !startCg.isNull()) invoke(cgmChain(A.ogc(startCg), "set_alpha", 1), startCg, [fPtr(0)]);
             if (pages[0].cg && !pages[0].cg.isNull()) invoke(cgmChain(A.ogc(pages[0].cg), "set_alpha", 1), pages[0].cg, [fPtr(0)]);
         } catch (e) { warn("[v3][Credit] 标题/首页 alpha 置零 err: " + e); }
-        comp.thanksPaging.timer = setInterval(thanksTick, 25);   // run-30g: 50→25ms 粒度 (每屏 tick 误差 ~0.1s→~0.05s)
-        var dur = titleMs / 1000 + nPages * (fadeMs + displayMs + fadeMs) / 1000 + 0.5;   // run-30g: 缓冲 2.4→0.5s (对齐原版总长)
+        comp.thanksPaging.timer = setInterval(thanksTick, 25);   // 50→25ms 粒度 (每屏 tick 误差 ~0.1s→~0.05s)
+        var dur = titleMs / 1000 + nPages * (fadeMs + displayMs + fadeMs) / 1000 + 0.5;   // 缓冲 2.4→0.5s (对齐原版总长)
         writeVar("g_thanksDuration", dur);
         info("[v3][Credit] 共犯翻页 (自实现, " + orderList.length + " 语种, " + nPages
             + " 页, order=" + orderList.join("→") + (labelInfo.length ? ", label " + labelInfo.join(" ") : "")
@@ -2202,7 +2202,7 @@ function doEnd() {
         }
         if (isThanksRoll(comp.rollThanks)) {
             var lbl = comp.rollThanks.add(0x70).readPointer();
-            if (!lbl || lbl.isNull()) { dbg("[v3][Credit] end: _labels 未初始化, 跳过 Clear (run-8: null 时 Clear 抛异常)"); }
+            if (!lbl || lbl.isNull()) { dbg("[v3][Credit] end: _labels 未初始化, 跳过 Clear (null 时 Clear 抛异常)"); }
             else {
                 var kt = A.ogc(comp.rollThanks);
                 var cr = invokeOk(cgmChain(kt, "Clear", 0), comp.rollThanks, []);
@@ -2213,13 +2213,13 @@ function doEnd() {
         if (roll && !roll.isNull()) {
             invoke(cgmChain(A.ogc(roll), "DisableCanvas", 0), roll, []);
         }
-        // run-11: 还原单标签模式停用的非当前语种标签
+        // 还原单标签模式停用的非当前语种标签
         for (var i = 0; i < deactivatedLabels.length; i++) {
             try { invoke(cgmChain(A.ogc(deactivatedLabels[i]), "SetActive", 1), deactivatedLabels[i], [boolPtr(true)]); } catch (e) { swallowed("credit.js:doEnd", e); }
         }
         deactivatedLabels = [];
-        stopStills();// still 定时器/alpha 收尾 + run-31: 恢复原版 sprite
-        clearStillCaches();   // run-31: 清自定义 sprite/纹理缓存 (Unity GC 回收)
+        stopStills();// still 定时器/alpha 收尾 + 恢复原版 sprite
+        clearStillCaches();   // 清自定义 sprite/纹理缓存 (Unity GC 回收)
         stopThanks();// 共犯翻页定时器收尾
         restoreAncestors();
         creditState.armed = false;
@@ -2231,7 +2231,7 @@ function doEnd() {
 function abortCredit(reason) {
     warn("[v3][Credit] 演出中止: " + reason);
     if (creditState.original) {
-        // run-15: 原版模式 — 原版演出还在跑, 用原版 CreditsUI.Stop() 中止
+        // 原版模式 — 原版演出还在跑, 用原版 CreditsUI.Stop() 中止
         try { if (comp.creditsUI && !comp.creditsUI.isNull()) { var stMi = A.cgm(cls.creditsUI, Memory.allocUtf8String("Stop"), 0); if (stMi && !stMi.isNull()) invoke(stMi, comp.creditsUI, []); } } catch (e) { swallowed("credit.js:abortCredit", e); }
         creditState.armed = false;
         creditState.phase = 0;
@@ -2242,8 +2242,8 @@ function abortCredit(reason) {
         var roll = (!comp.rollScroll || comp.rollScroll.isNull()) ? comp.rollThanks : comp.rollScroll;
         if (roll && !roll.isNull()) invoke(cgmChain(A.ogc(roll), "DisableCanvas", 0), roll, []);
     } catch (e) { swallowed("credit.js:abortCredit#3", e); }
-    stopStills();// still 定时器/alpha 收尾 + run-31: 恢复原版 sprite
-    clearStillCaches();   // run-31: 清自定义 sprite/纹理缓存
+    stopStills();// still 定时器/alpha 收尾 + 恢复原版 sprite
+    clearStillCaches();   // 清自定义 sprite/纹理缓存
     stopThanks();// 共犯翻页定时器收尾
     restoreAncestors();
     creditState.armed = false;
@@ -2279,7 +2279,7 @@ function onSVV(a) {
             creditState.phase = phase;
             dbg("[v3][Credit] phase=" + phase + " @" + (Date.now() % 100000) + "ms");
             if (phase === 1) {
-                // run-30: 原版模式 phase=1 无自定义 staff — 滚动由 PlayAsync 全流程驱动, 立即进入 phase=2
+                // 原版模式 phase=1 无自定义 staff — 滚动由 PlayAsync 全流程驱动, 立即进入 phase=2
                 if (creditState.original) { writeVar("g_staffDuration", 0); dbg("[v3][Credit] 原版模式 phase=1: PlayAsync 驱动滚动, g_staffDuration=0"); }
                 else doStaff();
             }
@@ -2288,7 +2288,7 @@ function onSVV(a) {
         } else if (name === "g_creditTick") {
 // 主线程泵 — nani 轮询每轮 @set g_creditTick, 在同步 hook 里完成 PlayAsync
             if (creditState.original && pendingPlay) doPlayAsyncInvoke();
-            // run-30f: Production 段 — 共犯完成置 pendingProduction 后, 主线程执行 doProduction
+            // Production 段 — 共犯完成置 pendingProduction 后, 主线程执行 doProduction
             //   (JS 线程调 get_ContentHeight/ScrollAsync = breakpoint triggered)
             if (creditState.pendingProduction) { creditState.pendingProduction = false; doProduction(); }
         }
@@ -2347,7 +2347,7 @@ export function setupCreditHooks() {
     try {
         if (creditHooksReady) return;
         if (!resolveCreditClasses()) return;
-        // run-9 修复: 不再在启动期解析 dict 类 — dictClsViaReflection 开机执行时 access violation
+        // 修复: 不再在启动期解析 dict 类 — dictClsViaReflection 开机执行时 access violation
         //   (访问违规被 catch, 但已损坏 IL2CPP 元数据状态 → 引擎初始化死锁 → 程序未响应)。
         //   dict 类延迟到 doThanks (phase=2, 引擎完全启动后) 首次 resolveDictCls 才解析。
         // P1: SetVariableValue (独立 attach — F13)
@@ -2374,7 +2374,7 @@ export function setupCreditHooks() {
     } catch (e) { warn("[v3][Credit] setupCreditHooks err: " + e); }
 }
 // 回标题清状态 (entry.js TitleUi.Activate 调用): disarm + 还原残留祖先; comp 指针保留 —
-// 探针 run-3 实证跨回标题存活 (同地址), 每次使用前字段探针复核, 失效则 ensureScroll/ensureThanks 重抓
+// 探针 实证跨回标题存活 (同地址), 每次使用前字段探针复核, 失效则 ensureScroll/ensureThanks 重抓
 export function clearCreditCaches() {
     try {
         if (creditState.armed) abortCredit("回标题");

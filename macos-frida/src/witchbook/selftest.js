@@ -7,14 +7,26 @@
 //      调游戏的 ContainsKey → 必须 true。这正是"IdVersionPair 按实例匹配"那个坑的永久哨兵。
 //   B. KeyNotFoundException 计数必须为 0 —— ThrowHelper 钩子**只在自检态**挂。
 //   C. 页面统计 (map 条数 / _itemIds 唯一数 / _state 条数) —— 给人核对, 机器不判。
-// 输出: 每轮 `[SELFTEST] PASS/FAIL <名称>` + 收尾 `[SELFTEST] SUMMARY pass=N fail=M knf=K`
-// 宿主 `test-tools/regression.py` 就是 grep 这些行来判断成败。
+// 输出: 每轮 `[SELFTEST] PASS/FAIL <名称>` + 收尾
+//       `[SELFTEST] SUMMARY round=R pass=N fail=M note=X knf=K asserted=A roundAsserted=a specsMissing=S`
+// 宿主 `test-tools/regression.py` 解析 SUMMARY 的 pass/fail/asserted 判成败 (不再只 grep "FAIL" 子串)。
+// 判定要点 (2026-10-07 补): **asserted=0 或 pass=0 一律算失败** —— 见下面 D 段。
 import { A, error, fieldOffset, findAllObjectOfType, findAllObjectOfTypeAll, findClassAcrossImages, invokeBool, invokeOk, readStr, swallowed, swallowedStats, warn, wblog } from "../utils.js";
 import { wbCls } from "./state.js";
 import { makeIdVersionPair, wbCats } from "./data.js";
 import { dictFindKeyInstance, dictHasIdVer } from "./session.js";
 
-var _stats = { pass: 0, fail: 0, note: 0, knf: 0, rounds: 0, hooked: false };
+var _stats = { pass: 0, fail: 0, note: 0, knf: 0, rounds: 0, hooked: false, asserted: 0 };
+// 本轮**真正执行**的断言数 (每轮清零)。为什么要它 (2026-10-07): 以前只统计 pass/fail, 于是
+// "一条断言都没跑" 和 "全都通过了" 在日志里长得一模一样 —— 宿主 grep 不到 FAIL 就判绿 (假绿)。
+// 有了它, "本轮断言数为 0" 本身就能被下面判成 FAIL, 而不是悄悄通过。
+var _roundAsserted = 0;
+// 本轮"页面类根本没找到"的分类数 (计入 fail, 单独留一个计数便于日志里一眼看出是缺类而非断言不过)
+var _specMissing = 0;
+// 一轮里至少要执行多少条断言才算"真跑过"。低于它 = 页面/容器没探到 (读取失效或实例选错),
+// 属于机器可判的失败, 不该算通过。可用 MOD_SELFTEST_MIN 覆盖 (调试用; 0 = 关掉这道门槛)。
+var _MIN_ASSERTED = 1;
+try { var _mv = (typeof MOD_SELFTEST_MIN !== "undefined") ? parseInt(MOD_SELFTEST_MIN, 10) : NaN; if (!isNaN(_mv) && _mv >= 0) _MIN_ASSERTED = _mv; } catch (e0) { swallowed("witchbook/selftest.js:MIN_ASSERTED", e0); }
 
 // 扫描 `_loadedDataItemMap` 的每个活条目 → { id, ver, 游戏查字典时用的那个 IdVersionPair 实例 }
 // 为什么是它: 2026-09-25 的 KNF 根因是"字典里有键, 但游戏手里的实例不是它" —— 只有拿**这个实例**
@@ -25,32 +37,38 @@ var _stats = { pass: 0, fail: 0, note: 0, knf: 0, rounds: 0, hooked: false };
 // 教训: **猜内存布局不如问游戏自己要** —— 这里用 get_Count/get_Item 访问器, 顺带把类名与
 // 两个候选偏移的原始值打进日志, 下次谁再改都不用猜。
 function probeMap(page, pageCls) {
-    var out = { cls: "?", count: -1, raw18: null, raw20: null, items: [] };
+    var out = { cls: "?", count: -1, raw18: null, raw20: null, items: [], bail: null, miss: 0 };
     try {
         var m = page.add(fieldOffset(pageCls, "_loadedDataItemMap", 0x88)).readPointer();
         if (m.isNull()) return out;
         var mc = A.ogc(m);
-        try { out.cls = A.cgn(mc).readCString() || "?"; } catch (e0) {}
-        try { out.raw18 = m.add(0x18).readS32(); } catch (e1) {}
-        try { out.raw20 = m.add(0x20).readS32(); } catch (e2) {}
+        try { out.cls = A.cgn(mc).readCString() || "?"; } catch (e0) { swallowed("witchbook/selftest.js:probeMap.cls", e0); }
+        try { out.raw18 = m.add(0x18).readS32(); } catch (e1) { swallowed("witchbook/selftest.js:probeMap.raw18", e1); }
+        try { out.raw20 = m.add(0x20).readS32(); } catch (e2) { swallowed("witchbook/selftest.js:probeMap.raw20", e2); }
         var cMi = A.cgm(mc, Memory.allocUtf8String("get_Count"), 0);
         if (cMi && !cMi.isNull()) {
             var r = invokeOk(cMi, m, []);
             if (r.ok && !r.ret.isNull()) out.count = r.ret.add(0x10).readS32();     // 装箱 int32
         }
-        if (out.count < 1 || out.count > 20000) return out;
+        // 提前返回必须**带原因** (2026-10-07): 以前这里直接 return, 调用方只能看到 count 与空 items,
+        // 分不清"这页本来就是空的"和"读取整个失效了" —— 后者会被静默当成功。bail 把区别留下来。
+        if (out.count < 0) { out.bail = "get_Count 失败或容器为 null"; return out; }
+        if (out.count > 20000) { out.bail = "get_Count 越界(" + out.count + ")"; return out; }
+        if (out.count === 0) { out.bail = "空容器(0 条)"; return out; }
         var itMi = A.cgm(mc, Memory.allocUtf8String("get_Item"), 1);
         if (itMi && !itMi.isNull()) {
             for (var i = 0; i < out.count && i < 4000; i++) {
                 try {
                     var ib = Memory.alloc(4); ib.writeS32(i);
                     var r2 = invokeOk(itMi, m, [ib]);
-                    if (!r2.ok || r2.ret.isNull()) continue;
+                    if (!r2.ok || r2.ret.isNull()) { out.miss++; continue; }
                     var ivp = r2.ret.add(0x28).readPointer();       // VersionedItem._idVersionPair (游戏查字典用的实例)
-                    if (ivp.isNull()) continue;
+                    if (ivp.isNull()) { out.miss++; continue; }
                     out.items.push({ id: readStr(ivp.add(0x10).readPointer()), ver: ivp.add(0x18).readS32(), lookup: ivp });
-                } catch (e3) {}
+                } catch (e3) { out.miss++; swallowed("witchbook/selftest.js:probeMap.getItem", e3); }
             }
+        } else {
+            out.bail = "找不到 get_Item 访问器";
         }
     } catch (e) { swallowed("witchbook/selftest.js:probeMap", e); }
     return out;
@@ -67,7 +85,7 @@ function pickPage(pageCls) {
     var best = null, bestN = -1, counts = [];
     for (var i = 0; i < cands.length; i++) {
         var n = -1;
-        try { n = probeMap(cands[i].p, pageCls).count; } catch (e) {}
+        try { n = probeMap(cands[i].p, pageCls).count; } catch (e) { swallowed("witchbook/selftest.js:pickPage", e); }
         counts.push(cands[i].tag + n);                        // A=active, i=inactive
         if (n > bestN) { bestN = n; best = cands[i].p; }
     }
@@ -152,7 +170,7 @@ function probeKeySemantics(page, pageCls, locOff, dict, ck, specKey) {
         var a = makeIdVersionPair(L.id, L.ver), b = makeIdVersionPair(L.id, L.ver), c = makeIdVersionPair(L.id, L.ver + 1);
         var eqMi = A.cgm(ivpCls, Memory.allocUtf8String("Equals"), 1);          // Equals(IdVersionPair other)
         var eqSelf = false, eqEquiv = false;
-        try { if (eqMi && !eqMi.isNull()) { eqSelf = invokeBool(eqMi, a, [a]); eqEquiv = invokeBool(eqMi, a, [b]); } } catch (e1) {}
+        try { if (eqMi && !eqMi.isNull()) { eqSelf = invokeBool(eqMi, a, [a]); eqEquiv = invokeBool(eqMi, a, [b]); } } catch (e1) { swallowed("witchbook/selftest.js:probeKeySemantics.Equals", e1); }
         var ckEq = false, ckV1 = false, ckReal = false;
         try {
             if (ck && !ck.isNull()) {
@@ -160,7 +178,7 @@ function probeKeySemantics(page, pageCls, locOff, dict, ck, specKey) {
                 ckEq = invokeBool(ck, dict, [a]);            // 值相等的新实例
                 ckV1 = invokeBool(ck, dict, [c]);            // 版本+1
             }
-        } catch (e2) {}
+        } catch (e2) { swallowed("witchbook/selftest.js:probeKeySemantics.ContainsKey", e2); }
         wblog("[SELFTEST] 键语义 " + specKey + " ('" + L.id + "' v" + L.ver + "): Equals(自己)=" + eqSelf +
             " Equals(等价新实例)=" + eqEquiv + " | 字典 ContainsKey(游戏实例)=" + ckReal +
             " (等价新实例)=" + ckEq + " (版本+1)=" + ckV1 +
@@ -173,6 +191,8 @@ export function runSelftest(round) {
     if (!selftestEnabled()) return;
     try {
         _stats.rounds++;
+        _roundAsserted = 0;         // 本轮断言计数清零 (见文件头 _roundAsserted 说明)
+        _specMissing = 0;           // 同上: 这两个都是**每轮**的, 跟 _stats 里的累计量区分开
         // 受管 4 分类 + Map (Map 的字典同为 IdVersionPair 键, 同样要查)
         var specs = [];
         var names = Object.keys(wbCats);
@@ -185,7 +205,12 @@ export function runSelftest(round) {
 
         for (var s = 0; s < specs.length; s++) {
             var sp = specs[s];
-            if (!sp.pageCls || sp.pageCls.isNull()) continue;
+            // 页面类找不到 = 真回归 (版本更新/类名变更), 不是"跳过" (2026-10-07 改: 原来静默 continue)
+            if (!sp.pageCls || sp.pageCls.isNull()) {
+                _stats.fail++; _specMissing++;
+                wblog("[SELFTEST] FAIL " + sp.key + ": 页面类未找到 (findClassAcrossImages 未命中) —— 该分类本轮 0 断言");
+                continue;
+            }
             var pk = pickPage(sp.pageCls);
             if (!pk.page) { wblog("[SELFTEST] FAIL " + sp.key + ": 页面实例不存在"); _stats.fail++; continue; }
             try {
@@ -204,8 +229,23 @@ export function runSelftest(round) {
                 // "字典自己有没有这个 (id,ver)" 是查不出那次 bug 的 (字典里有, 但游戏手里的实例不在里面)。
                 var mp = probeMap(page, sp.pageCls);
                 var look = mp.items, mapN = mp.count, badMap = 0, inMap = {};
-                // 不再静默: 有条数却取不到条目 = 读取有问题, 必须说出来 (并带类名/原始偏移值)
-                if (!look.length && mapN > 0) { _stats.note++; wblog("[SELFTEST] NOTE " + sp.key + ": map 有 " + mapN + " 条但 get_Item 取到 0 条 (" + mp.cls + " raw18=" + mp.raw18 + " raw20=" + mp.raw20 + ")"); }
+                // 取不到条目必须分开定性 (2026-10-07): "这页本来就是空的" 和 "读取整个失效" 以前都是
+                // 静默/同一个 NOTE → 后者能被当成通过。现在: 有货取不出 / 容器读失败 = FAIL (0 断言),
+                // 只有"确实是 0 条"才算 NOTE。
+                if (!look.length) {
+                    if (mapN > 0) {
+                        _stats.fail++;
+                        wblog("[SELFTEST] FAIL " + sp.key + ": map 有 " + mapN + " 条却一条都取不出来 (" + mp.cls +
+                            " raw18=" + mp.raw18 + " raw20=" + mp.raw20 + " miss=" + mp.miss + ") —— 读取失效, 该分类本轮 0 断言");
+                    } else if (mapN < 0) {
+                        _stats.fail++;
+                        wblog("[SELFTEST] FAIL " + sp.key + ": 容器读取失败 (" + (mp.bail || "未知原因") + ", cls=" + mp.cls +
+                            " raw18=" + mp.raw18 + " raw20=" + mp.raw20 + ") —— 该分类本轮 0 断言");
+                    } else {
+                        _stats.note++;
+                        wblog("[SELFTEST] NOTE " + sp.key + ": 容器为空 (0 条), 该分类本轮 0 断言");
+                    }
+                }
                 var selfproof = selfProofEnabled();     // 负对照: 换成不匹配的键去问 (见下)
                 if (selfproof && !_breakAnnounced) { _breakAnnounced = true; wblog("[SELFTEST] 负对照模式 (MOD_SELFTEST_BREAK=1): 每分类第一条改用版本+1 的键 → 必须报 FAIL (其余条目照常真查)"); }
                 for (var li = 0; li < look.length; li++) {
@@ -219,6 +259,7 @@ export function runSelftest(round) {
                     if (probe && !probe.isNull() && ck && !ck.isNull()) {
                         try { ok = invokeBool(ck, dict, [probe]); } catch (e2) { swallowed("witchbook/selftest.js:runSelftest#2", e2); }
                     }
+                    _stats.asserted++; _roundAsserted++;
                     if (ok) _stats.pass++;
                     else {
                         _stats.fail++; badMap++;
@@ -246,6 +287,7 @@ export function runSelftest(round) {
                         var id = readStr(se.add(0x10).readPointer()), ver = se.add(0x18).readS32();
                         if (!id) continue;
                         stateN++;
+                        _stats.asserted++; _roundAsserted++;
                         if (dictHasIdVer(dict, id, ver)) { _stats.pass++; continue; }
                         if (inMap[id]) { _stats.fail++; badKeys++; wblog("[SELFTEST] FAIL 字典缺键 " + sp.key + " '" + id + "' v" + ver + " (且在渲染集合里)"); }
                         else { _stats.note++; notes++; wblog("[SELFTEST] NOTE 状态有键但字典无 (不在渲染集合, 暂无害): " + sp.key + " '" + id + "' v" + ver); }
@@ -269,7 +311,17 @@ export function runSelftest(round) {
                     (badMap ? " 渲染缺=" + badMap : "") + (badKeys ? " 缺键=" + badKeys : "") + (notes ? " 仅状态=" + notes : ""));
             } catch (e4) { error("[SELFTEST] " + sp.key + " 断言 err: " + e4); _stats.fail++; }
         }
-        wblog("[SELFTEST] SUMMARY round=" + _stats.rounds + " pass=" + _stats.pass + " fail=" + _stats.fail + " note=" + _stats.note + " knf=" + _stats.knf +
+        // —— D. 本轮"真的跑过断言了吗" (2026-10-07 新增) ——
+        // 以前 pass/fail 全 0 与"全部通过"在日志里长得一样, 宿主只 grep FAIL 就会把"一条都没跑"判成绿。
+        // 门槛判定必须在 SUMMARY 之前, 这样 SUMMARY 里的 fail 已经包含它。
+        if (_roundAsserted < _MIN_ASSERTED) {
+            _stats.fail++;
+            wblog("[SELFTEST] FAIL 本轮断言数不足: roundAsserted=" + _roundAsserted + " < 门槛 " + _MIN_ASSERTED +
+                " (未找到页面类 " + _specMissing + " 个) —— 没真跑过断言, 不算通过 (调试可设 MOD_SELFTEST_MIN=0 关掉)");
+        }
+        wblog("[SELFTEST] SUMMARY round=" + _stats.rounds + " pass=" + _stats.pass + " fail=" + _stats.fail +
+            " note=" + _stats.note + " knf=" + _stats.knf + " asserted=" + _stats.asserted +
+            " roundAsserted=" + _roundAsserted + " specsMissing=" + _specMissing +
             (round ? " (" + round + ")" : ""));
         // 被吞掉的异常 (步骤 2.1): 自检态顺手报一次, 让"静默失败"在回归里也可见
         try {

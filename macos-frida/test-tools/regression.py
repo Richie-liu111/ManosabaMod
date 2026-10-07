@@ -13,10 +13,10 @@
 
 用法:
     python3 test-tools/regression.py                      # 默认: 构建+部署+跑 90s+断言
-    python3 test-tools/regression.py --seconds 240 --require-summary
+    python3 test-tools/regression.py --no-require-summary # 只验"启动+自检装载", 不要求真跑过断言
     python3 test-tools/regression.py --no-build           # 不重建, 用现有 repo 产物
     python3 test-tools/regression.py --no-deploy          # 不 cp (测游戏目录里已有的包)
-    python3 test-tools/regression.py --case gapless       # 仅提示文字 (自动驱动剧本尚未落地)
+    python3 test-tools/regression.py --case my_mod        # 仅提示文字 (自动驱动剧本尚未落地)
     python3 test-tools/regression.py --check-only --log <modlog.log>   # 只对现成日志断言
     python3 test-tools/regression.py --save /tmp/run.txt                # 额外存一份终端记录
 
@@ -25,10 +25,16 @@
 
 硬断言 (失败即退出码 1):
     1) `[SELFTEST] 已启用` 出现        —— 自检真的装上了 (要求 run_mod.sh 支持 MOD_SELFTEST)
-    2) 无 `[SELFTEST] FAIL`            —— 字典不变式全部成立 (含 KNF 计数项)
+    2) 无 `[SELFTEST] FAIL`            —— 字典不变式全部成立
     3) `KeyNotFoundException` 计数 = 0
+    4) **SUMMARY 行存在, 且 pass > 0 且 asserted >= 门槛** —— 见下, 默认开
 
-提示项 (不判): `[SELFTEST] SUMMARY` / `stats` 行 —— 需要你真的进剧本并开一次图鉴才会产生。
+第 4 条为什么是硬断言 (2026-10-07 修的假绿): 以前只 grep 子串 "FAIL",
+    于是**"一条断言都没跑" 与 "全部通过" 在日志里长得一模一样** —— 实测构造一行
+    `[SELFTEST] 已启用` 就能骗出 PASS ✓ exit=0 (那行由 setup 在任何断言之前打出)。
+    现在改成解析 SUMMARY 的 pass/fail/asserted 三个计数: 没进过图鉴 → 没有 SUMMARY → 失败;
+    SUMMARY 里 pass=0 → 失败。想只验"加载器起来了"用 --no-require-summary 显式降级。
+    代价: 默认跑法现在**要求你手动进一次剧本并点开图鉴**, 否则判失败 (这是有意的, 不是 bug)。
     (TODO: 自动驱动 —— 用加载器内已有的 GotoModified.LoadAndPlay + WitchBookUi 调用来免人工,
      见计划文档"步骤 1"; 未落地前, 自动部分只覆盖"启动 + 自检装载"。)
 """
@@ -88,7 +94,17 @@ def deploy(game: Path) -> bool:
     return True
 
 
-def assert_log(log_path: Path, require_summary: bool, self_proof: bool = False) -> int:
+RE_SUMMARY_KV = re.compile(r"([A-Za-z_]+)=(-?\d+)")
+
+
+def parse_summary(line: str) -> dict:
+    """从 `[SELFTEST] SUMMARY round=R pass=N fail=M note=X knf=K asserted=A ...` 提取计数。
+    SUMMARY 每轮都打且计数是**累计**的 → 取最后一条即拿到总计。"""
+    return {k: int(v) for k, v in RE_SUMMARY_KV.findall(line)}
+
+
+def assert_log(log_path: Path, require_summary: bool, self_proof: bool = False,
+               min_asserted: int = 1) -> int:
     if not log_path.exists():
         print(f"[regression] ✗ 日志不存在: {log_path}")
         return 1
@@ -99,12 +115,18 @@ def assert_log(log_path: Path, require_summary: bool, self_proof: bool = False) 
     knf = [l for l in lines if "KeyNotFoundException" in l]
     summaries = [l for l in lines if "[SELFTEST] SUMMARY" in l]
     stats = [l for l in lines if "[SELFTEST] stats" in l]
+    sm = parse_summary(summaries[-1]) if summaries else {}
+    s_pass, s_fail = sm.get("pass", 0), sm.get("fail", 0)
+    s_asserted = sm.get("asserted", 0)
 
     print(f"[regression] 日志: {log_path} ({len(lines)} 行)")
     print(f"[regression]   自检装载 : {'✓' if selftest_on else '✗ 未出现 [SELFTEST] 已启用'} ({len(selftest_on)})")
     print(f"[regression]   断言 FAIL: {'✓ 0 条' if not fails else '✗ ' + str(len(fails)) + ' 条'} ")
     print(f"[regression]   KNF      : {'✓ 0 条' if not knf else '✗ ' + str(len(knf)) + ' 条'}")
     print(f"[regression]   断言轮次 : {len(summaries)} 条 SUMMARY" + ("" if summaries else "  (提示: 进剧本并开一次图鉴才会产生)"))
+    if summaries:
+        print(f"[regression]   SUMMARY  : pass={s_pass} fail={s_fail} asserted={s_asserted}"
+              f" (SUMMARY 自算的 fail 必须为 0, pass 必须 > 0, asserted >= {min_asserted})")
     for l in fails[:5]:
         print("      " + l.strip())
     for l in knf[:5]:
@@ -122,8 +144,34 @@ def assert_log(log_path: Path, require_summary: bool, self_proof: bool = False) 
         print("[regression] " + ("PASS ✓ (哨兵确实抓得住这个坑)" if ok else "FAIL ✗ (负对照没能触发)"))
         return 0 if ok else 1
 
-    ok = bool(selftest_on) and not fails and not knf and (summaries or not require_summary)
-    print("[regression] " + ("PASS ✓" if ok else "FAIL ✗"))
+    # —— 判据逐条列出来, 失败时能一眼看到是"哪一条"没过 (不再只印一个 FAIL ✗) ——
+    why = []
+    if not selftest_on:
+        why.append("自检没装载 (无 `[SELFTEST] 已启用`)")
+    if fails:
+        why.append(f"日志里有 {len(fails)} 条 `[SELFTEST] FAIL`")
+    if knf:
+        why.append(f"KeyNotFoundException {len(knf)} 条")
+    if require_summary:
+        # 第 4 条: 真的跑过断言吗 (挡"一行假日志骗过脚本"那种假绿)
+        if not summaries:
+            why.append("无 SUMMARY 行 —— 没真跑过断言 (需进剧本并点开一次魔女图鉴; "
+                       "只想验启动请显式加 --no-require-summary)")
+        else:
+            if s_fail > 0:
+                why.append(f"SUMMARY 自算 fail={s_fail} > 0")
+            if s_pass < 1:
+                why.append(f"SUMMARY pass={s_pass} —— 一条断言都没通过 (跑了等于没跑)")
+            if s_asserted < min_asserted:
+                why.append(f"SUMMARY asserted={s_asserted} < 门槛 {min_asserted} —— 断言数不足")
+
+    ok = not why
+    if ok:
+        print("[regression] PASS ✓" + ("" if require_summary else "  (注: --no-require-summary, 未验断言是否真跑过)"))
+    else:
+        print("[regression] FAIL ✗")
+        for w in why:
+            print("[regression]   · " + w)
     return 0 if ok else 1
 
 
@@ -215,13 +263,13 @@ def run_and_check(args) -> int:
             try: tee.close()
             except Exception: pass
     time.sleep(1)
-    return assert_log(log_path, args.require_summary, args.self_proof)
+    return assert_log(log_path, args.require_summary, args.self_proof, args.min_asserted)
 
 
 def main():
     ap = argparse.ArgumentParser(description="WitchBook 回归: MOD_SELFTEST 断言 + 退出码")
     ap.add_argument("--seconds", type=int, default=90, help="跑多久 (默认 90s)")
-    ap.add_argument("--case", default="", help="用例提示 (gapless / twilight), 仅打印")
+    ap.add_argument("--case", default="", help="用例提示 (例: my_mod), 仅打印")
     ap.add_argument("--log", default="", help="日志路径 (默认 <游戏目录>/modlog.log)")
     ap.add_argument("--game-dir", default="", help="游戏目录, 透传给 run_mod.sh 的 GAME_DIR")
     ap.add_argument("--no-build", action="store_true", help="跳过构建 (用现有 repo 产物)")
@@ -230,13 +278,17 @@ def main():
     ap.add_argument("--self-proof", action="store_true",
                     help="负对照: 让哨兵改用等价但不同实例的键 → 必须报 FAIL (证明它抓得住 2026-09-25 那类坑)")
     ap.add_argument("--save", default="", help="把 run_mod.sh 的终端输出另存一份 (modlog.log 之外的记录)")
-    ap.add_argument("--require-summary", action="store_true", help="必须出现断言轮次 (要你手动进剧本+开图鉴)")
+    ap.add_argument("--require-summary", action=argparse.BooleanOptionalAction, default=True,
+                    help="必须真跑过断言: 有 SUMMARY 且 pass>0 且 asserted>=门槛 (默认**开**; "
+                         "只验'加载器起来了'用 --no-require-summary)")
+    ap.add_argument("--min-asserted", type=int, default=1,
+                    help="SUMMARY 里 asserted 的最低要求 (默认 1; 0 = 等同不查这条)")
     ap.add_argument("--check-only", action="store_true", help="不启动游戏, 只对 --log 现成日志做断言")
     args = ap.parse_args()
     if args.check_only:
         if not args.log:
             print("[regression] --check-only 需要 --log <路径>"); return 2
-        return assert_log(Path(args.log), args.require_summary, args.self_proof)
+        return assert_log(Path(args.log), args.require_summary, args.self_proof, args.min_asserted)
     return run_and_check(args)
 
 

@@ -25,7 +25,12 @@
 //   (纯查询, 不改状态); 值类型返回值按 invoke 的 boxed 约定读 (+0x10 载荷, 见 utils.invokeBool 注释)。
 // 空 catch 说明 (与项目"空 catch 留痕"约定的例外, 有意为之): 本文件所有读内存的 catch 都**故意静默** ——
 //   ① plog 的 catch 不能再调 swallowed (日志失败再走日志 = 递归);
-//   ② dumpCat 的 4 处读失败在输出里以 -1 / <未读到> 呈现, 本身就是给排查看的信号, 再打 WARN 只会刷屏。
+//   ② 探针的读失败一律以**哨兵值**出现在它自己的输出里 (-1 / <未读到> / <不匹配任何 Enter> / "?"),
+//      而这个输出就是排查面本身; 再叠一层 WARN 只会刷屏、淹掉真正的信号。
+//      覆盖面: dumpCat 4 处、hookScriptLoader.onEnter 的 path、hookWitchBook.onEnter 的
+//      (category/id/version)、ClearState 的 _cat、readModKey 的类型名校验 —— 全部同一套路。
+// 声明给 catch-audit (2026-10-07): 本文件的空 catch 是有意为之, 理由见上两行。
+// catch-audit: intentional-silence plog 递归 + 探针读失败以哨兵值呈现在自身输出里
 import { A, dbg, error, findAllObjectOfType, findClassAcrossImages, fieldOffset, findSvc, invokeOk, makeS, readStr, swallowed, warn, wblog } from "./utils.js";
 import { wbCats } from "./witchbook/data.js";
 import { wbCls, wbCurrentMod, wbData, wbPrevMod } from "./witchbook/state.js";
