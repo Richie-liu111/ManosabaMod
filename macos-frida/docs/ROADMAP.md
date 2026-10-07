@@ -18,7 +18,7 @@
 |------|------|------|
 | ModResourceLoader（含 AddModStartMenu） | mod 资源管线注册（ProvisionSources 注入）+ 菜单（含翻页） | ✅ 已实现（菜单翻页 2026-08-03 从 16h 回迁） |
 | ModClueLoader + ModWitchBookPatch | WitchBook 线索注入 + 修复 | ✅ 已实现（含会话隔离/override/默认面板恢复） |
-| ModProfileLoader | WitchBook 档案注入 | ✅ 已实现 |
+| ModProfileLoader | WitchBook 档案注入 | ⚠️ 部分（macOS 走**替代路径**：渲染期覆写姓名 + 页面注入；上游那两次 `CharacterData`/`AuthorData` 数据注册被停用，理由疑已过期 — 见「差距」7） |
 | ModRuleNoteLoader | WitchBook 规则/笔记注入 | ✅ 已实现 |
 | ModMovieLoader | 视频 URL 流式播放 | ✅ 已实现 |
 | Utils/ModTextureHelper | PNG → Texture2D → Addressables 注册 | ✅ 已实现 |
@@ -27,7 +27,7 @@
 | ModMetadataGenerator | 角色/背景/剧本元数据默认类型 | ⚠️ 部分（macOS 手写 CharacterMetadata 字段，无独立模块） |
 | ModChapterDisplay | 存档画面自定义章节名 | ✅ 已实现 |
 | ModUiStrings（#9） | mod 菜单 UI 文案本地化 | ⚠️ 边缘（macOS 菜单文案硬编码中文，不随语言切换；中文环境无感） |
-| ModDebugTools | 调试工具（RenderTexture 截图等） | ❌ 未实现（macOS 用 probe_*.js 探针替代） |
+| ModDebugTools | 调试工具（RenderTexture 截图等） | ❌ 未实现（macOS 侧用本地 `probe_*.js` 探针; 探针不随仓库发布） |
 | ScriptWorkingManager / ModManager | 工作区/配置管理 | ⚠️ 由 run_mod.sh 命令行约定替代 |
 | （Windows 无此模块） | 致谢演出复刻（staff 滚动 + 共犯 36 屏 + 製作段） | ⚠️ 试验性（macOS 自研, **上游无此功能**, 稳定性未实测 — 见「差距」6） |
 
@@ -59,17 +59,34 @@
    - 复刻原版结尾致谢演出: staff 主名单滚动（CreditRollVerticalScroll.ScrollAsync,
      ContentHeight/_scrollSpeed=248）+ 原版 stills 9 张（拍数时序）+ 共犯者 Special Thanks
      36 屏翻页（zh 420 + ja 4544 合并完整名单, 0.51s fade + 2.30s display ≈ 3.3s/屏, 与
-     run-30c 实测原版节奏一致）+ 製作・販売/Acacia/© 段滚动。
+     实测原版节奏一致）+ 製作・販売/Acacia/© 段滚动。
    - 全部静态本地数据驱动（`data.json` + `thanks-pages.json`）, 运行时零提取; 原版节奏
      参数（bpm/拍数/_scrollSpeed）运行时读 director, 不硬编码。
    - **稳定性未经充分实测**: 依赖 CreditsDirectorAct2 运行时参数与 CreditsUI 场景结构,
      游戏版本更新可能失效。测试脚本/数据在仓库外（`test-tools/`）不随仓库分发。
    - 机制细节与踩坑（主线程泵/breakpoint triggered/运行时字典不全）见 [ARCHITECTURE.md](ARCHITECTURE.md) 九节。
 
+7. **图鉴自定义角色的数据注册（上游 `CharacterData`/`AuthorData` 注入）** — ⚠️ 被停用，**停用理由疑已过期，待复测**
+   - 上游 C# `ModProfileLoader.TryInjectCharacterData()` / `TryInjectAuthorData()` 把 mod 新角色
+     注册进 `CharacterData._items` / `AuthorData._items`（名称模板），再由游戏自己的
+     `AuthorTaggedTextGenerator.BuildFullName` 渲染 —— 上游在 **3 处**无条件调用（`ModWitchBookPatch`
+     + `ModProfileLoader` 两处），另有 macOS 侧**完全没有**对应物的 `TryInjectProfileData()`（`ProfileData._items`）。
+   - macOS 侧这两个函数**写好了但在 `src/witchbook/index.js:199-200` 被注释掉**，注释写于 2026-08-02：
+     "角色档案数据注入可能破坏场景 (5 个 ArgumentException)"。
+   - macOS 目前靠**替代路径**达到相近效果：姓名 = `hookProfileName` 在 `ProfilePage.RefreshPageContent`
+     onLeave 覆写 `_authorLabel`（渲染期，不注册数据）；条目 = 页面级注入（`injectPage`，
+     **故意不注 `Data._items`** —— 那是缓存的 ScriptableObject，注入会跨会话残留）。
+   - **为什么怀疑停用理由已过期**：那条 ArgumentException 属 7.6 的"重复 `Add` / `Contains` 守卫失效"
+     一类（`providersMap.ContainsKey` 写成 `ret.toInt32() === 1`），**2026-09-25 已由 `invokeBool` 修掉**；
+     而这两个函数自己的守卫是 `listContainsId`（utils.js 的自扫实现，根本不走 invoke 装箱那条路）。
+   - **待办（一次实验就能定案）**：取消注释 → 跑一次图鉴 → 看 `CharacterData 注入 N 个角色` 是否出现、
+     有没有 ArgumentException、以及档案页的**年龄/身高/体重/名/姓**字段是否比现在更完整。
+     若确实已无问题，则应恢复这两次调用（消除与上游的功能差距）；若仍崩，把新证据写回这里替换那句"可能"。
+
 ## 已知开放项（非阻断）
 
 - **音频 ogg 支持**（2026-08-12 调研后决策：不做，ogg 用 ffmpeg 转 wav；2026-08-13 起 run_mod.sh 启动前自动检测非标音频，纯 Python 读文件头毫秒级，发现后列出清单询问 y/N、确认才批量转换——转换是改文件操作不擅自执行；检测零依赖，仅转换需 ffmpeg；**检测为可选增强**：normalize_audio.py 不存在时 run_mod.sh 整块跳过，加载器不依赖）：
-  - 根因（probe_audio.js P1/P2 实证）：原装 `WavToAudioClipConverter` ① `<Representations>k__BackingField` 仅含 `(".wav","audio/wav")` → `.ogg` 文件过不了资源定位（LocalResourceLocator 按 Representation.Extension 匹配扩展名）；② 解码仅 `Pcm16ToFloatArray`（PCM16），OggS 数据必然失败。带 ogg 的 mod 实测报 `Failed to load '114514/L01' resource of type 'UnityEngine.AudioClip'`。
+  - 根因（当时用本地探针 probe_audio.js 的 P1/P2 实测得出; 该探针不随仓库发布）：原装 `WavToAudioClipConverter` ① `<Representations>k__BackingField` 仅含 `(".wav","audio/wav")` → `.ogg` 文件过不了资源定位（LocalResourceLocator 按 Representation.Extension 匹配扩展名）；② 解码仅 `Pcm16ToFloatArray`（PCM16），OggS 数据必然失败。带 ogg 的 mod 实测报 `Failed to load '114514/L01' resource of type 'UnityEngine.AudioClip'`。
   - 调研结论：C# 蓝本 = Harmony patch（ModAudioPatch.cs 注入 Representations + 接管 ConvertBlocking）+ NVorbis 解码；macOS 若要实现需注入 Representations（`A.an` 构造 struct 数组写 backing field，探针已验证可行）+ 接管 ConvertBlocking（UnityPlayer.dylib 导出 `FMOD_ov_*` 可复用，arm64 上 callbacks 结构在 x5 第 6 参）。成本高于收益 → 决策：ffmpeg 转 wav（README 已有此指导）。
   - **wav 同样受限**（不只 ogg）：原装解码器 `Pcm16ToFloatArray` 只做 PCM16（44100Hz 立体声假设），48kHz 等非标采样率/位深/声道的 wav 会播放失败或音高偏移（上游 #5 修的就是这个）。统一转码参数：`ffmpeg -i in.ogg -ar 44100 -ac 2 -sample_fmt s16 out.wav`（ogg 与任意 wav 均适用）。
 - **进程生命周期**（2026-08-12 修复，不影响功能）：

@@ -131,8 +131,18 @@ ScriptPlaylist.LoadResources
   预填 `Dictionary<LocaleKind, ...>`(键用与 `_idVersionPair` 同一 IdVersionPair 实例 →
   原版 RefreshPageContent 直接命中); `_state.SetVersion` 设状态。
   - Clue: `LocalizedTexts(Name, Desc)`; Profile: `string(Desc)`; Rule: `LocalizedTexts(Subtitle, Desc)` + `_numberings`; Note: `LocalizedTexts(Title, Desc)`。
-- **人物姓名**: 新角色经 CharacterData + AuthorData 注入 + `ProfilePage.RefreshPageContent`
-  onLeave 覆写 `_authorLabel`(BuildFullName 同款富文本: 姓首字大号带色)。
+- **人物姓名**: 走的是**渲染期覆写**, 不是上游那种数据注册。
+  `ProfilePage.RefreshPageContent` onLeave 里把 `_authorLabel` 的 text 直接设成
+  `buildAuthorTemplate()` 的产物 (镜像上游 `AuthorTaggedTextGenerator.BuildFullName`:
+  姓首字大号带色 + 名首字次大号) —— 这就是 `hookProfileName`, **在跑**。
+  ⚠️ 与上游的差异: 上游是 `TryInjectAuthorData()` 把模板注册进 `AuthorData._items`、
+  再由游戏自己的 BuildFullName 渲染; macOS 改成"渲染完再覆盖标签"。
+  同理 `injectCharacterData()`/`injectAuthorData()`(把角色注册进 `CharacterData._items` /
+  `AuthorData._items`) 在 `src/witchbook/index.js` 里**被注释掉了** —— 所以 `characters.js`
+  这两个导出目前无调用点。停用注释写于 2026-08-02、理由是"可能破坏场景 (5 个 ArgumentException)",
+  但那类 ArgumentException 属 7.6 的重复 `Add`/`Contains` 守卫故障, **2026-09-25 已由 invokeBool 修复**;
+  而这两个函数自己的守卫是 `listContainsId`(自扫实现, 不吃那个坑) → **停用理由疑已过期, 待复测**。
+  复测前后别按老注释理解本段。
 - **纹理**: 读 PNG → `Texture2D` + `ImageConversion.LoadImage` → 注册进
   `AddressablesManager._loadedAssets`,`@spawn "Clue"` 弹窗和缩略图共用。
 - **当前 mod 识别**: 钩 `ScriptLoader.Load` 匹配 `modList` 的 `Enter` 路径
@@ -218,7 +228,7 @@ ManosabaMod/<ModName>/
 | CutIn (论破) | ✅ |
 | 角色名富文本 (AuthorTaggedTextGenerator) | ✅ |
 | 致谢演出复刻 (staff 滚动 + 共犯 36 屏 + 製作段) | ⚠️ 试验性 (macOS 独有, 上游无此功能, 稳定性未实测, 见九节) |
-| 调试工具 | ❌ 未实现 (macOS 用 probe_*.js 探针替代) |
+| 调试工具 | ❌ 未实现 (macOS 侧排查用**本地**探针脚本; 探针被 .gitignore 排除, 不随仓库发布) |
 
 ## 八、日志系统 (2026-08-10 引入)
 
@@ -230,13 +240,18 @@ ManosabaMod/<ModName>/
 `[v3][HH:MM:SS.mmm][LEVEL] `。`error/warn/info` 无条件输出; `debug` 内部再门控
 `MOD_DEBUG` (双保险)。默认量不变: wblog=INFO 可见, dbg=DEBUG 归 MOD_DEBUG。
 
-**调用点分级** (2026-08-10 审计, 用户确认): 29 处真实失败 → `error()` (类解析失败、
-ensureItemIdsString 重建失败、catch 分支); 34 处软失败 → `warn()` (NOT FOUND/未找到/
-为空/失败/跳过, 含 `无 mod WitchBook 数据`); 13 处过程噪音 → `dbg()` (`>>> @update 忽略`、
-`>>> WitchBook 触发`、`_itemIds off=0x` 字段状态、预填/纹理加载等); 其余保持 INFO
-(hooks 就绪 / 注入完成 / mod 切换 / `_itemIds → String[] 重建` / `>>> @update 拦截` /
-`+N 纯新 ID` / 状态应用 N 条 / 面板默认值捕获恢复)。消息**文案**未改, grep
-`[v3]` (统一前缀) 与 `[WitchBook]` (wblog 前缀) 仍命中。
+**调用点分级** (2026-08-10 初版审计; **计数 2026-10-07 重数**): 59 处真实失败 → `error()`
+(类解析失败、ensureItemIdsString 重建失败、catch 分支); 295 处软失败 → `warn()`
+(NOT FOUND/未找到/为空/失败/跳过, 含 `无 mod WitchBook 数据`); 340 处过程噪音 → `dbg()`
+(`>>> @update 忽略`、`>>> WitchBook 触发`、`_itemIds off=0x` 字段状态、预填/纹理加载等);
+其余保持 INFO (hooks 就绪 / 注入完成 / mod 切换 / `_itemIds → String[] 重建` /
+`>>> @update 拦截` / `+N 纯新 ID` / 状态应用 N 条 / 面板默认值捕获恢复)。消息**文案**未改,
+grep `[v3]` (统一前缀) 与 `[WitchBook]` (wblog 前缀) 仍命中。
+
+> ⚠️ **别再把精确数字写死在这**: 初版审计写的 29/34/13, 到 10 月已经变成 59/295/340 ——
+> 差了一个数量级 (credit.js 一个文件就贡献了 162 处 `warn()`)。要引用就给上面的**分级原则**;
+> 真要数字就现场数, 方法 (减去 log.js 里的定义):
+> `for fn in error warn dbg; do echo -n "$fn: "; grep -rEoh "\b$fn\(" src/ | wc -l; done`
 
 **文件写入**: libc `open(O_WRONLY|O_CREAT|O_TRUNC)` + 逐行同步 `write` (src/io.js),
 崩溃不丢已写行; 每运行截断重开 = 一份干净 modlog.log。路径: 默认 `<游戏根>/modlog.log` ,
@@ -247,7 +262,7 @@ ensureItemIdsString 重建失败、catch 分支); 34 处软失败 → `warn()` (
 (spawn 时 frida 保留的父进程 fd, 即终端或重定向目标)。因此剥色在 **JS 侧**: run_mod.sh
 的 Python 检测 `sys.stdout.isatty()`, 非 TTY (重定向/管道) 或 `MOD_NO_COLOR=1` 时注入
 `var MOD_NO_COLOR=true` fragment → log.js 输出明文; TTY 时注入 false → 终端彩色。
-on_msg 只兜底 frida 错误消息等 (不含 bundle 日志)。探针 (probe_*.js) 独立脚本、输出
+on_msg 只兜底 frida 错误消息等 (不含 bundle 日志)。探针 (`probe_*.js`, 本机保留、**不随仓库发布**) 独立脚本、输出
 只在终端不进 modlog.log; 全量捕获 (含探针) 用 `MOD_NO_COLOR=1 ./run_mod.sh > all.log`。
 
 **崩溃前 flush**: `Process.setExceptionHandler` 回调只做同步文件 `write` + `fsync`
@@ -283,7 +298,7 @@ handler, 早于首个 wblog)。文件体积第一版不做轮转, `MOD_DEBUG=1` 
 - **phase 2 — 原版 stills + 共犯者翻页**: 9 张原版致谢画面 (静态裁图) 按原版拍数时序
   播放; 共犯者 (Special Thanks) 按 36 屏页级状态机翻页 — zh 420 + ja 4544 合并完整
   名单 (原版显示的就是合并全量, 非运行时字典), 每屏一次 TMP 富文本 `set_Text`
-  (行 join `<br>`), fade 0.51s + display 2.30s ≈ 3.3s/屏, 与 run-30c 实测原版节奏一致。
+  (行 join `<br>`), fade 0.51s + display 2.30s ≈ 3.3s/屏, 与实测原版节奏一致。
 - **phase 3 — 製作・販売/Acacia/© 段**: 共犯之后最后一段滚动, 文本为 prefab 静态默认,
   只激活 + ScrollAsync。
 
@@ -291,13 +306,13 @@ handler, 早于首个 wblog)。文件体积第一版不做轮转, `MOD_DEBUG=1` 
 1. **引擎级 Unity API 必须在主线程调** — JS 定时器线程 (setTimeout/setInterval 回调)
    调 `get_ContentHeight`/`ScrollAsync` = Frida "breakpoint triggered" (IL2CPP 线程保护
    int3)。共犯翻页的 `set_Text` 是纯托管路径侥幸可跑, 但滚动必须走 `g_creditTick`
-   nani 轮询泵 → onSVV (SetVariableValue 主线程同步 hook) 执行 (run-30f)。
+   nani 轮询泵 → onSVV (SetVariableValue 主线程同步 hook) 执行。
 2. **运行时字典 `_specialThanksCredits@0xA0` 只有部分数据** (ja 459 + zh 420),
-   原版显示的是 asset 全量 (4964 人次) — 静态提取自 run-30c TMP set_Text 全量捕获
+   原版显示的是 asset 全量 (4964 人次) — 静态提取自 TMP set_Text 全量捕获
    (509 条), 按 REPL/APPEND 规则重建 36 屏, 原样保留富文本。
 3. **原版节奏参数全部运行时读**: `_scrollSpeed@0x68`、still 拍数 (delay/fade/display@0x6C-0x74)、
    bpm@0x30、共犯 fade/display 拍数 (0.75/3.38) — 不硬编码。
-4. **总时长对齐歌曲** (run-30g): 原版演出 = staff 滚动 119s + 共犯 36×3.3s + 製作段,
+4. **总时长对齐歌曲**: 原版演出 = staff 滚动 119s + 共犯 36×3.3s + 製作段,
    无段间空档。mod 侧去掉 endPause/nani 预热等待/多余缓冲后, 全流程 ≈ 260s,
    在 5 分钟歌曲 (bloom) 结束前播完。
 

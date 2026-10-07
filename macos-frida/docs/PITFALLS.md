@@ -59,7 +59,7 @@ RVA 0x3404d4 完全一致; 不加载任何 mod 也会发生, 加载 mod 后概�
   基类字段/方法需沿 `il2cpp_class_get_parent` 走链 (walkCls)。
 - `Il2CppDumper` 在 macOS 上不可用 (CodeRegistration/MetadataRegistration 解析不出,
   `il2cpp_codegen_register` 非导出符号)。
-- 探针/诊断脚本 (probe_*.js) 必须作为**独立** `create_script` 附加 —
+- 探针/诊断脚本 (本地 `probe_*.js`, 被 .gitignore 排除、不随仓库发布) 必须作为**独立** `create_script` 附加 —
   📦 bundle 的 fragment 是模块资产, 不被 import 就不会执行。
 
 ### 7.4 invoke() 读值类型返回值 (float/bool) 读到垃圾 — 必须 directCall (2026-08-12, cutin 不可见根因)

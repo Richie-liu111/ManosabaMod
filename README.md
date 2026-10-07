@@ -30,13 +30,14 @@
 | 视频 (.mp4/.webm/.ogv,URL 流式播放) | ✅ |
 | 背景 (`@back`) / 立绘 (`@char`) | ✅ |
 | 角色名富文本(姓/名分级字号+颜色) | ✅ |
-| 魔女图鉴 (WitchBook 全 4 分类:线索/人物/规定/记录 + 新角色) | ✅ |
+| 魔女图鉴 (WitchBook 全 4 分类:线索/人物/规定/记录) | ✅ |
 | 魔女图鉴会话隔离(整页重建,override 可逆) | ✅ |
+| 图鉴自定义角色档案 (上游的 CharacterData/AuthorData 注入) | ⚠️ macOS 走**替代路径**(渲染期覆写姓名 + 页面注入), 不依赖那两次 Data 级注入 —— 后者在 `src/witchbook/index.js` 里被注释掉, 但停用理由(2026-08-02)疑已过期, **待复测**; 详见 ROADMAP「差距 7」 |
 | 审判自定义面板 (`@choice handler:"<Id>"`) | ✅ |
 | 自定义论破动画 (`@gosubCutIn`) | ✅ |
 | 存档章节名 (info.json `ChapterNames`) | ✅ |
 | 致谢演出复刻 (staff 主名单滚动 + 共犯 36 屏 + 製作段) | ⚠️ 试验性 (macOS 独有, 上游无此功能, 稳定性未实测) |
-| 调试工具 | ❌ 未实现(macOS 用 probe_*.js 探针替代) |
+| 调试工具 | ❌ 未实现 (macOS 侧排查用**本地**探针脚本, 探针不随仓库发布) |
 
 Windows 版与 macOS 版的功能差距(调试工具等)见 [macos-frida/docs/ROADMAP.md](macos-frida/docs/ROADMAP.md)。
 
@@ -51,13 +52,17 @@ ManosabaMod/
     │   ├── utils.js           # IL2CPP 调用工具 (invoke / directCall)
     │   ├── io.js              # libc 文件 I/O (Frida 无 File API)
     │   ├── providers.js       # mod 资源管线 (剧本/本地化/语音/背景/立绘)
+    │   ├── locale.js          # 当前游戏语言跟踪 (切语言 / 启动初始化)
     │   ├── menu.js            # mod 选择菜单 (翻页)
     │   ├── movie.js           # 视频 URL 流式播放
     │   ├── choice.js          # 审判 @choice handler
-    │   ├── cutin.js           # 论破动画 @gosubCutIn
+    │   ├── cutin.js           # 论破动画 (@gosubCutIn)
     │   ├── chapterdisplay.js  # 存档章节名 (ChapterNames)
+    │   ├── scripttext.js      # @print/@choice/@toast 的 `"文本"|#ID|` 引号修复
+    │   ├── credit.js          # 自定义致谢演出控制器 (@set 触发; 本目录最大的模块)
     │   ├── log.js             # 分级彩色日志 + modlog.log
-    │   └── witchbook/         # 魔女图鉴 (state/data/textures/pages/session/characters/index)
+    │   ├── wbprobe.js         # 图鉴读档探针 (MOD_WB_PROBE=1, 默认关, 零开销)
+    │   └── witchbook/         # 魔女图鉴 (state/data/pages/session/characters/dictheal/selftest/index)
     ├── dist/manosabamod.js    # 打包产物 (frida-compile 构建, 随版本提交)
     ├── run_mod.sh             # 启动脚本 (自动构建 + 启动游戏 + 注入)
     ├── normalize_audio.py     # 可选: 非标音频 (ogg/48k 等) 检测与转换, run_mod.sh 启动前调用

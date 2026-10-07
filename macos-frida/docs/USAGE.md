@@ -135,7 +135,7 @@ GAME=/path/to/manosaba ./run_mod.sh # 游戏不在 Steam 默认位置时
 | 自定义论破动画 (@gosubCutIn) | ✅ |
 | 存档章节名 (info.json ChapterNames) | ✅ |
 | 致谢演出复刻 (staff 滚动 + 共犯 36 屏 + 製作段 + 自定义背景图) | ⚠️ 试验性 (macOS 独有, 上游无此功能, 稳定性未实测) |
-| 调试工具 | ❌ 未实现 (用 probe_*.js 探针替代) |
+| 调试工具 | ❌ 未实现 (用**本地** `probe_*.js` 探针; 探针被 .gitignore 排除, 不随仓库发布) |
 
 ## 已知问题 (2026-08-18)
 
