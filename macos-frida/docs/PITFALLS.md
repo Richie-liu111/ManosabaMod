@@ -581,3 +581,45 @@ IL2CPP 侧功能会失效 (轮询已停), 重启即恢复。本作没有这种�
 **踩过的坑**: `Module.findGlobalExportByName` 在本环境**查不到 GameAssembly 的导出** (libSystem 的能查到,
 极易误判) → 必须 `Process.enumerateModules()` 拿模块对象再 `findExportByName`; 且 GameAssembly 是
 spawn 之后才 dlopen 的, 找导出必须轮询等待。
+
+### 7.16 图鉴角色数据注册复测  (2026-10-07)
+
+**背景**: `injectCharacterData()` / `injectAuthorData()` 自 2026-08-02 起被注释掉 (理由"角色档案数据
+注入可能破坏场景, 5 个 ArgumentException")。复测判定该理由**已过期** (那类异常属 7.6 的装箱守卫故障,
+2026-09-25 已由 `invokeBool` 修掉; 这两个函数自己的守卫是 `listContainsId`, 根本不走那条路),
+调用已恢复, 真机零异常。但过程中挖出的三条东西比结论本身更值钱:
+
+**① 数据注册有"时序窗口", 过了就永远吃不到 —— 这是缓存语义, 不是 bug。**
+`CharacterData`/`AuthorData` 唯一的运行时消费者 `AuthorTextBuilder` 在 `LoadDataAsync` 里把
+`_nameData`(0x48)/`_authorData`(0x50) 建成**一次性快照**, 之后不再重建。所以注入只对"注入之后新建的
+builder"生效:
+- 对话框 (`WitchTrialsTextPrinterPanel`) 的 builder 随审判场景新建 → **命中**, 姓名走富文本模板;
+- backlog 面板 (`WitchTrialsLogUi`) 与图鉴人物页 (`ProfilePage`) 的 builder 在**游戏启动时**已建好 →
+  永远"未命中"。
+
+**推论**: 靠"更早注入"救这两处是不可能的 —— mod 身份要等剧本加载才知道 (`ScriptLoader.Load`), 那时游戏
+早建完了。实测把注入挂到 `ScriptLoader.Load` 上确实"更早了一点点", 但比首次注入(开图鉴时)还**晚 9ms**,
+零收益。→ 这两处只能**渲染完再覆写标签** (`hookProfileName` / `hookLogAuthorName`, 上游
+`LogAuthorFormat_Patch` 也是这么干的)。
+
+**判定方法 (可复用)**: 注入后 snapshot 目标 builder 的字典是否含该 id + hook `TryBuildAuthorText` 看
+命中/未命中 —— 一眼分清"数据没写进去"和"写进去了但那个消费者看不到", 这是两种完全不同的修法。
+
+**② async 方法的"存根"可能 hook 不上。** 为拿"字典何时定型"的证据, 我 hook 了
+`AuthorTextBuilder.LoadDataAsync` —— 它整场**一次都没触发** (同类里 `TryBuildAuthorText` hook 正常)。
+推测 async 方法编译出的存根极短(只有 `AsyncUniTaskMethodBuilder.Start`), 被 IL2CPP **内联**进调用方,
+attach 在存根上自然不响。**教训**: 探针不响时先怀疑"是不是被内联了", 别急着下"没被调用"的结论。
+(本条的结论最终由**注入时刻 vs 快照时刻**的时间戳对比独立坐实, 不依赖那个 hook —— 探针失效时换一条
+证据链, 比修探针划算。)
+
+**③ `A.gf` 不查基类; "探错类"会给出看起来像平台差异的假结论。**
+`A.gf` = `il2cpp_class_get_field_from_name`, **不查基类** (utils.js:384 有注)。首轮我探
+`WitchTrialsLogMessageUi._authorTextBuilder` 得到"字段未找到", 差点写成"macOS 与 Windows 字段名不一致"。
+真相是**探错了类**: 持有 builder 的是面板 `WitchTrialsLogUi` (0x160), 而 `WitchTrialsLogMessageUi`
+只在 `ModifyAuthorPanel(AuthorTextBuilder)` 里**把 builder 当参数收下**, 自己不存。
+**规矩**: 报"字段不存在"之前先确认这个类到底持不持有它 —— 类上有个"要用某对象"的方法, 不等于它把该对象
+存成了字段。要跨基类找字段用 `findFieldAnywhere()` (characters.js), 找不到就当功能不可用、绝不猜偏移。
+
+**同场次的附带发现**: `CharacterDataItem._age/_height/_weight` (0x28/0x30/0x38) 全游戏**没有任何读取点**
+(`AuthorTextBuilder` 只取 `_name`/`_familyName`) → info.json 里的 `Age`/`Height`/`Weight` 是纯作者元数据,
+不会显示。旧文档"复测后看年龄/身高/体重字段是否更完整"这条判据据此**作废** (见 ROADMAP 差距 7)。

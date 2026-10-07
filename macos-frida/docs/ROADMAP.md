@@ -66,22 +66,33 @@
      游戏版本更新可能失效。测试脚本/数据在仓库外（`test-tools/`）不随仓库分发。
    - 机制细节与踩坑（主线程泵/breakpoint triggered/运行时字典不全）见 [ARCHITECTURE.md](ARCHITECTURE.md) 九节。
 
-7. **图鉴自定义角色的数据注册（上游 `CharacterData`/`AuthorData` 注入）** — ⚠️ 被停用，**停用理由疑已过期，待复测**
+7. **图鉴自定义角色的数据注册（上游 `CharacterData`/`AuthorData` 注入）** — ✅ **已闭环 (2026-10-07复测)**
    - 上游 C# `ModProfileLoader.TryInjectCharacterData()` / `TryInjectAuthorData()` 把 mod 新角色
-     注册进 `CharacterData._items` / `AuthorData._items`（名称模板），再由游戏自己的
-     `AuthorTaggedTextGenerator.BuildFullName` 渲染 —— 上游在 **3 处**无条件调用（`ModWitchBookPatch`
-     + `ModProfileLoader` 两处），另有 macOS 侧**完全没有**对应物的 `TryInjectProfileData()`（`ProfileData._items`）。
-   - macOS 侧这两个函数**写好了但在 `src/witchbook/index.js:199-200` 被注释掉**，注释写于 2026-08-02：
-     "角色档案数据注入可能破坏场景 (5 个 ArgumentException)"。
-   - macOS 目前靠**替代路径**达到相近效果：姓名 = `hookProfileName` 在 `ProfilePage.RefreshPageContent`
-     onLeave 覆写 `_authorLabel`（渲染期，不注册数据）；条目 = 页面级注入（`injectPage`，
-     **故意不注 `Data._items`** —— 那是缓存的 ScriptableObject，注入会跨会话残留）。
-   - **为什么怀疑停用理由已过期**：那条 ArgumentException 属 7.6 的"重复 `Add` / `Contains` 守卫失效"
-     一类（`providersMap.ContainsKey` 写成 `ret.toInt32() === 1`），**2026-09-25 已由 `invokeBool` 修掉**；
-     而这两个函数自己的守卫是 `listContainsId`（utils.js 的自扫实现，根本不走 invoke 装箱那条路）。
-   - **待办（一次实验就能定案）**：取消注释 → 跑一次图鉴 → 看 `CharacterData 注入 N 个角色` 是否出现、
-     有没有 ArgumentException、以及档案页的**年龄/身高/体重/名/姓**字段是否比现在更完整。
-     若确实已无问题，则应恢复这两次调用（消除与上游的功能差距）；若仍崩，把新证据写回这里替换那句"可能"。
+     注册进 `CharacterData._items` / `AuthorData._items`（名称模板），再由游戏自己的 `AuthorTextBuilder` 渲染。
+     macOS 侧这两个函数早已写好，但 2026-08-02 被注释掉，理由是"可能破坏场景 (5 个 ArgumentException)"。
+   - **复测结论：停用理由确已过期**。那类 ArgumentException 属 7.6 的装箱守卫故障（2026-09-25 已由
+     `invokeBool` 修掉），而这两个函数自己的守卫是 `listContainsId`（自扫实现，不走 invoke 装箱那条路）。
+     取消注释后真机跑完：`CharacterData 注入 N 个角色` / `AuthorData 注入 N 个角色模板` 正常出现，
+     零异常（换 mod 后 `注入 5 个角色` 同样正常）→ **调用已恢复**。
+   - **收益是实测出来的，不是"照上游做"**：注册进数据能救的是**对话作者名**
+     （`WitchTrialsTextPrinterPanel` 的 `_authorTextBuilder` 在该场景新建 → 读到我们注册的数据 →
+     `TryBuildAuthorText('EmaNew') → 命中` → 走富文本模板）。图鉴人物页那个 builder 仍读不到，
+     但它本来就有 `hookProfileName` 覆写兜着。
+   - **追不上、只能覆写的那一半**：backlog（`WitchTrialsLogUi._authorTextBuilder` @0x160）的 builder 在
+     **游戏启动时**就把 `_nameData`/`_authorData` 定型了 —— 实测它在我们最早一次成功注入（t=49.134）
+     之前就已经"未命中"（t=49.136）；而 mod 要等剧本加载才知道是谁，硬做的"提早注入"实测反而比
+     首次注入**晚 9 ms** → **注入永远追不上它**。故新增 `hookLogAuthorName()`
+     （挂 `WitchTrialsLogMessageUi.ModifyAuthorPanel`，onLeave 覆写 `_authorLabel`，镜像上游
+     `LogAuthorFormat_Patch`）。真机实测 backlog 里 mod 角色名已是富文本，原版角色不受影响。
+   - **`TryInjectProfileData()` 仍无对应物，但不需要**：它的作用（mod 人物简介 + 覆写原版条目的版本补齐）
+     macOS 由**页面级注入**（`injectPage`，写 `_loadedDataItemMap` / `_localizedTextData`）达成，且
+     **故意不注 `Data._items`** —— 那是缓存的 ScriptableObject，注进去会跨会话残留。
+     这是机制差异，不是功能差距。
+   - **顺带纠正一条旧判据**：这里原本写"复测后看档案页的年龄/身高/体重是否更完整" —— 该判据是错的。
+     `CharacterDataItem._age/_height/_weight`（0x28/0x30/0x38）全游戏**没有任何读取点**
+     （`CharacterData` 的唯一运行时消费者 `AuthorTextBuilder` 只取 `_name`/`_familyName`），
+     info.json 里的 Age/Height/Weight 目前是纯作者元数据。
+   - 复测过程与可复用的坑见 [PITFALLS.md](PITFALLS.md) 7.16。
 
 ## 已知开放项（非阻断）
 

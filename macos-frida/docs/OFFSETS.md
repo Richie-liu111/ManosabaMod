@@ -63,6 +63,16 @@
 | | `_item` | 0x20 | data / session |
 | | `_idVersionPair` | 0x28 | data / pages / session |
 | 角色档案页 | `_authorLabel` | 0xB8 | characters |
+| | `_authorTextBuilder` | 0xE0 | characters (2026-10-07 复测核对) |
+| `WitchTrialsTextPrinterPanel` | `_authorTextBuilder` | 0x228 | characters (对话框作者名) |
+| `WitchTrialsLogUi` | `_authorTextBuilder` | 0x160 | characters (backlog 面板的 builder 在**启动时**定型) |
+| `WitchTrialsLogMessageUi` | `_authorLabel` (TMP_Text) | 0xD8 | characters (backlog 覆写用) |
+| | `_authorId` (String*) | 0xE0 | characters |
+| `AuthorTextBuilder` | `_nameData` (来自 CharacterData) | 0x48 | 复测探针读出; 现无代码引用 |
+| | `_authorData` (来自 AuthorData) | 0x50 | 同上 |
+| `CharacterMetadata` | `UseCharacterColor` (bool) | 0x80 | characters |
+| | `NameColor` (Color) | 0x84 | characters |
+| | `MessageColor` (Color) | 0x94 | characters |
 
 ### 其他
 

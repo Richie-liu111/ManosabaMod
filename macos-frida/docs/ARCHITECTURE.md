@@ -131,18 +131,21 @@ ScriptPlaylist.LoadResources
   预填 `Dictionary<LocaleKind, ...>`(键用与 `_idVersionPair` 同一 IdVersionPair 实例 →
   原版 RefreshPageContent 直接命中); `_state.SetVersion` 设状态。
   - Clue: `LocalizedTexts(Name, Desc)`; Profile: `string(Desc)`; Rule: `LocalizedTexts(Subtitle, Desc)` + `_numberings`; Note: `LocalizedTexts(Title, Desc)`。
-- **人物姓名**: 走的是**渲染期覆写**, 不是上游那种数据注册。
-  `ProfilePage.RefreshPageContent` onLeave 里把 `_authorLabel` 的 text 直接设成
-  `buildAuthorTemplate()` 的产物 (镜像上游 `AuthorTaggedTextGenerator.BuildFullName`:
-  姓首字大号带色 + 名首字次大号) —— 这就是 `hookProfileName`, **在跑**。
-  ⚠️ 与上游的差异: 上游是 `TryInjectAuthorData()` 把模板注册进 `AuthorData._items`、
-  再由游戏自己的 BuildFullName 渲染; macOS 改成"渲染完再覆盖标签"。
-  同理 `injectCharacterData()`/`injectAuthorData()`(把角色注册进 `CharacterData._items` /
-  `AuthorData._items`) 在 `src/witchbook/index.js` 里**被注释掉了** —— 所以 `characters.js`
-  这两个导出目前无调用点。停用注释写于 2026-08-02、理由是"可能破坏场景 (5 个 ArgumentException)",
-  但那类 ArgumentException 属 7.6 的重复 `Add`/`Contains` 守卫故障, **2026-09-25 已由 invokeBool 修复**;
-  而这两个函数自己的守卫是 `listContainsId`(自扫实现, 不吃那个坑) → **停用理由疑已过期, 待复测**。
-  复测前后别按老注释理解本段。
+- **人物姓名**: **数据注册 + 渲染期覆写并用** (2026-10-07)。
+  游戏侧所有姓名渲染都走 `AuthorTextBuilder.TryBuildAuthorText(id, color, out text)`, 它读两张字典:
+  `_nameData` (0x48, 来自 `CharacterData`) / `_authorData` (0x50, 来自 `AuthorData`); 字典在
+  `LoadDataAsync` 里**一次性建好、之后不再重建**。消费者有三处: `ProfilePage` (`_authorTextBuilder` @0xE0)、
+  `WitchTrialsTextPrinterPanel` (对话框, @0x228)、`WitchTrialsLogUi` (backlog 面板, @0x160)。
+  - **吃得到数据注册的: 对话框** —— 那个 builder 在审判场景新建, 晚于我们的注入
+    (`injectCharacterData()` / `injectAuthorData()`, 开图鉴时调用), 于是
+    `TryBuildAuthorText('EmaNew') → 命中`, 姓名由游戏自己的模板渲染。
+  - **吃不到的: 图鉴人物页 + backlog 面板** —— 这两个 builder 在**游戏启动时**就定型了,
+    而 mod 要等剧本加载才知道是谁, 注入**追不上** (实测"提早注入"反而比首次注入晚 9ms)。
+    → 走覆写: `hookProfileName` (`ProfilePage.RefreshPageContent` onLeave) 与
+    `hookLogAuthorName` (`WitchTrialsLogMessageUi.ModifyAuthorPanel` onLeave), 把 `_authorLabel`
+    的 text 直接设成 `buildAuthorTemplate()` 的产物 (镜像上游 `AuthorTaggedTextGenerator.BuildFullName`:
+    姓首字大号带色 + 名首字次大号)。
+  两路并用才等于上游的观感 —— 只留任一路都有盲区。详见 ROADMAP「差距 7」/ [PITFALLS.md](PITFALLS.md) 7.16。
 - **纹理**: 读 PNG → `Texture2D` + `ImageConversion.LoadImage` → 注册进
   `AddressablesManager._loadedAssets`,`@spawn "Clue"` 弹窗和缩略图共用。
 - **当前 mod 识别**: 钩 `ScriptLoader.Load` 匹配 `modList` 的 `Enter` 路径

@@ -32,7 +32,7 @@
 | 角色名富文本(姓/名分级字号+颜色) | ✅ |
 | 魔女图鉴 (WitchBook 全 4 分类:线索/人物/规定/记录) | ✅ |
 | 魔女图鉴会话隔离(整页重建,override 可逆) | ✅ |
-| 图鉴自定义角色档案 (上游的 CharacterData/AuthorData 注入) | ⚠️ macOS 走**替代路径**(渲染期覆写姓名 + 页面注入), 不依赖那两次 Data 级注入 —— 后者在 `src/witchbook/index.js` 里被注释掉, 但停用理由(2026-08-02)疑已过期, **待复测**; 详见 ROADMAP「差距 7」 |
+| 图鉴自定义角色档案 (新角色姓名/简介/立绘) | ✅ 姓名**双路并用**: 数据注册(把角色写进 `CharacterData`/`AuthorData`, 对话作者名因此走游戏自己的富文本模板) + 渲染期覆写(图鉴人物页 / 历史回放 backlog); 简介与条目走页面级注入。详见 ROADMAP「差距 7」 |
 | 审判自定义面板 (`@choice handler:"<Id>"`) | ✅ |
 | 自定义论破动画 (`@gosubCutIn`) | ✅ |
 | 存档章节名 (info.json `ChapterNames`) | ✅ |
@@ -158,6 +158,7 @@ macOS 版的剧本结构与 Windows 版类似。
 
 - **音频解析** 走游戏原装 `WavToAudioClipConverter`,只支持 **PCM16 / 44100Hz / 立体声 wav**:`.ogg` 无法被资源定位;48kHz 等非标采样率/位深/声道的 wav 会播放失败或音高偏移(Windows 版 #5 修复的就是这个问题)。**run_mod.sh 启动前自动检测**(纯 Python 读文件头,毫秒级,零依赖):发现非标音频(ogg/48k/32k/单声道等)时列出清单并询问是否批量转成 `-ar 44100 -ac 2 -sample_fmt s16` 标准 wav —— 转换是改文件操作(覆盖原 wav、删除 ogg 源),**必须 y 确认后才执行**,回车/非 TTY 默认不转,照常启动;也可手动 `python3 normalize_audio.py --apply`。`NORMALIZE_AUDIO=0` 关闭检测,`force` 不询问直接转。根因与 Windows 侧对照见 [docs/ROADMAP.md](macos-frida/docs/ROADMAP.md)。
 - @char SubId:"Middle" + 自定义角色 可能会导致角色立绘在退出剧本时不被清除，建议不要加SubId:"Middle"参数。
+- **`Characters` 里的 `Age`/`Height`/`Weight` 不会显示**：游戏读过角色数据的只有姓名渲染那一处（只取 `Name`/`FamilyName`），这三个字段在游戏侧没有任何读取点。填了不报错、也不显示，别指望它在档案页出现。
 - **语言切换（macOS，2026-08-18 已修）**:游戏内切语言（zh-Hans ↔ ja）曾击穿 mod 资源加载——Naninovel 重建全部 `LocalizableResourceLoader<T>` 的 ProvisionSources，抹掉 mod 注入的 provider，导致中途切语言卡死。**已知残留:切语言瞬间有肉眼可见卡顿**（每个 loader 实例各触发一次全量重注入，实测 ~200 次/切换）。细节见 [docs/ROADMAP.md](macos-frida/docs/ROADMAP.md)「差距」5 / [docs/PITFALLS.md](macos-frida/docs/PITFALLS.md) 7.5。
 - **致谢演出复刻（macOS 独有，试验性，2026-08-19+）**：macOS 版自研功能，**上游 Windows 版 ManosabaMod 没有此功能**。用静态本地数据（`data.json` + `thanks-pages.json`）复刻原版结尾致谢演出（staff 主名单滚动 + 自定义/原版 stills + 共犯者 Special Thanks 36 屏翻页 + 製作・販売/Acacia/© 段滚动），触发方式为剧本内 `@set "g_modCreditRoll = \"data.json\""` + `g_modCreditRollPhase` 分阶段。**背景图可自定义**：data.json 配 `stills` 播放列表（数组长度 = 播放张数，每张可配 display/fadeIn/fadeOut，仅 PNG，见 [guides/CREDIT_ROLL.md](macos-frida/docs/guides/CREDIT_ROLL.md) §6）。**稳定性未经充分实测**：依赖原版 CreditsDirectorAct2 运行时参数与 CreditsUI 场景结构。机制细节见 [docs/ARCHITECTURE.md](macos-frida/docs/ARCHITECTURE.md) 九节。
 
