@@ -24,6 +24,7 @@ import { hookStartGame, registerMenu, registerMenuText, sampleMenuScriptPath, se
 import { resetWitchBookSession } from "./witchbook/session.js";
 import { setupWitchBookHooks } from "./witchbook/index.js";
 import { registerTexturesInto } from "./witchbook/textures.js";
+import { setupWitchBookProbe } from "./wbprobe.js";
 import { wbCls } from "./witchbook/state.js";
 import { initLog, installCrashHandler, logLevel } from "./log.js";
 import { printStartupBanner } from "./banner.js";
@@ -536,6 +537,9 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
 
         // WitchBook 线索支持
         setupWitchBookHooks();
+
+        // WitchBook 读档探针 (只读; MOD_WB_PROBE=1 才装, 默认零开销)
+        setupWitchBookProbe();
 
         // 菜单本地化文档查找探针 (P0-3): 空 scriptPath 时到底查的是哪个路径 —— 只读, 只报未命中
         setupMenuDocProbes();

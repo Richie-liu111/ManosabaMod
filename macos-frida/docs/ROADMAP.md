@@ -76,8 +76,8 @@
   - `ctrl+c` ：杀启动器 + 收掉游戏（SIGTERM → 3s → SIGKILL）+ 清理本次 frida-helper。
   - 游戏存活检测（`os.kill(pid, 0)` 每秒探测）：游戏退出（程序坞/崩溃/kill）→ 脚本自动 detach 收尾，不再残留孤儿 bash（此前 python 死循环不监控游戏，每次运行残留 1 个 bash，实测累计 10 个）。
   - frida-helper 服务进程在游戏/客户端退出后不自动退出（PPID=1 孤儿，每次运行残留 1 个，历史累计 127 个）→ 收尾时按 spawn 前基线 diff 主动 kill 本次新增的 helper。
-  - 注意：程序坞退出时游戏，或者游戏内退出表现为: "未响应"不退出（退出流程卡住，可能与 frida 注入有关），需强制退出或 ctrl+c；os.kill 检测只认进程消亡，不认未响应状态。
-  - 手动退出游戏时生成 `~/Library/Logs/DiagnosticReports/manosaba-*.ips`：SIGSEGV at `__cxa_throw`（IL2CPP 退出期 C++ 异常路径），属 frida 注入进程退出的已知摩擦，与 mod 运行期功能无关。
+  - **退出"未响应"已修（2026-10-06，commit 736ba3e）**：根因就是"frida 的 JS 线程 attach 进 IL2CPP 域 → 运行时 shutdown 收不了尾"（当时只能猜"可能与 frida 注入有关"）；现在退出入口只置位、由 JS 线程自己在 50ms 内把自身摘出域，游戏内退出 / 程序坞 / Cmd+Q 三条路径均 1~2 秒干净退出。`os.kill` 检测仍只认进程消亡，但 watchdog 补上了"进程卡着不死"这种情形（`MOD_EXIT_GRACE`，默认 3s，`=0` 关闭）。详见 [PITFALLS.md](PITFALLS.md) 7.15。
+  - 退出期崩溃报告（`~/Library/Logs/DiagnosticReports/manosaba-*.ips`）：2026-10-06 前的 `SIGSEGV at __cxa_throw` 现象随上面的修复一起消失；**若再出现，先查是不是 `il2cpp_thread_detach` 被从错误的线程调用** —— 我们踩过：在退出钩子（主线程）里调 `il2cpp_thread_current()` 会摘掉主线程，0.0x 秒后崩在 `Environment::get_CurrentManagedThreadId`（NULL 解引用）。
 
 ## 参考
 

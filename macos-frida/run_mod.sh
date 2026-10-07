@@ -45,9 +45,11 @@ PLAYER_LOG="$HOME/Library/Logs/Re,AER/manosaba/Player.log"
 #   MOD_MENU_PROBE=1      菜单剧本 path 采样 + 本地化文档/loader 查找探针 (噪音大, 仅排查用)
 #   MOD_GC_PROBE=1        菜单剧本构造时在"path 字符串 → FromText"之间强制一次 GC, 放大托管字符串无根窗口
 #   MOD_FAULT=menu-nopath 故意用空 path 构造菜单剧本, 确定性复现 New Game 黑屏 (给防御性修法做 A/B)
+#   MOD_WB_PROBE=1        WitchBook 读档探针 (只读): 读档动作/剧本 path/modKey 变量/页面布局快照
 MOD_FAULT="${MOD_FAULT:-}"
 MOD_GC_PROBE="${MOD_GC_PROBE:-0}"
 MOD_MENU_PROBE="${MOD_MENU_PROBE:-0}"
+MOD_WB_PROBE="${MOD_WB_PROBE:-0}"
 # watchdog (默认开): 游戏内 GUI 退出后进程会卡在"未响应"永不退出 (2026-10-06 实测, sample 见 docs),
 # mod 上报"引擎开始退出"后计时, MOD_EXIT_GRACE 秒(默认 3)内不退就替玩家 SIGTERM→SIGKILL 收掉。
 # 设 MOD_EXIT_GRACE=0 关闭 (想手动强退/留现场时用)。
@@ -147,7 +149,7 @@ echo ">>> Mod 日志: $MOD_LOG (MOD_DEBUG=${MOD_DEBUG:-0})"
 PROBE="${PROBE:-}"
 
 # 导出环境变量给 Python (heredoc 用带引号形式, 避免转义被 shell 处理)
-export GAME SCRIPT MOD_ROOT STEAM_APP_ID MOD_DEBUG MOD_LOG MOD_NO_COLOR PLAYER_LOG PROBE MOD_FAULT MOD_GC_PROBE MOD_MENU_PROBE MOD_EXIT_GRACE
+export GAME SCRIPT MOD_ROOT STEAM_APP_ID MOD_DEBUG MOD_LOG MOD_NO_COLOR PLAYER_LOG PROBE MOD_FAULT MOD_GC_PROBE MOD_MENU_PROBE MOD_WB_PROBE MOD_EXIT_GRACE
 $PY << 'ENDPY'
 import frida, time, json, os, re, sys
 
@@ -161,6 +163,7 @@ MOD_SELFTEST_BREAK = os.environ.get('MOD_SELFTEST_BREAK') == '1'
 MOD_FAULT = os.environ.get('MOD_FAULT') or ''
 MOD_GC_PROBE = os.environ.get('MOD_GC_PROBE') == '1'
 MOD_MENU_PROBE = os.environ.get('MOD_MENU_PROBE') == '1'
+MOD_WB_PROBE = os.environ.get('MOD_WB_PROBE') == '1'
 MOD_LOG = os.environ.get('MOD_LOG') or ''
 MOD_NO_COLOR = os.environ.get('MOD_NO_COLOR') == '1'
 PLAYER_LOG = os.environ.get('PLAYER_LOG') or ''
@@ -291,10 +294,11 @@ NO_UPDATE_JS = 'var NO_UPDATE_HOOK=true;' if os.environ.get('NO_UPDATE_HOOK') ==
 MOD_FAULT_JS = ('var MOD_FAULT=%s;' % json.dumps(MOD_FAULT)) if MOD_FAULT else ''
 MOD_GC_PROBE_JS = 'var MOD_GC_PROBE=true;' if MOD_GC_PROBE else ''
 MOD_MENU_PROBE_JS = 'var MOD_MENU_PROBE=true;' if MOD_MENU_PROBE else ''
+MOD_WB_PROBE_JS = 'var MOD_WB_PROBE=true;' if MOD_WB_PROBE else ''
 # MOD_LOG/MOD_NO_COLOR 用 json.dumps (路径含空格/中文安全); 空 MOD_LOG → JS 端走默认兜底路径
 inject_code = ('var modList=%s;var MOD_ROOT=%s;var movieMap=%s;var chapterNames=%s;var MOD_LOG=%s;var MOD_NO_COLOR=%s;'
                % (mods_str, json.dumps(MOD_ROOT), movie_map_json, chapter_names_json, json.dumps(MOD_LOG), json.dumps(JS_NO_COLOR))) \
-              + MOD_DEBUG_JS + MOD_SELFTEST_JS + MOD_SELFTEST_BREAK_JS + NO_UPDATE_JS + MOD_FAULT_JS + MOD_GC_PROBE_JS + MOD_MENU_PROBE_JS
+              + MOD_DEBUG_JS + MOD_SELFTEST_JS + MOD_SELFTEST_BREAK_JS + NO_UPDATE_JS + MOD_FAULT_JS + MOD_GC_PROBE_JS + MOD_MENU_PROBE_JS + MOD_WB_PROBE_JS
 inj = 'Script.evaluate("mod-vars", %s);' % json.dumps(inject_code)
 inj_frag = f"{len(inj.encode('utf-8'))} /frida/mod-vars.js\n✄\n{inj}"
 bundle_body = JS_BASE[2:] if JS_BASE.startswith("📦\n") else JS_BASE
@@ -457,7 +461,8 @@ cleanup()
 probe_flags = ((' BREAK=1 负对照' if MOD_SELFTEST_BREAK else '')
                + (' MOD_FAULT=' + MOD_FAULT if MOD_FAULT else '')
                + (' MOD_GC_PROBE=1' if MOD_GC_PROBE else '')
-               + (' MOD_MENU_PROBE=1' if MOD_MENU_PROBE else ''))
+               + (' MOD_MENU_PROBE=1' if MOD_MENU_PROBE else '')
+               + (' MOD_WB_PROBE=1' if MOD_WB_PROBE else ''))
 print('>>> Mod 日志: %s (MOD_DEBUG=%s MOD_SELFTEST=%s%s)' % (
     MOD_LOG or '<游戏根>/modlog.log', MOD_DEBUG, MOD_SELFTEST, probe_flags))
 if PLAYER_LOG and os.path.isfile(PLAYER_LOG):

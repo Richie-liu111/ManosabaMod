@@ -1,29 +1,161 @@
 // ============ WitchBook 会话隔离域: mod 切换检测 / 整页重建 / 状态清理 / 面板默认值 ============
 // 镜像 Windows ModClueLoader + ModWitchBookPatch: mod 切换/回标题时从原版基座重建, 防残留继承
-import { A, ensureItemIdsString, error, fieldIsStringArray, fieldOffset, findAllObjectOfType, findFirstObjectOfType, findSvc, getGenericArgClass, getSystemClass, invoke, invokeOk, listContainsId, makeS, readStr, swallowed, swallowedWarn, warn, wblog } from "../utils.js";
+import { A, ensureItemIdsString, error, fieldIsStringArray, fieldOffset, findAllObjectOfType, findClassAcrossImages, findFirstObjectOfType, findSvc, getGenericArgClass, getSystemClass, invoke, invokeOk, listContainsId, makeS, readStr, swallowed, swallowedWarn, warn, wblog } from "../utils.js";
 import { wbCats, currentModSet, localeValue, makeIdVersionPair, unionLocaleKeys } from "./data.js";
 import { initCatStateMaps, resetWbOverrides, setWbCurrentMod, setWbDefaultsCaptured, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbDefaultsCaptured, wbPageDefaults, wbVanillaMap } from "./state.js";
 import { getFirstDictValue } from "./pages.js";
 import { tryInjectWitchBook } from "./index.js";
 
-// 从 ScriptLoader.Load 的路径识别当前 mod (匹配 modList 的 Enter; 原版默认路径 → __vanilla__)
-// mod 变化时立即清理上一 mod 的残留 (页面若存在) 并注入当前 mod 目录
+// ============ 当前 mod 判定: 变量 modKey 兜底 + "新会话" 标记 (2026-10-07) ============
+// 背景 (探针 [WBPROBE] 实锤): 判定当前 mod 原本只有 "ScriptLoader.Load 的 path 全等 info.json 的 Enter"
+//   一条路。读档续玩时 path 是存档所在的**子剧本** (实测 1919180_02/Trial02), 永远不等于 Enter
+//   (1919180_02/Main_02) → wbCurrentMod 恒 null → currentModIds() 空 → 图鉴一个条目都不注入;
+//   而存档里 mod 条目是齐的 (_state 实测 clue 11/note 10/profile 6 条), 显示层却因
+//   _loadedDataItemMap 缺 item 全部滤掉 → 玩家看到"读档后只剩原版条目"。
+// 上游 Windows 靠 Naninovel 自定义变量 modKey (ModResourceLoader.GetCurrentModKey) —— 它随存档持久化,
+//   与脚本停在哪儿无关。菜单侧我们早就写这个变量 (menu.js setline), 只是从没人读 → 现在读它。
+// 另一个信号是"这局是不是新开的": 只有新会话才允许走"切 mod 清状态"的重建 —— 读档续玩必须保留
+//   游戏 DeserializeState 刚恢复的 _state (否则原版条目也会一起没)。两个信号互相兜底:
+//   读档钩子没装上时, 靠"判定来自 Enter"挡住; 存档恰好停在 Enter 那行时, 靠 LoadGame 标记挡住。
+var _cvSvc = null, _cvMi = null;
+// 读变量 modKey。读不到一律返回 null, **不改动任何既有判定** (判定失败不该翻转身份)。
+// CustomVariableValue 是值类型 → invoke 返回 boxed 对象, 载荷在 +0x10: type@+0x10(String=0), stringValue@+0x18。
+export function readModKeyVar() {
+    try {
+        if (!_cvSvc || _cvSvc.isNull()) _cvSvc = findSvc("CustomVariableManager", true);
+        if (!_cvSvc || _cvSvc.isNull()) return null;
+        if (!_cvMi || _cvMi.isNull()) {
+            _cvMi = A.cgm(A.ogc(_cvSvc), Memory.allocUtf8String("GetVariableValue"), 1);
+            if (!_cvMi || _cvMi.isNull()) return null;
+        }
+        var r = invokeOk(_cvMi, _cvSvc, [makeS("modKey")]);
+        if (!r.ok || !r.ret || r.ret.isNull()) return null;
+        var cn = "";
+        try { cn = A.cgn(A.ogc(r.ret)).readCString() || ""; } catch (e0) { swallowed("witchbook/session.js:readModKeyVar.typename", e0); }
+        if (cn.indexOf("CustomVariableValue") < 0) return null;   // 不是我们预期的返回结构, 不猜
+        var pay = r.ret.add(0x10);
+        if (pay.readS32() !== 0) return null;                     // 非 String 类型
+        return readStr(pay.add(0x8).readPointer()) || null;
+    } catch (e) { swallowed("witchbook/session.js:readModKeyVar", e); return null; }
+}
+// 变量值 → 可用身份; 不在 modList 里的 key 不认 (可能是已删除 mod 留下的残值)
+function modKeyFromVar() {
+    var v = readModKeyVar();
+    if (!v) return null;
+    if (v === "__vanilla__") return v;
+    if (typeof modList !== "undefined" && modList) {
+        for (var i = 0; i < modList.length; i++) if (modList[i].key === v) return v;
+    }
+    return null;
+}
+var wsDetectKind = "none";    // 最近一次成功判定来自哪: "enter" | "vanilla" | "var" | "none"
+var wsFreshSession = true;    // 本会话是否"新开的一局" (经过 LoadGame 就不是了)
+export function detectKind() { return wsDetectKind; }
+export function isFreshSession() { return wsFreshSession; }
+// 挂 StateManager.LoadGame/QuickLoad: 读档 = 本会话不再是"新开的" → 后续切 mod **不许**清状态
+// 类解析优先, **不走 findSvc** —— 挂 hook 只要有类就够, 而启动早期引擎服务表还没就绪,
+// findSvc 会抛 access violation 并把 ERROR 打进日志 (2026-10-07 首跑实测 4 条噪音)。
+var _loadHooked = false;
+export function setupStateManagerLoadHooks() {
+    if (_loadHooked) return;
+    try {
+        var clsList = [];
+        var c1 = findClassAcrossImages("Naninovel", "StateManager");
+        if (c1 && !c1.isNull()) clsList.push(c1);
+        var c2 = findClassAcrossImages("Naninovel", "StateManagerExtended");   // 子类: QuickLoadAsync 等
+        if (c2 && !c2.isNull()) clsList.push(c2);
+        if (!clsList.length) return;
+        var targets = [["LoadGame", 1], ["QuickLoad", 0], ["QuickLoadAsync", 1]];
+        var seen = {}, got = 0;
+        for (var ci = 0; ci < clsList.length; ci++) {
+            for (var i = 0; i < targets.length; i++) {
+                var nm = targets[i][0];                   // 闭包捕获按迭代取值 (别用循环变量)
+                try {
+                    var mi = A.cgm(clsList[ci], Memory.allocUtf8String(nm), targets[i][1]);
+                    if (!mi || mi.isNull() || mi.readPointer().isNull()) continue;
+                    var key = mi.readPointer().toString();
+                    if (seen[key]) continue;              // 基类/子类解析到同一个实现 → 只挂一次
+                    seen[key] = 1;
+                    Interceptor.attach(mi.readPointer(), { onEnter: function () {
+                        if (wsFreshSession) wblog("检测到读档 (" + nm + ") → 本会话按'续玩'处理: 切 mod 不再清页面状态");
+                        wsFreshSession = false;
+                    } });
+                    wblog("hook " + A.cgn(clsList[ci]).readCString() + "." + nm + " (读档标记)");
+                    got++;
+                } catch (e) { swallowed("witchbook/session.js:setupStateManagerLoadHooks#" + nm, e); }
+            }
+        }
+        if (got) _loadHooked = true;
+    } catch (e) { swallowed("witchbook/session.js:setupStateManagerLoadHooks", e); }
+}
+// 图鉴打开前的最后一道兜底: 身份还空着就再问一次变量
+export function tryDetectModFromVar() {
+    if (wbCurrentMod) return false;
+    var v = modKeyFromVar();
+    if (!v) return false;
+    wsDetectKind = "var";
+    setWbCurrentMod(v);
+    wblog("开图鉴兜底: 由变量 modKey 认定当前 mod '" + v + "'");
+    return true;
+}
+// 以页面 _state._list 为准回填 wbData.states (只收本 mod 的 id)。
+// 对应上游 EnsureAllModClueStatesAndForceReinject 的"若存档中已有, 以存档版本为准"。
+export function adoptPageStates() {
+    try {
+        if (!wbCls || !wbCls.pages || !wbCls.versionedState) return 0;
+        var cats = Object.keys(wbCats), n = 0;
+        for (var ci = 0; ci < cats.length; ci++) {
+            var cat = wbCats[cats[ci]];
+            var pageCls = wbCls.pages[cat.name];
+            if (!pageCls || pageCls.isNull()) continue;
+            var pages = findAllObjectOfType(pageCls);
+            if (!pages.length) continue;
+            var keep = currentModSet(cat);
+            var st = pages[0].add(fieldOffset(pageCls, "_state", 0x48)).readPointer();
+            if (st.isNull()) continue;
+            var lst = st.add(fieldOffset(wbCls.versionedState, "_list", 0x10)).readPointer();
+            if (lst.isNull()) continue;
+            var cnt = lst.add(0x18).readS32();
+            if (cnt < 0 || cnt > 100000) continue;
+            var base = lst.add(0x10).readPointer().add(0x20);
+            for (var i = 0; i < cnt; i++) {
+                var e = base.add(i * 8).readPointer();
+                if (e.isNull()) continue;
+                var id = readStr(e.add(0x10).readPointer());
+                if (!id || !keep[id]) continue;
+                if (!wbData.states[cat.name]) wbData.states[cat.name] = {};
+                wbData.states[cat.name][id] = e.add(0x18).readS32();
+                n++;
+            }
+        }
+        if (n) wblog("读档回填: 页面 _state 里收到本 mod 条目 " + n + " 条 (以存档为准)");
+        return n;
+    } catch (e) { swallowed("witchbook/session.js:adoptPageStates", e); return 0; }
+}
+// 从 ScriptLoader.Load 的路径识别当前 mod (匹配 modList 的 Enter; 原版默认路径 → __vanilla__;
+// 都不匹配 → 兜底问变量 modKey, 这是读档续玩唯一能认出 mod 的路)
+// mod 变化时注入当前 mod 目录 (是否清理上一 mod 的残留由 index.js 按"新会话"与否决定)
 export function detectCurrentMod(path) {
     if (!path) return;
-    var next = null;
+    var next = null, kind = "none";
     if (typeof modList !== "undefined" && modList) {
         for (var i = 0; i < modList.length; i++) {
-            if (path === modList[i].Enter) { next = modList[i].key; break; }
+            if (path === modList[i].Enter) { next = modList[i].key; kind = "enter"; break; }
         }
     }
-    if (!next && path === "Act01_Chapter01/Act01_Chapter01_Adv01") next = "__vanilla__";
-    if (next === null || next === wbCurrentMod) return;
+    if (!next && path === "Act01_Chapter01/Act01_Chapter01_Adv01") { next = "__vanilla__"; kind = "vanilla"; }
+    if (!next) { next = modKeyFromVar(); if (next) kind = "var"; }
+    if (next === null) return;            // 判定不出来 → 保持原样 (绝不把已有身份翻成 null)
+    wsDetectKind = kind;
+    if (next === wbCurrentMod) return;
     setWbCurrentMod(next);
-    wblog("当前 mod: '" + wbCurrentMod + "' (Enter=" + path + ")");
+    wblog("当前 mod: '" + wbCurrentMod + "' (来源=" + kind + ", script=" + path + ")");
     try { if (wbCls && wbCls.pages) tryInjectWitchBook(); } catch (e) { swallowed("witchbook/session.js:detectCurrentMod", e); }
 }
 export function resetWitchBookSession() {
     setWbCurrentMod(null); setWbPrevMod(null);
+    wsFreshSession = true;                 // 回到标题 = 会话结束; 之后无论是新开一局还是读档, 都从这里重新判定
+    wsDetectKind = "none";
     wbData.states = {}; wbData.pendingStates = {}; wbData.texCache = {};
     initCatStateMaps();
     resetWbOverrides();   // 换血记账作废 (页面上那些条目地址不再有效)

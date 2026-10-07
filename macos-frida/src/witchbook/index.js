@@ -11,10 +11,16 @@
 //   3. 显示: Interceptor.replace CluePage.RefreshPageContent / SetupItemButton —— mod 线索直接设
 //      _subjectLabel/_descriptionLabel/_thumbnail (绕开 _localizedTextData 的 KeyNotFoundException)。
 // 数据来源: 运行时读 <MOD_ROOT>/<modKey>/info.json 的 Clues 字段 + 扫 WitchBook/Clues/*.png。
+//
+// 2026-10-07 读档丢条目修法 (探针 [WBPROBE] 实锤, 详见 session.js 顶部):
+//   判定当前 mod 加一条兜底 —— 读 Naninovel 变量 `modKey` (随存档持久化, 上游同源)。原因: 读档续玩的
+//   scriptPath 是存档所在的子剧本 (1919180_02/Trial02), 永远不等于 mod 的 Enter (Main_02), 于是
+//   wbCurrentMod 恒 null → 一条都不注入; 而存档里 mod 条目是齐的 → 显示层因 map 缺 item 全滤掉。
+//   同时区分"新会话"(菜单进 Enter) 与"续玩": 后者**不清**页面 _state (那是游戏刚恢复的存档状态)。
 import { A, dbg, ensureItemIdsString, error, fieldOffset, findAllObjectOfType, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, swallowed, warn, wblog } from "../utils.js";
 import { initCatStateMaps, resetWbOverrides, setWbCls, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbPrevMod } from "./state.js";
 import { isCurrentModItem, loadWitchBookData, wbCatByIdx, wbCats } from "./data.js";
-import { clearAllWitchBookPages, clearBookViaVanilla, detectCurrentMod, findAllPages, hookClearState, rebuildAllPages } from "./session.js";
+import { adoptPageStates, clearAllWitchBookPages, clearBookViaVanilla, detectCurrentMod, detectKind, findAllPages, hookClearState, isFreshSession, rebuildAllPages, setupStateManagerLoadHooks, tryDetectModFromVar } from "./session.js";
 import { injectPage, hookRefreshLocalized } from "./pages.js";
 import { runSelftest, setupSelftest } from "./selftest.js";
 import { registerTexturesInto } from "./textures.js";
@@ -101,6 +107,8 @@ export function setupWitchBookHooks() {
         // @clearBook (ClearWitchBook 命令) → ClearState: 清 wbData.states + 复位面板
         // 修: 剧本内 @clearBook 后自定义证物无法清除 (applyStates 复活) + 上方面板冻结残留
         hookClearState();
+        // 读档标记 (StateManager.LoadGame/QuickLoad): 决定切 mod 时要不要清页面状态 (读档续玩不能清)
+        setupStateManagerLoadHooks();
         setupSelftest();   // MOD_SELFTEST=1 时: 挂 KNF 计数 (平时不挂)
         // RefreshPageContent onEnter: 重新预填 _localizedTextData
         // 修 InitializePages→LoadDataAsync 异步重建 map 时清掉注入导致 KeyNotFoundException
@@ -111,7 +119,9 @@ export function setupWitchBookHooks() {
                 var mi = A.cgm(wbCls.witchBookScreen, Memory.allocUtf8String(mn), 0);
                 if (mi && !mi.isNull()) Interceptor.attach(mi.readPointer(), { onEnter: function () {
                     dbg(">>> WitchBook " + mn + " 触发");
-                    tryInjectWitchBook();   // 内部处理 mod 切换清理 (状态+面板) + 注入
+                    // 开图鉴是最后一道兜底: 身份还空着 (读档续玩时 ScriptLoader.Load 也认不出) 就再问一次变量
+                    try { tryDetectModFromVar(); } catch (eT) { swallowed("witchbook/index.js:onEnter.detectVar", eT); }
+                    tryInjectWitchBook();   // 内部按"新会话/续玩"决定清不清状态 + 注入
                 }});
             } catch (e) { swallowed("witchbook/index.js:setupWitchBookHooks.onEnter#3", e); }
         });
@@ -141,6 +151,8 @@ export function setupWitchBookHooks() {
                 if (loadMi3 && !loadMi3.isNull()) {
                     Interceptor.attach(loadMi3.readPointer(), { onEnter: function (a) {
                         try { detectCurrentMod(readStr(a[1])); } catch (e) { swallowed("witchbook/index.js:setupWitchBookHooks.onEnter#4", e); }
+                        // 读档钩子可能装得比 Engine 服务就绪早 → 每次剧本加载顺手补装一次 (幂等)
+                        try { setupStateManagerLoadHooks(); } catch (e2) { swallowed("witchbook/index.js:setupWitchBookHooks.onEnter#4b", e2); }
                     }});
                 }
             }
@@ -150,16 +162,29 @@ export function setupWitchBookHooks() {
 }
 export function tryInjectWitchBook() {
     try {
-        // mod 切换检测: 换剧本/回标题后重新开始 → 整页重建回原版基座 + 重置状态
+        // mod 变化检测。分两种情形 (2026-10-07, 读档丢条目修法):
+        //   ① 新会话: 从菜单进 Enter / 回标题后重开 → 整页重建回原版基座 + 清状态 (原行为)
+        //   ② 读档续玩: 脚本停在子剧本, 页面 _state 是游戏 DeserializeState 刚恢复的 (实测含 mod 条目)
+        //      → **绝不能清** (清了连原版条目一起没), 只补注入; 并把 _state 回填进 wbData.states (存档为准)
         if (wbCurrentMod !== wbPrevMod) {
-            rebuildAllPages();                  // 整页重建: 清 map, 从 Data 重添全部原版条目
-            clearBookViaVanilla();              // 重置状态 + 当前选中项 (清残留显示)
-            clearAllWitchBookPages();           // 清各页面状态 + 恢复原版默认面板
-            wbData.states = {}; wbData.pendingStates = {};
-            initCatStateMaps();
-            resetWbOverrides();
+            var kind = detectKind();
+            if (isFreshSession() && (kind === "enter" || kind === "vanilla")) {
+                rebuildAllPages();                  // 整页重建: 清 map, 从 Data 重添全部原版条目
+                clearBookViaVanilla();              // 重置状态 + 当前选中项 (清残留显示)
+                clearAllWitchBookPages();           // 清各页面状态 + 恢复原版默认面板
+                wbData.states = {}; wbData.pendingStates = {};
+                initCatStateMaps();
+                resetWbOverrides();
+                wblog("mod 切换(新会话/" + kind + ") → 整页重建 + 状态重置, 注入范围: " + (wbCurrentMod ? "'" + wbCurrentMod + "'" : "无"));
+            } else {
+                adoptPageStates();                  // 页面 _state (含存档恢复的) → wbData.states, 存档版本优先
+                wblog("mod 变化(续玩/来源=" + kind + ") → 保留页面 _state, 只补注入, 注入范围: " + (wbCurrentMod ? "'" + wbCurrentMod + "'" : "无"));
+            }
             setWbPrevMod(wbCurrentMod);
-            wblog("mod 切换 → 整页重建 + 状态重置, 注入范围: " + (wbCurrentMod ? "'" + wbCurrentMod + "'" : "无"));
+        } else if (!isFreshSession()) {
+            // 续玩会话里身份可能早就由变量认出来了 (标题处就设好) → 分支不触发, 但"以存档为准"的回填
+            // 仍要做: 幂等、只写我们自己的表, 让 @clearBook/字典自愈这些下游逻辑有据可依。
+            adoptPageStates();
         }
         initCatStateMaps();
         // 注入所有分类 (只注入页面, 不注入 Data._items —— Data 是缓存的 ScriptableObject,

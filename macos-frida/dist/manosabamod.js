@@ -1,5 +1,5 @@
 📦
-45880 /src/entry.js
+46046 /src/entry.js
 1938 /src/banner.js
 5796 /src/chapterdisplay.js
 88419 /src/choice.js
@@ -13,13 +13,14 @@
 15506 /src/providers.js
 13594 /src/scripttext.js
 39569 /src/utils.js
+22494 /src/wbprobe.js
 21490 /src/witchbook/characters.js
 14873 /src/witchbook/data.js
 9031 /src/witchbook/dictheal.js
-20160 /src/witchbook/index.js
+23086 /src/witchbook/index.js
 27757 /src/witchbook/pages.js
 21413 /src/witchbook/selftest.js
-46334 /src/witchbook/session.js
+55118 /src/witchbook/session.js
 2673 /src/witchbook/state.js
 7233 /src/witchbook/textures.js
 ✄
@@ -36,6 +37,7 @@ import { hookStartGame, registerMenu, registerMenuText, sampleMenuScriptPath, se
 import { resetWitchBookSession } from "./witchbook/session.js";
 import { setupWitchBookHooks } from "./witchbook/index.js";
 import { registerTexturesInto } from "./witchbook/textures.js";
+import { setupWitchBookProbe } from "./wbprobe.js";
 import { wbCls } from "./witchbook/state.js";
 import { initLog, installCrashHandler, logLevel } from "./log.js";
 import { printStartupBanner } from "./banner.js";
@@ -647,6 +649,8 @@ var DIAG = typeof MOD_DEBUG !== 'undefined' && MOD_DEBUG;
         setupScriptTextHooks();
         // WitchBook 线索支持
         setupWitchBookHooks();
+        // WitchBook 读档探针 (只读; MOD_WB_PROBE=1 才装, 默认零开销)
+        setupWitchBookProbe();
         // 菜单本地化文档查找探针 (P0-3): 空 scriptPath 时到底查的是哪个路径 —— 只读, 只报未命中
         setupMenuDocProbes();
         // Hook TitleUi.Activate → 重定向 + 注册菜单
@@ -9721,6 +9725,501 @@ export function makeLocalResourceProvider(root) {
 }
 
 ✄
+// ============ WitchBook 读档探针 (2026-10-07) ============
+// 目的: 把"@AutoSave 存 → 读档 → mod 图鉴条目只剩原版"这条推断链变成实锤, **全只读**。
+//   开: MOD_WB_PROBE=1 ./run_mod.sh      (默认关, 不设 = 一行都不装, 零开销)
+//   关: 去掉环境变量
+//   读: grep '\[WBPROBE\]' <游戏目录>/modlog.log
+//
+// 为什么要探针 (2026-10-06 静态推断, 未验证): 存档 .nson 解出来是 raw deflate JSON, 里面
+//   `VersionedState InstanceID=ClueState` 等**确实带着 mod 条目和版本号**, 自定义变量 modKey 也在 →
+//   "存"没问题, 嫌疑全在"读"侧。读侧有两处疑似断点, 探针就是拿来二选一定案的:
+//     A. 身份断点: 本移植版判定当前 mod 只靠 ScriptLoader.Load 的 path **全等** info.json 的 Enter;
+//        读档恢复时 path 是存档所在的**子剧本**(实测 1919180_02/Trial01), Enter 是 1919180_02/Main_02
+//        → 失配 → wbCurrentMod=null → currentModIds() 空 → injectPage 一个条目都不注入。
+//     B. 状态断点: 回标题 resetWitchBookSession() 清空 wbData.states, 且游戏 DeserializeState
+//        可能把页面 _state 覆盖/过滤掉 → 就算条目注入了也没有版本 → 显示层滤掉。
+//
+// 采集四类事实 (每类对应上面一个环节):
+//   ① 读档动作何时发生   — StateManager.LoadGame/SaveGame/QuickLoad/QuickSave/AutoSaveAsync
+//   ② 读档加载了哪条剧本 — ScriptLoader.Load(path) vs 各 mod 的 Enter (探针自己比对, 不改 detectCurrentMod)
+//   ③ 变量 modKey 此刻值 — 上游 Windows 用它判定当前 mod(存档持久化), 本移植版没读它
+//   ④ 图鉴页面运行时布局 — _itemIds / _state._list / _loadedDataItemMap / _localizedTextData
+//                          + JS 侧 wbCurrentMod / wbPrevMod / wbData.states
+// 时序: 行内带相对本探针第一条事件的毫秒数, 用来读"什么先发生"。
+//
+// 只读保证: 只有 Interceptor.attach + 读内存。唯一的托管调用是 CustomVariableManager.GetVariableValue
+//   (纯查询, 不改状态); 值类型返回值按 invoke 的 boxed 约定读 (+0x10 载荷, 见 utils.invokeBool 注释)。
+// 空 catch 说明 (与项目"空 catch 留痕"约定的例外, 有意为之): 本文件所有读内存的 catch 都**故意静默** ——
+//   ① plog 的 catch 不能再调 swallowed (日志失败再走日志 = 递归);
+//   ② dumpCat 的 4 处读失败在输出里以 -1 / <未读到> 呈现, 本身就是给排查看的信号, 再打 WARN 只会刷屏。
+import { A, dbg, error, findAllObjectOfType, findClassAcrossImages, fieldOffset, findSvc, invokeOk, makeS, readStr, swallowed, warn, wblog } from "./utils.js";
+import { wbCats } from "./witchbook/data.js";
+import { wbCls, wbCurrentMod, wbData, wbPrevMod } from "./witchbook/state.js";
+var ON = (typeof MOD_WB_PROBE !== "undefined") && MOD_WB_PROBE;
+var _t0 = 0, _seq = 0;
+function stamp() {
+    var now = Date.now();
+    if (!_t0)
+        _t0 = now;
+    return "+" + (now - _t0) + "ms";
+}
+function plog(msg) {
+    try {
+        wblog("[WBPROBE] " + stamp() + " " + msg);
+    }
+    catch (e) { }
+}
+// ===== 读 Naninovel 自定义变量 modKey (只读查询) =====
+// CustomVariableValue 是值类型 → il2cpp_runtime_invoke 返回 boxed 对象, 载荷在 +0x10:
+//   type@+0x10 (String=0), stringValue@+0x18, numeric@+0x20, bool@+0x24
+// (与 cutin.js 记的"传参struct: type@0x0/stringValue@0x8"是同一布局, 差一个 box 头)
+// 首跑 (2026-10-07) 现象: 同一个调用时好时坏 —— 坏的时刻集中在"游戏正在序列化/反序列化状态"期间
+// (SerializeState onLeave、某些 DeserializeState 后的下一个事件), 说明此刻重入变量管理器会抛异常。
+// 对策: 成功值缓存 + 失败时回报缓存 (标 <缓存>), 避免"取证时刻刚好读不到"变成盲区。
+var _cvSvc = null, _cvMi = null, _cvWarned = false, _lastModKey = null, _lastModKeyAt = 0;
+var _lateEnough = false; // 首个 ScriptLoader.Load 之前引擎服务表还没就绪 → 别碰 findSvc (会刷 ERROR 噪音)
+export function readModKey() {
+    var why = null;
+    if (!_lateEnough)
+        return "<引擎未就绪>";
+    try {
+        if (!_cvSvc || _cvSvc.isNull())
+            _cvSvc = findSvc("CustomVariableManager", true);
+        if (!_cvSvc || _cvSvc.isNull())
+            why = "<无服务>";
+        else {
+            if (!_cvMi || _cvMi.isNull()) {
+                _cvMi = A.cgm(A.ogc(_cvSvc), Memory.allocUtf8String("GetVariableValue"), 1);
+                if (!_cvMi || _cvMi.isNull())
+                    why = "<无方法>";
+            }
+            if (!why) {
+                var r = invokeOk(_cvMi, _cvSvc, [makeS("modKey")]);
+                if (!r.ok)
+                    why = "<invoke失败>";
+                else {
+                    var ret = r.ret;
+                    if (!ret || ret.isNull())
+                        why = "<null>";
+                    else {
+                        var cn = "";
+                        try {
+                            cn = A.cgn(A.ogc(ret)).readCString() || "";
+                        }
+                        catch (e0) { }
+                        // 按类型名判定"确实是 boxed CustomVariableValue"再解引用 —— 读错结构比读不到更糟
+                        if (cn.indexOf("CustomVariableValue") < 0)
+                            why = "<非CustomVariableValue:" + cn + ">";
+                        else {
+                            var pay = ret.add(0x10);
+                            var t = pay.readS32();
+                            if (t !== 0)
+                                why = "<非String type=" + t + ">";
+                            else {
+                                var v = readStr(pay.add(0x8).readPointer());
+                                if (v === null)
+                                    why = "<空串>";
+                                else {
+                                    _lastModKey = v;
+                                    _lastModKeyAt = Date.now();
+                                    return v;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    catch (e) {
+        why = "<err " + e + ">";
+    }
+    if (_lastModKey !== null)
+        return _lastModKey + "<缓存" + (Date.now() - _lastModKeyAt) + "ms前>";
+    if (!_cvWarned) {
+        _cvWarned = true;
+        plog("modKey 读取失败(" + why + "): 尚无成功值可缓存");
+    }
+    return why;
+}
+// ===== mod 条目集合 (来自 info.json 的 wbData) =====
+// all[cat][id]=1 全部 mod 条目; byKey[cat][id]=modKey 归属。用集合判定"页面里这条是不是 mod 的"。
+function modIdSets() {
+    var all = {}, byKey = {}, counts = {};
+    var names = Object.keys(wbCats);
+    for (var i = 0; i < names.length; i++) {
+        var cn = wbCats[names[i]].name;
+        all[cn] = {};
+        byKey[cn] = {};
+        counts[cn] = 0;
+        var src = wbData[cn] || {};
+        // 键统一加 "|" 前缀: 判定用的集合是普通对象, 若 id 撞上 Object.prototype 的键
+        // (constructor/toString/…) 会误判成命中 —— 首跑 profile 行 "127 条全是 mod" 的头号嫌疑
+        for (var id in src) {
+            all[cn]["|" + id] = 1;
+            byKey[cn]["|" + id] = src[id].key;
+            counts[cn]++;
+        }
+    }
+    return { all: all, byKey: byKey, counts: counts };
+}
+// 读一个 List<T> 的 (count, 元素基址)。IL2CPP 的 List<T>: items@0x10(指针), size@0x18。
+// ⚠ 数组 (T[]) 布局**不同**: bounds@0x10(指针, 常为 null), length@0x18, 元素**紧跟对象头** 0x20 ——
+//   2026-10-07 首跑把两者混用 → _itemIds 全读成 -1 (见 arrayOf)。
+function listOf(p) {
+    try {
+        if (!p || p.isNull())
+            return null;
+        var n = p.add(0x18).readS32();
+        if (n < 0 || n > 100000)
+            return null;
+        var items = p.add(0x10).readPointer();
+        if (items.isNull())
+            return null;
+        return { n: n, base: items.add(0x20) };
+    }
+    catch (e) {
+        return null;
+    }
+}
+// 读一个 T[] 的 (length, 元素基址): 基址就是对象自身 +0x20 (与 witchbook/pages.js 同一读法)
+function arrayOf(p) {
+    try {
+        if (!p || p.isNull())
+            return null;
+        var n = p.add(0x18).readS32();
+        if (n < 0 || n > 100000)
+            return null;
+        return { n: n, base: p.add(0x20) };
+    }
+    catch (e) {
+        return null;
+    }
+}
+// ===== 页面布局 dump (一条分类一行) =====
+function dumpCat(cat, sets) {
+    var pageCls = (wbCls && wbCls.pages) ? wbCls.pages[cat.name] : null;
+    if (!pageCls || pageCls.isNull())
+        return cat.name + "=<类未解析>";
+    var pages = findAllObjectOfType(pageCls);
+    if (!pages.length)
+        return cat.name + "=<无实例>";
+    var page = pages[0];
+    var ids = sets.all[cat.name] || {};
+    // _itemIds (string[]): 游戏 UpdateVersion 的 Contains 门
+    var idsN = -1, idsMod = 0;
+    try {
+        var la = page.add(fieldOffset(pageCls, "_itemIds", 0x98)).readPointer();
+        var l = arrayOf(la);
+        if (l) {
+            idsN = l.n;
+            for (var i = 0; i < l.n; i++) {
+                var s = readStr(l.base.add(i * 8).readPointer());
+                if (s && ids["|" + s])
+                    idsMod++;
+            }
+        }
+    }
+    catch (e) { }
+    // _state._list (List<IdVersionPair>: Id@0x10, Version@0x18): 显示层的门 + 存档序列化的来源
+    var stN = -1, stMod = [];
+    try {
+        var st = page.add(fieldOffset(pageCls, "_state", 0x48)).readPointer();
+        var lst = listOf(st.add(fieldOffset(wbCls.versionedState, "_list", 0x10)).readPointer());
+        if (lst) {
+            stN = lst.n;
+            for (var r0 = 0; r0 < lst.n; r0++) {
+                var e = lst.base.add(r0 * 8).readPointer();
+                if (e.isNull())
+                    continue;
+                var id = readStr(e.add(0x10).readPointer());
+                if (id && ids["|" + id])
+                    stMod.push(id + "@" + e.add(0x18).readS32());
+            }
+        }
+    }
+    catch (e) { }
+    // _loadedDataItemMap (List<VersionedItem>: _id@0x10): 读档时被 LoadDataAsync 从这里重建
+    // 附带前 2 条原始 id: 判定异常时(例如"整页全算成 mod")靠它区分是"真命中"还是"读错结构"
+    var mapN = -1, mapMod = 0, mapSample = [];
+    try {
+        var ml = listOf(page.add(fieldOffset(pageCls, "_loadedDataItemMap", 0x88)).readPointer());
+        if (ml) {
+            mapN = ml.n;
+            for (var r1 = 0; r1 < ml.n; r1++) {
+                var me = ml.base.add(r1 * 8).readPointer();
+                if (me.isNull())
+                    continue;
+                var mid = readStr(me.add(0x10).readPointer());
+                if (r1 < 2)
+                    mapSample.push(mid === null ? "<null>" : "'" + mid + "'");
+                if (mid && ids["|" + mid])
+                    mapMod++;
+            }
+        }
+    }
+    catch (e) { }
+    // _localizedTextData (Dictionary<IdVersionPair,...>): 条目数 @0x20 (与 pages.js 同一读法)
+    var locN = -1;
+    try {
+        var outer = page.add(fieldOffset(pageCls, "_localizedTextData", cat.locOff)).readPointer();
+        if (!outer.isNull())
+            locN = outer.add(0x20).readS32();
+    }
+    catch (e) { }
+    return cat.name + " ids=" + idsN + "(mod " + idsMod + ")" +
+        " state=" + stN + "(mod " + stMod.length + ")" + (stMod.length ? " {" + stMod.slice(0, 12).join(",") + "}" : "") +
+        " map=" + mapN + (mapSample.length ? " [" + mapSample.join(",") + "]" : "") + "(mod " + mapMod + ")" +
+        " loc=" + locN;
+}
+// JS 侧状态一行: 身份 (wbCurrentMod) + 变量 modKey + 各分类"当前 mod 条目数 / wbData.states 条数"
+function dumpJsState() {
+    var sets = modIdSets();
+    var mk = readModKey();
+    var per = [];
+    var names = Object.keys(wbCats);
+    for (var i = 0; i < names.length; i++) {
+        var cn = wbCats[names[i]].name;
+        var owned = 0;
+        for (var id in (wbData[cn] || {}))
+            if (wbData[cn][id].key === wbCurrentMod)
+                owned++;
+        var st = (wbData.states[cn] || {});
+        per.push(cn + ":" + owned + "/st" + Object.keys(st).length);
+    }
+    return "JS wbCurrentMod=" + (wbCurrentMod || "<null>") + " wbPrevMod=" + (wbPrevMod || "<null>") +
+        " | 变量modKey=" + mk + " | mod条目数 clue/profile/rule/note=" + sets.counts.clue + "/" + sets.counts.profile + "/" + sets.counts.rule + "/" + sets.counts.note +
+        " | 本mod条目/状态 " + per.join(" ");
+}
+// 完整快照: 第一行身份, 之后每分类一行
+// 节流: 游戏可能在**每次回滚快照**(≈每行剧本)都调 SerializeState —— 那种点位的快照是噪音且会拖慢
+//   主线程, 所以标 chatty 的按 1s 间隔丢弃; 关键点位(读档恢复后/开图鉴)不节流。另有总量上限兜底。
+var _dumpSeq = 0, _lastChattyAt = 0, DUMP_CAP = 300;
+function dumpBook(tag, chatty) {
+    if (_dumpSeq >= DUMP_CAP) {
+        if (_dumpSeq === DUMP_CAP) {
+            _dumpSeq++;
+            plog("快照已达上限 " + DUMP_CAP + " 次, 后续静默 (防刷爆日志/拖慢主线程)");
+        }
+        return;
+    }
+    if (chatty) {
+        var now = Date.now();
+        if (now - _lastChattyAt < 1000)
+            return; // 1s 内的重复 chatty 快照丢弃 (不记日志, 免得噪音换噪音)
+        _lastChattyAt = now;
+    }
+    _dumpSeq++;
+    try {
+        if (!wbCls || !wbCls.pages || !wbCls.versionedState) {
+            plog(tag + " | 快照跳过: 图鉴类未解析");
+            return;
+        }
+        var sets = modIdSets();
+        plog(tag + " | " + dumpJsState());
+        var names = Object.keys(wbCats);
+        for (var i = 0; i < names.length; i++)
+            plog("    " + dumpCat(wbCats[names[i]], sets));
+    }
+    catch (e) {
+        plog(tag + " | 快照异常: " + e);
+    }
+}
+// ===== 挂 hook =====
+// 延迟快照: DeserializeState 的 onLeave 只是"异步体开始跑", 状态还没落地 → 不能当场快照。
+// JS 线程不能碰 Unity API (见 credit.js 的记录), 所以不在定时器里补拍, 而是记一个待办,
+// 由**下一个主线程事件**的 onEnter 兑现 —— 那时恢复已经落地, 且仍在我们关心的时序内。
+var _pendingDump = null;
+function queueDump(tag) { _pendingDump = tag; }
+function flushPendingDump() {
+    if (!_pendingDump)
+        return;
+    var tag = _pendingDump;
+    _pendingDump = null;
+    dumpBook(tag);
+}
+function hookMethod(cls, name, argc, tag, opts) {
+    try {
+        if (!cls || cls.isNull())
+            return false;
+        var mi = A.cgm(cls, Memory.allocUtf8String(name), argc);
+        if (!mi || mi.isNull() || mi.readPointer().isNull())
+            return false;
+        Interceptor.attach(mi.readPointer(), {
+            onEnter: function (args) {
+                this._t = Date.now();
+                try {
+                    flushPendingDump();
+                }
+                catch (e) {
+                    swallowed("wbprobe.js:hookMethod.flush", e);
+                }
+                try {
+                    if (opts && opts.onEnter)
+                        opts.onEnter(args);
+                }
+                catch (e) {
+                    swallowed("wbprobe.js:hookMethod.onEnter", e);
+                }
+            },
+            onLeave: function () {
+                try {
+                    var dt = Date.now() - this._t;
+                    // quiet: 高频点位 (回滚快照级别的 SerializeState/ClearState) 不打这一行, 否则刷屏
+                    if (!(opts && opts.quiet))
+                        plog(tag + " 返回 (" + dt + "ms, 异步体此刻才开始跑)");
+                    if (opts && opts.onLeave)
+                        opts.onLeave(this);
+                }
+                catch (e) {
+                    swallowed("wbprobe.js:hookMethod.onLeave", e);
+                }
+            }
+        });
+        plog("hook 就绪: " + tag);
+        return true;
+    }
+    catch (e) {
+        swallowed("wbprobe.js:hookMethod", e);
+        return false;
+    }
+}
+// ② 剧本加载: 探针自己比对 Enter (不动 detectCurrentMod 的逻辑)
+function hookScriptLoader() {
+    var cls = findClassAcrossImages("Naninovel", "ScriptLoader");
+    hookMethod(cls, "Load", 2, "ScriptLoader.Load", {
+        onEnter: function (a) {
+            _lateEnough = true; // 引擎已起来了, 此后的 modKey 查询才安全
+            var p = "";
+            try {
+                p = readStr(a[1]) || "";
+            }
+            catch (e) { }
+            var hit = "<不匹配任何 Enter>";
+            if (typeof modList !== "undefined" && modList) {
+                for (var i = 0; i < modList.length; i++)
+                    if (modList[i].Enter === p) {
+                        hit = "'" + modList[i].key + "'";
+                        break;
+                    }
+            }
+            plog("ScriptLoader.Load path='" + p + "' → " + hit);
+        }
+    });
+}
+// ① 读档/存档动作 (服务类懒解析: Engine 服务表可能还没就绪 → 由 ScriptLoader.Load 首次回调再试)
+var _loadHooked = false;
+function hookStateManager() {
+    if (_loadHooked)
+        return;
+    try {
+        var svc = findSvc("StateManager", true);
+        var cls = svc && !svc.isNull() ? A.ogc(svc) : findClassAcrossImages("Naninovel", "StateManager");
+        if (!cls || cls.isNull())
+            return;
+        var ext = findClassAcrossImages("Naninovel", "StateManagerExtended");
+        var got = 0;
+        var targets = [
+            ["LoadGame", 1], ["QuickLoad", 0], ["SaveGame", 1], ["QuickSave", 0]
+        ];
+        for (var i = 0; i < targets.length; i++) {
+            var nm = targets[i][0];
+            if (hookMethod(cls, nm, targets[i][1], "StateManager." + nm))
+                got++;
+        }
+        if (ext && !ext.isNull()) {
+            if (hookMethod(ext, "AutoSaveAsync", 0, "StateManagerExtended.AutoSaveAsync"))
+                got++;
+            if (hookMethod(ext, "QuickLoadAsync", 1, "StateManagerExtended.QuickLoadAsync"))
+                got++;
+        }
+        if (got)
+            _loadHooked = true;
+    }
+    catch (e) {
+        swallowed("wbprobe.js:hookStateManager", e);
+    }
+}
+// ③④ 图鉴侧: 序列化/反序列化边界 + 打开边界 + ClearState (看它会不会清掉存档刚恢复的 _state)
+function hookWitchBook() {
+    try {
+        var ui = wbCls && wbCls.witchBookUi;
+        var scr = wbCls && wbCls.witchBookScreen;
+        hookMethod(ui, "SerializeState", 1, "WitchBookUi.SerializeState(存档写入)", { quiet: true, onLeave: function () { dumpBook("存后", true); } });
+        // DeserializeState 是 async: onLeave 只代表"异步体开始跑" → 记待办, 由下一个主线程事件兑现
+        hookMethod(ui, "DeserializeState", 1, "WitchBookUi.DeserializeState(读档恢复)", { onEnter: function () { plog("--- 读档恢复开始 (DeserializeState 进入) ---"); }, onLeave: function () { queueDump("读档恢复后(下一事件)"); } });
+        hookMethod(ui, "ClearState", 1, "WitchBookUi.ClearState", {
+            quiet: true,
+            onEnter: function (a) { try {
+                this._cat = a[1].toInt32();
+            }
+            catch (e) { } },
+            onLeave: function () { dumpBook("ClearState(cat=" + this._cat + ") 后", true); }
+        });
+        // @update 原始入参 (判断"读档后游戏有没有重放 @update" —— 正常不会, 脚本是从存档行接着跑的)
+        hookMethod(ui, "UpdateVersion", 3, "WitchBookUi.UpdateVersion(@update)", {
+            onEnter: function (a) {
+                var c = "?", id = "", v = -1;
+                try {
+                    c = a[1].toInt32();
+                    id = readStr(a[2]) || "";
+                    v = a[3].toInt32();
+                }
+                catch (e) { }
+                plog(">>> @update 到达: category=" + c + " id='" + id + "' version=" + v);
+            }
+        });
+        hookMethod(scr, "BeginToPresent", 0, "WitchBookScreen.BeginToPresent(开图鉴)", { onEnter: function () { dumpBook("BeginToPresent 前"); } });
+        hookMethod(scr, "InitializePages", 0, "WitchBookScreen.InitializePages", { onEnter: function () { dumpBook("InitializePages 前"); }, onLeave: function () { dumpBook("InitializePages 后"); } });
+        // 页面 ClearState (游戏 @clearBook 的落点)
+        var pn = Object.keys(wbCats);
+        for (var i = 0; i < pn.length; i++) {
+            var pcls = wbCls.pages[wbCats[pn[i]].name];
+            hookMethod(pcls, "ClearState", 0, wbCats[pn[i]].name + "Page.ClearState", { onLeave: function () { dumpBook("page.ClearState 后", true); } });
+        }
+    }
+    catch (e) {
+        swallowed("wbprobe.js:hookWitchBook", e);
+    }
+}
+export function setupWitchBookProbe() {
+    if (!ON)
+        return;
+    if (typeof MOD_WB_PROBE === "undefined")
+        return;
+    try {
+        plog("=== 探针启用 (只读) — 目标: 读档后 mod 图鉴条目为何消失 ===");
+        plog("启动时: " + dumpJsState());
+        hookScriptLoader(); // ②
+        hookStateManager(); // ① (可能此刻 Engine 未就绪 → ScriptLoader.Load 首次触发时补挂)
+        hookWitchBook(); // ③④ (依赖 wbCls, 由 setupWitchBookHooks 解析)
+        // ① 补挂点: ScriptLoader.Load 一定会跑在 Engine 就绪之后
+        try {
+            var sl = findClassAcrossImages("Naninovel", "ScriptLoader");
+            var mi = sl && !sl.isNull() ? A.cgm(sl, Memory.allocUtf8String("Load"), 2) : null;
+            if (mi && !mi.isNull())
+                Interceptor.attach(mi.readPointer(), { onEnter: function () { try {
+                        hookStateManager();
+                    }
+                    catch (e) {
+                        swallowed("wbprobe.js:retry", e);
+                    } } });
+        }
+        catch (e) {
+            swallowed("wbprobe.js:setupWitchBookProbe.retry", e);
+        }
+        plog("=== 探针挂载完成 ===");
+    }
+    catch (e) {
+        error("setupWitchBookProbe err: " + e);
+    }
+}
+// 供外部手动触发一次快照 (需要时从别的模块调: import { wbProbeSnapshot })
+export function wbProbeSnapshot(tag) { if (ON)
+    dumpBook(tag || "手动快照"); }
+
+✄
 // ============ WitchBook 角色域: 立绘 provider 注册 + CharacterData/AuthorData 注入 + Profile 姓名覆写 ============
 // 镜像 Windows AddRichCharacter/AddSimpleCharacter + TryInjectCharacterData + TryInjectAuthorData + ProfilePageRefreshContent_Patch
 import { A, dbg, error, fieldOffset, findClassAcrossImages, findFirstObjectOfType, findSvc, invoke, invokeBool, invokeOk, listContainsId, makeLocalResourceProvider, makeS, populateConvertersDict, readStr, swallowed, swallowedWarn, warn, wblog } from "../utils.js";
@@ -10681,10 +11180,16 @@ export function healStateKeys(page, cat) {
 //   3. 显示: Interceptor.replace CluePage.RefreshPageContent / SetupItemButton —— mod 线索直接设
 //      _subjectLabel/_descriptionLabel/_thumbnail (绕开 _localizedTextData 的 KeyNotFoundException)。
 // 数据来源: 运行时读 <MOD_ROOT>/<modKey>/info.json 的 Clues 字段 + 扫 WitchBook/Clues/*.png。
+//
+// 2026-10-07 读档丢条目修法 (探针 [WBPROBE] 实锤, 详见 session.js 顶部):
+//   判定当前 mod 加一条兜底 —— 读 Naninovel 变量 `modKey` (随存档持久化, 上游同源)。原因: 读档续玩的
+//   scriptPath 是存档所在的子剧本 (1919180_02/Trial02), 永远不等于 mod 的 Enter (Main_02), 于是
+//   wbCurrentMod 恒 null → 一条都不注入; 而存档里 mod 条目是齐的 → 显示层因 map 缺 item 全滤掉。
+//   同时区分"新会话"(菜单进 Enter) 与"续玩": 后者**不清**页面 _state (那是游戏刚恢复的存档状态)。
 import { A, dbg, ensureItemIdsString, error, fieldOffset, findAllObjectOfType, findClassAcrossImages, findNestedClass, invokeOk, makeS, readStr, swallowed, warn, wblog } from "../utils.js";
 import { initCatStateMaps, resetWbOverrides, setWbCls, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbPrevMod } from "./state.js";
 import { isCurrentModItem, loadWitchBookData, wbCatByIdx, wbCats } from "./data.js";
-import { clearAllWitchBookPages, clearBookViaVanilla, detectCurrentMod, findAllPages, hookClearState, rebuildAllPages } from "./session.js";
+import { adoptPageStates, clearAllWitchBookPages, clearBookViaVanilla, detectCurrentMod, detectKind, findAllPages, hookClearState, isFreshSession, rebuildAllPages, setupStateManagerLoadHooks, tryDetectModFromVar } from "./session.js";
 import { injectPage, hookRefreshLocalized } from "./pages.js";
 import { runSelftest, setupSelftest } from "./selftest.js";
 import { registerTexturesInto } from "./textures.js";
@@ -10799,6 +11304,8 @@ export function setupWitchBookHooks() {
         // @clearBook (ClearWitchBook 命令) → ClearState: 清 wbData.states + 复位面板
         // 修: 剧本内 @clearBook 后自定义证物无法清除 (applyStates 复活) + 上方面板冻结残留
         hookClearState();
+        // 读档标记 (StateManager.LoadGame/QuickLoad): 决定切 mod 时要不要清页面状态 (读档续玩不能清)
+        setupStateManagerLoadHooks();
         setupSelftest(); // MOD_SELFTEST=1 时: 挂 KNF 计数 (平时不挂)
         // RefreshPageContent onEnter: 重新预填 _localizedTextData
         // 修 InitializePages→LoadDataAsync 异步重建 map 时清掉注入导致 KeyNotFoundException
@@ -10810,7 +11317,14 @@ export function setupWitchBookHooks() {
                 if (mi && !mi.isNull())
                     Interceptor.attach(mi.readPointer(), { onEnter: function () {
                             dbg(">>> WitchBook " + mn + " 触发");
-                            tryInjectWitchBook(); // 内部处理 mod 切换清理 (状态+面板) + 注入
+                            // 开图鉴是最后一道兜底: 身份还空着 (读档续玩时 ScriptLoader.Load 也认不出) 就再问一次变量
+                            try {
+                                tryDetectModFromVar();
+                            }
+                            catch (eT) {
+                                swallowed("witchbook/index.js:onEnter.detectVar", eT);
+                            }
+                            tryInjectWitchBook(); // 内部按"新会话/续玩"决定清不清状态 + 注入
                         } });
             }
             catch (e) {
@@ -10854,6 +11368,13 @@ export function setupWitchBookHooks() {
                             catch (e) {
                                 swallowed("witchbook/index.js:setupWitchBookHooks.onEnter#4", e);
                             }
+                            // 读档钩子可能装得比 Engine 服务就绪早 → 每次剧本加载顺手补装一次 (幂等)
+                            try {
+                                setupStateManagerLoadHooks();
+                            }
+                            catch (e2) {
+                                swallowed("witchbook/index.js:setupWitchBookHooks.onEnter#4b", e2);
+                            }
                         } });
                 }
             }
@@ -10869,17 +11390,32 @@ export function setupWitchBookHooks() {
 }
 export function tryInjectWitchBook() {
     try {
-        // mod 切换检测: 换剧本/回标题后重新开始 → 整页重建回原版基座 + 重置状态
+        // mod 变化检测。分两种情形 (2026-10-07, 读档丢条目修法):
+        //   ① 新会话: 从菜单进 Enter / 回标题后重开 → 整页重建回原版基座 + 清状态 (原行为)
+        //   ② 读档续玩: 脚本停在子剧本, 页面 _state 是游戏 DeserializeState 刚恢复的 (实测含 mod 条目)
+        //      → **绝不能清** (清了连原版条目一起没), 只补注入; 并把 _state 回填进 wbData.states (存档为准)
         if (wbCurrentMod !== wbPrevMod) {
-            rebuildAllPages(); // 整页重建: 清 map, 从 Data 重添全部原版条目
-            clearBookViaVanilla(); // 重置状态 + 当前选中项 (清残留显示)
-            clearAllWitchBookPages(); // 清各页面状态 + 恢复原版默认面板
-            wbData.states = {};
-            wbData.pendingStates = {};
-            initCatStateMaps();
-            resetWbOverrides();
+            var kind = detectKind();
+            if (isFreshSession() && (kind === "enter" || kind === "vanilla")) {
+                rebuildAllPages(); // 整页重建: 清 map, 从 Data 重添全部原版条目
+                clearBookViaVanilla(); // 重置状态 + 当前选中项 (清残留显示)
+                clearAllWitchBookPages(); // 清各页面状态 + 恢复原版默认面板
+                wbData.states = {};
+                wbData.pendingStates = {};
+                initCatStateMaps();
+                resetWbOverrides();
+                wblog("mod 切换(新会话/" + kind + ") → 整页重建 + 状态重置, 注入范围: " + (wbCurrentMod ? "'" + wbCurrentMod + "'" : "无"));
+            }
+            else {
+                adoptPageStates(); // 页面 _state (含存档恢复的) → wbData.states, 存档版本优先
+                wblog("mod 变化(续玩/来源=" + kind + ") → 保留页面 _state, 只补注入, 注入范围: " + (wbCurrentMod ? "'" + wbCurrentMod + "'" : "无"));
+            }
             setWbPrevMod(wbCurrentMod);
-            wblog("mod 切换 → 整页重建 + 状态重置, 注入范围: " + (wbCurrentMod ? "'" + wbCurrentMod + "'" : "无"));
+        }
+        else if (!isFreshSession()) {
+            // 续玩会话里身份可能早就由变量认出来了 (标题处就设好) → 分支不触发, 但"以存档为准"的回填
+            // 仍要做: 幂等、只写我们自己的表, 让 @clearBook/字典自愈这些下游逻辑有据可依。
+            adoptPageStates();
         }
         initCatStateMaps();
         // 注入所有分类 (只注入页面, 不注入 Data._items —— Data 是缓存的 ScriptableObject,
@@ -12022,31 +12558,218 @@ export function runSelftest(round) {
 ✄
 // ============ WitchBook 会话隔离域: mod 切换检测 / 整页重建 / 状态清理 / 面板默认值 ============
 // 镜像 Windows ModClueLoader + ModWitchBookPatch: mod 切换/回标题时从原版基座重建, 防残留继承
-import { A, ensureItemIdsString, error, fieldIsStringArray, fieldOffset, findAllObjectOfType, findFirstObjectOfType, findSvc, getGenericArgClass, getSystemClass, invoke, invokeOk, listContainsId, makeS, readStr, swallowed, swallowedWarn, warn, wblog } from "../utils.js";
+import { A, ensureItemIdsString, error, fieldIsStringArray, fieldOffset, findAllObjectOfType, findClassAcrossImages, findFirstObjectOfType, findSvc, getGenericArgClass, getSystemClass, invoke, invokeOk, listContainsId, makeS, readStr, swallowed, swallowedWarn, warn, wblog } from "../utils.js";
 import { wbCats, currentModSet, localeValue, makeIdVersionPair, unionLocaleKeys } from "./data.js";
 import { initCatStateMaps, resetWbOverrides, setWbCurrentMod, setWbDefaultsCaptured, setWbPrevMod, wbCls, wbCurrentMod, wbData, wbDefaultsCaptured, wbPageDefaults, wbVanillaMap } from "./state.js";
 import { getFirstDictValue } from "./pages.js";
 import { tryInjectWitchBook } from "./index.js";
-// 从 ScriptLoader.Load 的路径识别当前 mod (匹配 modList 的 Enter; 原版默认路径 → __vanilla__)
-// mod 变化时立即清理上一 mod 的残留 (页面若存在) 并注入当前 mod 目录
+// ============ 当前 mod 判定: 变量 modKey 兜底 + "新会话" 标记 (2026-10-07) ============
+// 背景 (探针 [WBPROBE] 实锤): 判定当前 mod 原本只有 "ScriptLoader.Load 的 path 全等 info.json 的 Enter"
+//   一条路。读档续玩时 path 是存档所在的**子剧本** (实测 1919180_02/Trial02), 永远不等于 Enter
+//   (1919180_02/Main_02) → wbCurrentMod 恒 null → currentModIds() 空 → 图鉴一个条目都不注入;
+//   而存档里 mod 条目是齐的 (_state 实测 clue 11/note 10/profile 6 条), 显示层却因
+//   _loadedDataItemMap 缺 item 全部滤掉 → 玩家看到"读档后只剩原版条目"。
+// 上游 Windows 靠 Naninovel 自定义变量 modKey (ModResourceLoader.GetCurrentModKey) —— 它随存档持久化,
+//   与脚本停在哪儿无关。菜单侧我们早就写这个变量 (menu.js setline), 只是从没人读 → 现在读它。
+// 另一个信号是"这局是不是新开的": 只有新会话才允许走"切 mod 清状态"的重建 —— 读档续玩必须保留
+//   游戏 DeserializeState 刚恢复的 _state (否则原版条目也会一起没)。两个信号互相兜底:
+//   读档钩子没装上时, 靠"判定来自 Enter"挡住; 存档恰好停在 Enter 那行时, 靠 LoadGame 标记挡住。
+var _cvSvc = null, _cvMi = null;
+// 读变量 modKey。读不到一律返回 null, **不改动任何既有判定** (判定失败不该翻转身份)。
+// CustomVariableValue 是值类型 → invoke 返回 boxed 对象, 载荷在 +0x10: type@+0x10(String=0), stringValue@+0x18。
+export function readModKeyVar() {
+    try {
+        if (!_cvSvc || _cvSvc.isNull())
+            _cvSvc = findSvc("CustomVariableManager", true);
+        if (!_cvSvc || _cvSvc.isNull())
+            return null;
+        if (!_cvMi || _cvMi.isNull()) {
+            _cvMi = A.cgm(A.ogc(_cvSvc), Memory.allocUtf8String("GetVariableValue"), 1);
+            if (!_cvMi || _cvMi.isNull())
+                return null;
+        }
+        var r = invokeOk(_cvMi, _cvSvc, [makeS("modKey")]);
+        if (!r.ok || !r.ret || r.ret.isNull())
+            return null;
+        var cn = "";
+        try {
+            cn = A.cgn(A.ogc(r.ret)).readCString() || "";
+        }
+        catch (e0) {
+            swallowed("witchbook/session.js:readModKeyVar.typename", e0);
+        }
+        if (cn.indexOf("CustomVariableValue") < 0)
+            return null; // 不是我们预期的返回结构, 不猜
+        var pay = r.ret.add(0x10);
+        if (pay.readS32() !== 0)
+            return null; // 非 String 类型
+        return readStr(pay.add(0x8).readPointer()) || null;
+    }
+    catch (e) {
+        swallowed("witchbook/session.js:readModKeyVar", e);
+        return null;
+    }
+}
+// 变量值 → 可用身份; 不在 modList 里的 key 不认 (可能是已删除 mod 留下的残值)
+function modKeyFromVar() {
+    var v = readModKeyVar();
+    if (!v)
+        return null;
+    if (v === "__vanilla__")
+        return v;
+    if (typeof modList !== "undefined" && modList) {
+        for (var i = 0; i < modList.length; i++)
+            if (modList[i].key === v)
+                return v;
+    }
+    return null;
+}
+var wsDetectKind = "none"; // 最近一次成功判定来自哪: "enter" | "vanilla" | "var" | "none"
+var wsFreshSession = true; // 本会话是否"新开的一局" (经过 LoadGame 就不是了)
+export function detectKind() { return wsDetectKind; }
+export function isFreshSession() { return wsFreshSession; }
+// 挂 StateManager.LoadGame/QuickLoad: 读档 = 本会话不再是"新开的" → 后续切 mod **不许**清状态
+// 类解析优先, **不走 findSvc** —— 挂 hook 只要有类就够, 而启动早期引擎服务表还没就绪,
+// findSvc 会抛 access violation 并把 ERROR 打进日志 (2026-10-07 首跑实测 4 条噪音)。
+var _loadHooked = false;
+export function setupStateManagerLoadHooks() {
+    if (_loadHooked)
+        return;
+    try {
+        var clsList = [];
+        var c1 = findClassAcrossImages("Naninovel", "StateManager");
+        if (c1 && !c1.isNull())
+            clsList.push(c1);
+        var c2 = findClassAcrossImages("Naninovel", "StateManagerExtended"); // 子类: QuickLoadAsync 等
+        if (c2 && !c2.isNull())
+            clsList.push(c2);
+        if (!clsList.length)
+            return;
+        var targets = [["LoadGame", 1], ["QuickLoad", 0], ["QuickLoadAsync", 1]];
+        var seen = {}, got = 0;
+        for (var ci = 0; ci < clsList.length; ci++) {
+            for (var i = 0; i < targets.length; i++) {
+                var nm = targets[i][0]; // 闭包捕获按迭代取值 (别用循环变量)
+                try {
+                    var mi = A.cgm(clsList[ci], Memory.allocUtf8String(nm), targets[i][1]);
+                    if (!mi || mi.isNull() || mi.readPointer().isNull())
+                        continue;
+                    var key = mi.readPointer().toString();
+                    if (seen[key])
+                        continue; // 基类/子类解析到同一个实现 → 只挂一次
+                    seen[key] = 1;
+                    Interceptor.attach(mi.readPointer(), { onEnter: function () {
+                            if (wsFreshSession)
+                                wblog("检测到读档 (" + nm + ") → 本会话按'续玩'处理: 切 mod 不再清页面状态");
+                            wsFreshSession = false;
+                        } });
+                    wblog("hook " + A.cgn(clsList[ci]).readCString() + "." + nm + " (读档标记)");
+                    got++;
+                }
+                catch (e) {
+                    swallowed("witchbook/session.js:setupStateManagerLoadHooks#" + nm, e);
+                }
+            }
+        }
+        if (got)
+            _loadHooked = true;
+    }
+    catch (e) {
+        swallowed("witchbook/session.js:setupStateManagerLoadHooks", e);
+    }
+}
+// 图鉴打开前的最后一道兜底: 身份还空着就再问一次变量
+export function tryDetectModFromVar() {
+    if (wbCurrentMod)
+        return false;
+    var v = modKeyFromVar();
+    if (!v)
+        return false;
+    wsDetectKind = "var";
+    setWbCurrentMod(v);
+    wblog("开图鉴兜底: 由变量 modKey 认定当前 mod '" + v + "'");
+    return true;
+}
+// 以页面 _state._list 为准回填 wbData.states (只收本 mod 的 id)。
+// 对应上游 EnsureAllModClueStatesAndForceReinject 的"若存档中已有, 以存档版本为准"。
+export function adoptPageStates() {
+    try {
+        if (!wbCls || !wbCls.pages || !wbCls.versionedState)
+            return 0;
+        var cats = Object.keys(wbCats), n = 0;
+        for (var ci = 0; ci < cats.length; ci++) {
+            var cat = wbCats[cats[ci]];
+            var pageCls = wbCls.pages[cat.name];
+            if (!pageCls || pageCls.isNull())
+                continue;
+            var pages = findAllObjectOfType(pageCls);
+            if (!pages.length)
+                continue;
+            var keep = currentModSet(cat);
+            var st = pages[0].add(fieldOffset(pageCls, "_state", 0x48)).readPointer();
+            if (st.isNull())
+                continue;
+            var lst = st.add(fieldOffset(wbCls.versionedState, "_list", 0x10)).readPointer();
+            if (lst.isNull())
+                continue;
+            var cnt = lst.add(0x18).readS32();
+            if (cnt < 0 || cnt > 100000)
+                continue;
+            var base = lst.add(0x10).readPointer().add(0x20);
+            for (var i = 0; i < cnt; i++) {
+                var e = base.add(i * 8).readPointer();
+                if (e.isNull())
+                    continue;
+                var id = readStr(e.add(0x10).readPointer());
+                if (!id || !keep[id])
+                    continue;
+                if (!wbData.states[cat.name])
+                    wbData.states[cat.name] = {};
+                wbData.states[cat.name][id] = e.add(0x18).readS32();
+                n++;
+            }
+        }
+        if (n)
+            wblog("读档回填: 页面 _state 里收到本 mod 条目 " + n + " 条 (以存档为准)");
+        return n;
+    }
+    catch (e) {
+        swallowed("witchbook/session.js:adoptPageStates", e);
+        return 0;
+    }
+}
+// 从 ScriptLoader.Load 的路径识别当前 mod (匹配 modList 的 Enter; 原版默认路径 → __vanilla__;
+// 都不匹配 → 兜底问变量 modKey, 这是读档续玩唯一能认出 mod 的路)
+// mod 变化时注入当前 mod 目录 (是否清理上一 mod 的残留由 index.js 按"新会话"与否决定)
 export function detectCurrentMod(path) {
     if (!path)
         return;
-    var next = null;
+    var next = null, kind = "none";
     if (typeof modList !== "undefined" && modList) {
         for (var i = 0; i < modList.length; i++) {
             if (path === modList[i].Enter) {
                 next = modList[i].key;
+                kind = "enter";
                 break;
             }
         }
     }
-    if (!next && path === "Act01_Chapter01/Act01_Chapter01_Adv01")
+    if (!next && path === "Act01_Chapter01/Act01_Chapter01_Adv01") {
         next = "__vanilla__";
-    if (next === null || next === wbCurrentMod)
+        kind = "vanilla";
+    }
+    if (!next) {
+        next = modKeyFromVar();
+        if (next)
+            kind = "var";
+    }
+    if (next === null)
+        return; // 判定不出来 → 保持原样 (绝不把已有身份翻成 null)
+    wsDetectKind = kind;
+    if (next === wbCurrentMod)
         return;
     setWbCurrentMod(next);
-    wblog("当前 mod: '" + wbCurrentMod + "' (Enter=" + path + ")");
+    wblog("当前 mod: '" + wbCurrentMod + "' (来源=" + kind + ", script=" + path + ")");
     try {
         if (wbCls && wbCls.pages)
             tryInjectWitchBook();
@@ -12058,6 +12781,8 @@ export function detectCurrentMod(path) {
 export function resetWitchBookSession() {
     setWbCurrentMod(null);
     setWbPrevMod(null);
+    wsFreshSession = true; // 回到标题 = 会话结束; 之后无论是新开一局还是读档, 都从这里重新判定
+    wsDetectKind = "none";
     wbData.states = {};
     wbData.pendingStates = {};
     wbData.texCache = {};
