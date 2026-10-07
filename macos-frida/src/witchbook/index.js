@@ -24,7 +24,7 @@ import { adoptPageStates, clearAllWitchBookPages, clearBookViaVanilla, detectCur
 import { injectPage, hookRefreshLocalized } from "./pages.js";
 import { runSelftest, setupSelftest } from "./selftest.js";
 import { registerTexturesInto } from "./textures.js";
-import { hookProfileName } from "./characters.js";
+import { hookProfileName, injectCharacterData, injectAuthorData, hookLogAuthorName } from "./characters.js";
 
 export function resolveWitchBookClasses() {
     var m = {};
@@ -104,6 +104,8 @@ export function setupWitchBookHooks() {
         } catch (e) { error("page UpdateVersion hook err: " + e); }
         // Profile 姓名覆写 (mod 新角色显示格式化名字而非 ID)
         hookProfileName();
+        // backlog (历史回放) 作者名覆写 (mod 新角色显示格式化名字而非平文 DisplayName)
+        hookLogAuthorName();
         // @clearBook (ClearWitchBook 命令) → ClearState: 清 wbData.states + 复位面板
         // 修: 剧本内 @clearBook 后自定义证物无法清除 (applyStates 复活) + 上方面板冻结残留
         hookClearState();
@@ -153,6 +155,7 @@ export function setupWitchBookHooks() {
                         try { detectCurrentMod(readStr(a[1])); } catch (e) { swallowed("witchbook/index.js:setupWitchBookHooks.onEnter#4", e); }
                         // 读档钩子可能装得比 Engine 服务就绪早 → 每次剧本加载顺手补装一次 (幂等)
                         try { setupStateManagerLoadHooks(); } catch (e2) { swallowed("witchbook/index.js:setupWitchBookHooks.onEnter#4b", e2); }
+                        // 注: 曾试过在这里"提早注入"救 backlog —— 实测比首次注入还晚 9ms, 无效 (见 characters.js:hookLogAuthorName 注释)
                     }});
                 }
             }
@@ -195,9 +198,13 @@ export function tryInjectWitchBook() {
             injectPage(wbCats[cn2[i]]);
         }
         wbDirtyCats = {};   // 全量注入已覆盖全部分类 → 清空 ① 的合帧待办
-        // 新角色 (Profile 显示名: CharacterData 基本数据 + AuthorData 名称模板)
-        // injectCharacterData();   // 临时禁用: 角色档案数据注入可能破坏场景 (5 个 ArgumentException)
-        // injectAuthorData();
+        // 新角色: 把当前 mod 的完整角色注册进 CharacterData._items / AuthorData._items, 让游戏自己的
+        // AuthorTextBuilder 认得出他们 (对话作者名走富文本模板)。曾于 2026-08-02 因"5 个 ArgumentException"
+        // 临时禁用 —— 2026-10-07 复测证明那个理由已过期 (那类异常属 PITFALLS 7.6 的装箱守卫故障, 2026-09-25
+        // 已由 invokeBool 修掉), 注入本身无异常。注意时序: 本调用发生在开图鉴时, 对**此时之后**新建的
+        // builder 有效 (对话框命中); 启动时就建好的那些 (backlog 面板/图鉴页) 追不上, 另见 hookLogAuthorName。
+        injectCharacterData();
+        injectAuthorData();
         // 纹理 (全局 manager + 页面 loader)
         registerTexturesInto(null);
         var pages2 = findAllPages();

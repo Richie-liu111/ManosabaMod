@@ -14,10 +14,10 @@
 13594 /src/scripttext.js
 39569 /src/utils.js
 23003 /src/wbprobe.js
-21490 /src/witchbook/characters.js
+26424 /src/witchbook/characters.js
 14873 /src/witchbook/data.js
 9031 /src/witchbook/dictheal.js
-23086 /src/witchbook/index.js
+23935 /src/witchbook/index.js
 27757 /src/witchbook/pages.js
 26441 /src/witchbook/selftest.js
 55118 /src/witchbook/session.js
@@ -10455,26 +10455,27 @@ function makeListString(cls, elems) {
     }
 }
 // 1.5) 注入 CharacterData._items (新角色基本数据, 供 Profile 显示角色名; 镜像 Windows TryInjectCharacterData)
+// 返回: 本次写入条数; -1 = 目标类/实例/容器未就位 (资产还没加载, 调用方可以稍后重试); 0 = 无需注入或已存在。
 export function injectCharacterData() {
     try {
         if (Object.keys(wbData.characters).length === 0)
-            return;
+            return 0;
         if (!wbCls.characterData || wbCls.characterData.isNull()) {
             warn("CharacterData 类未解析");
-            return;
+            return -1;
         }
         var inst = findFirstObjectOfType(wbCls.characterData);
         if (!inst) {
             warn("CharacterData 实例未找到 (可能未加载)");
-            return;
+            return -1;
         }
         var items = inst.add(fieldOffset(wbCls.characterData, "_items", 0x18)).readPointer();
         if (items.isNull())
-            return;
+            return -1;
         var listCls = A.ogc(items);
         var addMi = A.cgm(listCls, Memory.allocUtf8String("Add"), 1);
         if (!addMi || addMi.isNull())
-            return;
+            return -1;
         var itemCls = wbCls.characterDataItem;
         var ctorMi = A.cgm(itemCls, Memory.allocUtf8String(".ctor"), 6);
         var ids = Object.keys(wbData.characters), added = 0;
@@ -10507,9 +10508,11 @@ export function injectCharacterData() {
         }
         if (added)
             wblog("CharacterData 注入 " + added + " 个角色");
+        return added;
     }
     catch (e) {
         error("injectCharacterData err: " + e);
+        return -1;
     }
 }
 // ProfilePage.RefreshPageContent onLeave: 覆写 mod 新角色的姓名标签 (_authorLabel @0xB8)
@@ -10613,26 +10616,27 @@ export function buildAuthorTemplate(cc, localeTag) {
     }
 }
 // 1.6) 注入 AuthorData._items (发言人名模板, 供 Profile 显示角色名; 镜像 Windows TryInjectAuthorData)
+// 返回约定同 injectCharacterData (>=0 条数 / -1 目标未就位)。
 export function injectAuthorData() {
     try {
         if (Object.keys(wbData.characters).length === 0)
-            return;
+            return 0;
         if (!wbCls.authorData || wbCls.authorData.isNull()) {
             warn("AuthorData 类未解析");
-            return;
+            return -1;
         }
         var inst = findFirstObjectOfType(wbCls.authorData);
         if (!inst) {
             warn("AuthorData 实例未找到 (可能未加载)");
-            return;
+            return -1;
         }
         var items = inst.add(fieldOffset(wbCls.authorData, "_items", 0x18)).readPointer();
         if (items.isNull())
-            return;
+            return -1;
         var listCls = A.ogc(items);
         var addMi = A.cgm(listCls, Memory.allocUtf8String("Add"), 1);
         if (!addMi || addMi.isNull())
-            return;
+            return -1;
         var itemCls = wbCls.authorDataItem;
         var ctorMi = A.cgm(itemCls, Memory.allocUtf8String(".ctor"), 2);
         var ltsCtor = A.cgm(wbCls.localizedText, Memory.allocUtf8String(".ctor"), 2);
@@ -10669,9 +10673,110 @@ export function injectAuthorData() {
         }
         if (added)
             wblog("AuthorData 注入 " + added + " 个角色模板");
+        return added;
     }
     catch (e) {
         error("injectAuthorData err: " + e);
+        return -1;
+    }
+}
+// 按名字在**整个类继承链**上找字段 (A.gf 不查基类, see utils.js:384)。
+// 找不到返回 null —— 调用方必须当"功能不可用"处理, 绝不能猜偏移瞎读。
+export function findFieldAnywhere(cls, name) {
+    try {
+        var up = cls;
+        for (var d = 0; d < 12 && up && !up.isNull(); d++) {
+            var f = A.gf(up, Memory.allocUtf8String(name));
+            if (f && !f.isNull()) {
+                var on = "?";
+                try {
+                    on = A.cgn(up).readCString();
+                }
+                catch (e2) {
+                    swallowed("witchbook/characters.js:findFieldAnywhere", e2);
+                }
+                return { off: A.fo(f), on: on, depth: d };
+            }
+            up = A.cgp(up);
+        }
+    }
+    catch (e) {
+        swallowed("witchbook/characters.js:findFieldAnywhere", e);
+    }
+    return null;
+}
+// 1.7) backlog (历史回放) 作者名覆写 —— 镜像 Windows LogAuthorFormat_Patch。
+// 为什么不能靠数据注入救它 (2026-10-07 实测, 见 ROADMAP 差距 7):
+//   backlog 面板 (WitchTrialsLogUi) 的 AuthorTextBuilder 在**游戏启动时**就把 _nameData/_authorData
+//   定型了 —— 它 23:05:49.136 已是"未命中", 而最早一次成功注入是 23:05:49.134; 且 mod 要等剧本加载
+//   才知道是谁 (试过挂在 ScriptLoader.Load 上"提早注入", 结果比首次注入还晚 9ms)。
+//   → 注入永远追不上启动时就建好的 builder。所以在原版渲染完之后覆写标签文本 (与 hookProfileName 同法)。
+export function hookLogAuthorName() {
+    try {
+        var cls = findClassAcrossImages("WitchTrials.Views", "WitchTrialsLogMessageUi");
+        if (!cls || cls.isNull()) {
+            warn("WitchTrialsLogMessageUi 类未解析 (backlog 姓名覆写跳过)");
+            return;
+        }
+        var mi = A.cgm(cls, Memory.allocUtf8String("ModifyAuthorPanel"), 1);
+        if (!mi || mi.isNull()) {
+            warn("WitchTrialsLogMessageUi.ModifyAuthorPanel NOT FOUND (backlog 姓名覆写跳过)");
+            return;
+        }
+        var fId = findFieldAnywhere(cls, "_authorId");
+        var fLabel = findFieldAnywhere(cls, "_authorLabel");
+        wblog("backlog 姓名覆写: _authorId=" + (fId ? "0x" + fId.off.toString(16) + " (声明于 " + fId.on + ")" : "未找到") +
+            ", _authorLabel=" + (fLabel ? "0x" + fLabel.off.toString(16) + " (声明于 " + fLabel.on + ")" : "未找到"));
+        if (!fId || !fLabel) {
+            warn("backlog 姓名覆写: 字段没找全 → 本次不生效 (见上一行, 不要猜偏移)");
+            return;
+        }
+        Interceptor.attach(mi.readPointer(), {
+            onEnter: function (a) { try {
+                this._self = a[0];
+            }
+            catch (e) {
+                this._self = null;
+            } },
+            onLeave: function () {
+                try {
+                    if (!this._self)
+                        return;
+                    var id = readStr(this._self.add(fId.off).readPointer());
+                    if (!id || !wbData.characters[id])
+                        return;
+                    var cc = wbData.characters[id];
+                    if (cc.key !== wbCurrentMod)
+                        return; // 只管当前 mod 的完整角色 (simple 角色走原版 DisplayName)
+                    var label = this._self.add(fLabel.off).readPointer();
+                    if (label.isNull())
+                        return;
+                    var setTxt = A.cgm(A.ogc(label), Memory.allocUtf8String("set_text"), 1);
+                    if (!setTxt || setTxt.isNull())
+                        return;
+                    try {
+                        syncLocaleFromEngine();
+                    }
+                    catch (eL) {
+                        swallowedWarn("witchbook/characters.js:hookLogAuthorName.locale", eL);
+                    }
+                    var tpl = buildAuthorTemplate(cc, getCurrentLocale());
+                    if (!tpl)
+                        tpl = buildAuthorTemplate(cc, "zh-Hans");
+                    if (!tpl)
+                        tpl = buildAuthorTemplate(cc, "ja");
+                    if (tpl)
+                        invokeOk(setTxt, label, [makeS(tpl)]);
+                }
+                catch (e) {
+                    swallowedWarn("witchbook/characters.js:hookLogAuthorName.onLeave", e);
+                }
+            }
+        });
+        wblog("backlog 作者名覆写 hook 就绪");
+    }
+    catch (e) {
+        error("hookLogAuthorName err: " + e);
     }
 }
 
@@ -11198,7 +11303,7 @@ import { adoptPageStates, clearAllWitchBookPages, clearBookViaVanilla, detectCur
 import { injectPage, hookRefreshLocalized } from "./pages.js";
 import { runSelftest, setupSelftest } from "./selftest.js";
 import { registerTexturesInto } from "./textures.js";
-import { hookProfileName } from "./characters.js";
+import { hookProfileName, injectCharacterData, injectAuthorData, hookLogAuthorName } from "./characters.js";
 export function resolveWitchBookClasses() {
     var m = {};
     m.pages = {};
@@ -11306,6 +11411,8 @@ export function setupWitchBookHooks() {
         }
         // Profile 姓名覆写 (mod 新角色显示格式化名字而非 ID)
         hookProfileName();
+        // backlog (历史回放) 作者名覆写 (mod 新角色显示格式化名字而非平文 DisplayName)
+        hookLogAuthorName();
         // @clearBook (ClearWitchBook 命令) → ClearState: 清 wbData.states + 复位面板
         // 修: 剧本内 @clearBook 后自定义证物无法清除 (applyStates 复活) + 上方面板冻结残留
         hookClearState();
@@ -11380,6 +11487,7 @@ export function setupWitchBookHooks() {
                             catch (e2) {
                                 swallowed("witchbook/index.js:setupWitchBookHooks.onEnter#4b", e2);
                             }
+                            // 注: 曾试过在这里"提早注入"救 backlog —— 实测比首次注入还晚 9ms, 无效 (见 characters.js:hookLogAuthorName 注释)
                         } });
                 }
             }
@@ -11431,9 +11539,13 @@ export function tryInjectWitchBook() {
             injectPage(wbCats[cn2[i]]);
         }
         wbDirtyCats = {}; // 全量注入已覆盖全部分类 → 清空 ① 的合帧待办
-        // 新角色 (Profile 显示名: CharacterData 基本数据 + AuthorData 名称模板)
-        // injectCharacterData();   // 临时禁用: 角色档案数据注入可能破坏场景 (5 个 ArgumentException)
-        // injectAuthorData();
+        // 新角色: 把当前 mod 的完整角色注册进 CharacterData._items / AuthorData._items, 让游戏自己的
+        // AuthorTextBuilder 认得出他们 (对话作者名走富文本模板)。曾于 2026-08-02 因"5 个 ArgumentException"
+        // 临时禁用 —— 2026-10-07 复测证明那个理由已过期 (那类异常属 PITFALLS 7.6 的装箱守卫故障, 2026-09-25
+        // 已由 invokeBool 修掉), 注入本身无异常。注意时序: 本调用发生在开图鉴时, 对**此时之后**新建的
+        // builder 有效 (对话框命中); 启动时就建好的那些 (backlog 面板/图鉴页) 追不上, 另见 hookLogAuthorName。
+        injectCharacterData();
+        injectAuthorData();
         // 纹理 (全局 manager + 页面 loader)
         registerTexturesInto(null);
         var pages2 = findAllPages();
